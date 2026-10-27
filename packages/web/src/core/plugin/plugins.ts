@@ -1,0 +1,24 @@
+import { hypervisionPlugin } from '../../plugins/hypervision';
+import { networkPlugin } from '../../plugins/network';
+import { storagePlugin } from '../../plugins/storage';
+import { vmInventoryPlugin } from '../../plugins/vm-inventory';
+import { vmInventoryPluginV2 } from '../../plugins/vm-inventory_v2';
+import { FEATURES } from '../config/features';
+import type { Plugin } from './types';
+
+/**
+ * Tableau statique des plugins (imports explicites).
+ * Un plugin n'est chargé que si son feature flag est ON (défaut) ; un flag OFF
+ * désactive proprement le module (disjoncteur, voir core/config/features.ts).
+ *
+ * Versionnement : les versions d'une même famille sont listées côte à côte
+ * (`vm-inventory` + `vm-inventory_v2`) — le loader initialise TOUTES les
+ * versions ; la plus récente porte la route canonique de la famille.
+ */
+export const PLUGINS: Plugin[] = [
+  ...(FEATURES.USE_PLUGIN_HYPERVISION ? [hypervisionPlugin] : []),
+  ...(FEATURES.USE_PLUGIN_NETWORK ? [networkPlugin] : []),
+  ...(FEATURES.USE_PLUGIN_STORAGE ? [storagePlugin] : []),
+  // Famille vm-inventory : v1 (rollback) + v2 (console web PVE).
+  ...(FEATURES.USE_PLUGIN_VM_INVENTORY ? [vmInventoryPlugin, vmInventoryPluginV2] : []),
+];

@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Prox4u — Échantillon de design</title>
+<style>
+  :root {
+    --bg: #0B0F19;
+    --card: #161B26;
+    --border: rgba(148, 163, 184, 0.12);
+    --fg: #f1f5f9;
+    --muted: #94a3b8;
+    --faint: #64748b;
+    --accent: #818cf8;
+    --ok: #10b981;
+    --warn: #f59e0b;
+    --crit: #ef4444;
+    --blue: #60a5fa;
+    --violet: #a78bfa;
+    --emerald: #34d399;
+    --amber: #fbbf24;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    padding-bottom: 48px;
+  }
+  .wrap { max-width: 1360px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- Topbar ---------- */
+  .topbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 0; margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .logo {
+    width: 34px; height: 34px; border-radius: 9px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 15px; color: white;
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+  }
+  .topbar .title { font-weight: 600; font-size: 15px; }
+  .topbar .sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    background: rgba(16, 185, 129, 0.12); color: var(--ok);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    cursor: pointer;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); letter-spacing: 0.08em; }
+  .live .dot { background: var(--ok); color: var(--ok); }
+  .spacer { flex: 1; }
+  .ghost-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer;
+    transition: all 0.2s; font-family: inherit;
+  }
+  .ghost-btn:hover { color: var(--fg); border-color: rgba(148,163,184,0.35); }
+
+  /* ---------- Cards & layout ---------- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: rgba(148, 163, 184, 0.25); }
+  .row { display: grid; gap: 16px; margin-bottom: 16px; }
+  .r-kpi { grid-template-columns: repeat(4, 1fr); }
+  .r-metrics { grid-template-columns: 2fr 1fr; }
+  .r-half { grid-template-columns: 1fr 1fr; }
+  .r-third { grid-template-columns: 1fr 1fr 1fr; }
+
+  .panel-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .panel-title { font-size: 14px; font-weight: 600; }
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+
+  /* ---------- KPIs ---------- */
+  .kpi-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .kpi-icon {
+    width: 28px; height: 28px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+  }
+  .kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+  .kpi-value { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .kpi-value small { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .kpi-foot { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .spark-wrap { height: 34px; margin-top: 6px; }
+  .spark-wrap svg { width: 100%; height: 100%; display: block; }
+  .bar { height: 5px; border-radius: 999px; background: rgba(148,163,184,0.15); overflow: hidden; margin-top: 10px; }
+  .bar > div { height: 100%; border-radius: 999px; }
+
+  /* ---------- Charts ---------- */
+  .seg { display: inline-flex; background: rgba(148,163,184,0.08); border-radius: 9px; padding: 3px; gap: 2px; margin-left: auto; }
+  .seg button {
+    background: transparent; border: none; color: var(--muted);
+    font-size: 11.5px; font-weight: 600; padding: 5px 12px; border-radius: 7px; cursor: pointer;
+    transition: all 0.15s; font-family: inherit;
+  }
+  .seg button:hover { color: var(--fg); }
+  .seg button.active { background: rgba(129, 140, 248, 0.18); color: var(--accent); }
+
+  .chart-box { position: relative; }
+  .chart-box svg { width: 100%; display: block; }
+  .h-main { height: 250px; }
+  .h-cap { height: 210px; }
+  .h-mini { height: 130px; }
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 10;
+    background: #1e2534; border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 12px; font-size: 11.5px; box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+    opacity: 0; transition: opacity 0.12s; white-space: nowrap;
+  }
+  .tooltip .tt-time { color: var(--muted); margin-bottom: 4px; font-size: 10.5px; }
+  .tooltip .tt-row { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+  .tooltip .tt-row i { width: 8px; height: 8px; border-radius: 2px; }
+
+  /* ---------- Health gauge ---------- */
+  .gauge-wrap { position: relative; height: 170px; }
+  .gauge-wrap svg { width: 100%; height: 100%; display: block; }
+  .gauge-center {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; pointer-events: none;
+  }
+  .gauge-score { font-size: 40px; font-weight: 700; line-height: 1; }
+  .gauge-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .penalty { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); padding: 3px 0; }
+  .penalty b { color: var(--crit); font-weight: 600; }
+
+  /* ---------- PRA ---------- */
+  .pra-banner {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25);
+    color: var(--ok); border-radius: 10px; padding: 8px 12px; font-size: 12px; font-weight: 600;
+    margin-bottom: 14px;
+  }
+  .site-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+  .site-name { width: 90px; font-size: 12.5px; font-weight: 600; }
+  .site-bar { flex: 1; height: 8px; border-radius: 999px; background: rgba(148,163,184,0.12); overflow: hidden; }
+  .site-pct { width: 42px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+  /* ---------- Capacity badges ---------- */
+  .cap-badges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+  .cap-badge { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 11px; }
+  .cap-badge .cb-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .cap-badge .cb-name { font-weight: 600; font-size: 12px; }
+  .badge { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .badge.ok { background: rgba(16,185,129,0.12); color: var(--ok); }
+  .badge.warn { background: rgba(245,158,11,0.12); color: var(--warn); }
+  .badge.crit { background: rgba(239,68,68,0.12); color: var(--crit); }
+  .cap-badge .cb-sub { color: var(--muted); }
+
+  /* ---------- Storage / network / alerts ---------- */
+  .store-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .store-row:last-of-type { border-bottom: none; }
+  .store-name { width: 92px; font-size: 12.5px; font-weight: 600; }
+  .store-type { font-size: 10px; color: var(--muted); background: rgba(148,163,184,0.1); padding: 2px 7px; border-radius: 999px; }
+  .store-bar { flex: 1; height: 7px; border-radius: 999px; background: rgba(148,163,184,0.12); overflow: hidden; }
+  .store-pct { width: 40px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+  .iface-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .iface {
+    font-size: 11.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .iface.phy { background: rgba(96, 165, 250, 0.12); color: var(--blue); border: 1px solid rgba(96,165,250,0.3); }
+  .iface.br  { background: rgba(167, 139, 250, 0.12); color: var(--violet); border: 1px solid rgba(167,139,250,0.3); }
+
+  .alert-item {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 9px 12px; border-radius: 10px; margin-bottom: 8px; font-size: 12px;
+    border-left: 3px solid;
+  }
+  .alert-item:last-child { margin-bottom: 0; }
+  .alert-item.warn { background: rgba(245,158,11,0.07); border-color: var(--warn); }
+  .alert-item.crit { background: rgba(239,68,68,0.07); border-color: var(--crit); }
+  .alert-item.ok   { background: rgba(16,185,129,0.07); border-color: var(--ok); }
+  .alert-item .a-time { color: var(--faint); font-size: 10.5px; margin-left: auto; white-space: nowrap; }
+
+  /* ---------- Tables ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    text-align: left; color: var(--faint); font-weight: 600; font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 6px 8px; border-bottom: 1px solid var(--border);
+  }
+  td { padding: 7px 8px; border-bottom: 1px solid rgba(148,163,184,0.06); font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+  .mini-bar { display: inline-block; width: 60px; height: 4px; border-radius: 999px; background: rgba(148,163,184,0.15); overflow: hidden; vertical-align: middle; margin-right: 6px; }
+  .mini-bar > div { height: 100%; border-radius: 999px; }
+
+  .note {
+    margin-top: 24px; padding: 14px 18px; border-radius: 12px;
+    background: rgba(129, 140, 248, 0.07); border: 1px solid rgba(129, 140, 248, 0.2);
+    font-size: 12.5px; color: var(--muted); line-height: 1.7;
+  }
+  .note b { color: var(--fg); }
+  .sample-tag {
+    display: flex; justify-content: flex-end; padding-top: 12px;
+  }
+  .sample-tag span {
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent); background: rgba(129,140,248,0.1);
+    border: 1px solid rgba(129,140,248,0.35); border-radius: 999px; padding: 4px 12px;
+  }
+</style>
+</head>
+<body>
+<div class="sample-tag"><span>Échantillon · données synthétiques</span></div>
+<div class="wrap">
+
+  <!-- ============ TOPBAR ============ -->
+  <div class="topbar">
+    <div class="logo">P</div>
+    <div>
+      <div class="title">Prox4u</div>
+      <div class="sub">Cluster « proxmox » · 1 nœud · PVE 9</div>
+    </div>
+    <div class="pill"><span class="dot"></span> Nominal · 100</div>
+    <div class="live"><span class="dot"></span> LIVE 5 s</div>
+    <div class="spacer"></div>
+    <button class="ghost-btn">↻ Actualiser</button>
+    <button class="ghost-btn">FR / EN</button>
+  </div>
+
+  <!-- ============ RANGÉE 1 : KPIs + sparklines ============ -->
+  <div class="row r-kpi">
+    <div class="card">
+      <div class="kpi-head">
+        <div class="kpi-icon" style="background:rgba(96,165,250,0.12);color:var(--blue)">⚡</div>
+        <div class="kpi-label">CPU cluster</div>
+      </div>
+      <div class="kpi-value">34 %</div>
+      <div class="spark-wrap" id="spark-cpu"></div>
+      <div class="bar"><div style="width:34%;background:linear-gradient(90deg,#3b82f6,#60a5fa)"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="kpi-head">
+        <div class="kpi-icon" style="background:rgba(167,139,250,0.12);color:var(--violet)">▦</div>
+        <div class="kpi-label">Mémoire</div>
+      </div>
+      <div class="kpi-value">61,2 <small>/ 100 Go · 61 %</small></div>
+      <div class="spark-wrap" id="spark-ram"></div>
+      <div class="bar"><div style="width:61%;background:linear-gradient(90deg,#7c3aed,#a78bfa)"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="kpi-head">
+        <div class="kpi-icon" style="background:rgba(52,211,153,0.12);color:var(--emerald)">▣</div>
+        <div class="kpi-label">VMs / CTs</div>
+      </div>
+      <div class="kpi-value">3 <small>/ 4 en marche</small></div>
+      <div class="spark-wrap" id="spark-vm"></div>
+      <div class="kpi-foot">1 arrêtée · 0 template</div>
+    </div>
+
+    <div class="card">
+      <div class="kpi-head">
+        <div class="kpi-icon" style="background:rgba(251,191,36,0.12);color:var(--amber)">◫</div>
+        <div class="kpi-label">Stockage</div>
+      </div>
+      <div class="kpi-value">26 % <small>saturé</small></div>
+      <div class="spark-wrap" id="spark-disk"></div>
+      <div class="bar"><div style="width:26%;background:linear-gradient(90deg,#f59e0b,#fbbf24)"></div></div>
+      <div class="kpi-foot">8,0 To libres · stable</div>
+    </div>
+  </div>
+
+  <!-- ============ RANGÉE 2 : MÉTRIQUES + HEALTH ============ -->
+  <div class="row r-metrics">
+    <div class="card">
+      <div class="panel-head">
+        <div class="panel-title">Métriques du cluster</div>
+        <div class="legend">
+          <span><i style="background:var(--blue)"></i> CPU %</span>
+          <span><i style="background:var(--violet)"></i> Mémoire %</span>
+        </div>
+        <div class="seg" id="tf-seg">
+          <button data-tf="1h">1 h</button>
+          <button data-tf="24h" class="active">24 h</button>
+          <button data-tf="7d">7 j</button>
+          <button data-tf="30d">30 j</button>
+        </div>
+      </div>
+      <div class="chart-box h-main" id="main-chart">
+        <div class="tooltip" id="tt"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="panel-head"><div class="panel-title">Health Score</div></div>
+      <div class="gauge-wrap" id="gauge"></div>
+      <div style="margin-top:6px">
+        <div class="penalty"><span>Aucune pénalité — cluster nominal</span><b>−0</b></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ RANGÉE 3 : PRA + CAPACITÉ ============ -->
+  <div class="row r-half">
+    <div class="card">
+      <div class="panel-head"><div class="panel-title">PRA — bascule N-1 multi-bâtiment</div></div>
+      <div class="pra-banner"><span class="dot"></span> N-1 OK — bascule possible sur l'ensemble des bâtiments</div>
+      <div class="site-row">
+        <span class="site-name">Site A</span>
+        <div class="site-bar"><div style="width:42%;background:linear-gradient(90deg,#059669,#34d399)"></div></div>
+        <span class="site-pct">42 %</span>
+      </div>
+      <div class="site-row">
+        <span class="site-name">Site B</span>
+        <div class="site-bar"><div style="width:58%;background:linear-gradient(90deg,#059669,#34d399)"></div></div>
+        <span class="site-pct">58 %</span>
+      </div>
+      <div class="kpi-foot" style="margin-top:10px">Absorption = demande CPU/RAM du site (toutes VMs) vs capacité libre des autres sites · disk exclu (stockage partagé)</div>
+    </div>
+
+    <div class="card">
+      <div class="panel-head">
+        <div class="panel-title">Capacity planning — 30 j</div>
+        <div class="legend" style="margin-left:auto">
+          <span><i style="background:var(--blue)"></i> CPU</span>
+          <span><i style="background:var(--violet)"></i> RAM</span>
+          <span><i style="background:var(--amber)"></i> Disk</span>
+        </div>
+      </div>
+      <div class="chart-box h-cap" id="cap-chart"><div class="tooltip" id="tt-cap"></div></div>
+      <div class="cap-badges">
+        <div class="cap-badge">
+          <div class="cb-top"><span class="cb-name">CPU</span><span class="badge ok">stable</span></div>
+          <div class="cb-sub">pente +0,1 %/j</div>
+        </div>
+        <div class="cap-badge">
+          <div class="cb-top"><span class="cb-name">RAM</span><span class="badge ok">~120 j</span></div>
+          <div class="cb-sub">à 90 % dans ~120 j</div>
+        </div>
+        <div class="cap-badge">
+          <div class="cb-top"><span class="cb-name">Disk</span><span class="badge warn">~45 j</span></div>
+          <div class="cb-sub">à 90 % dans ~45 j</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ RANGÉE 4 : STOCKAGE + RÉSEAU + ALERTES ============ -->
+  <div class="row r-third">
+    <div class="card">
+      <div class="panel-head"><div class="panel-title">Stockage</div></div>
+      <div class="store-row">
+        <span class="store-name">local-lvm</span><span class="store-type">lvmthin</span>
+        <div class="store-bar"><div style="width:31%;background:linear-gradient(90deg,#6366f1,#818cf8)"></div></div>
+        <span class="store-pct">31 %</span>
+      </div>
+      <div class="store-row">
+        <span class="store-name">local</span><span class="store-type">dir</span>
+        <div class="store-bar"><div style="width:18%;background:linear-gradient(90deg,#6366f1,#818cf8)"></div></div>
+        <span class="store-pct">18 %</span>
+      </div>
+      <div class="kpi-foot" style="margin-top:12px">Total : 2,8 / 10,8 To utilisés · croissance +0,4 %/j</div>
+    </div>
+
+    <div class="card">
+      <div class="panel-head">
+        <div class="panel-title">Réseau</div>
+        <div class="legend" style="margin-left:auto">
+          <span><i style="background:var(--emerald)"></i> RX</span>
+          <span><i style="background:var(--amber)"></i> TX</span>
+        </div>
+      </div>
+      <div class="iface-badges">
+        <span class="iface phy">● eno1 · 1 Gb up</span>
+        <span class="iface br">vmbr0 · bridge</span>
+      </div>
+      <div class="chart-box h-mini" id="net-chart"></div>
+    </div>
+
+    <div class="card">
+      <div class="panel-head"><div class="panel-title">Alertes actives</div></div>
+      <div class="alert-item warn"><span>⚠</span><span>Disk local-lvm à 82 % — seuil de vigilance dépassé</span><span class="a-time">il y a 12 min</span></div>
+      <div class="alert-item ok"><span>✓</span><span>Backup VM 101 terminé (PBS, 4,2 Go)</span><span class="a-time">il y a 3 h</span></div>
+      <div class="alert-item crit"><span>✕</span><span>Nœud « node-2 » injoignable — bascule PRA engagée</span><span class="a-time">hier</span></div>
+    </div>
+  </div>
+
+  <!-- ============ RANGÉE 5 : TOP CONSOMMATEURS + NŒUDS ============ -->
+  <div class="row r-half">
+    <div class="card">
+      <div class="panel-head"><div class="panel-title">Top consommateurs (par pool / équipe)</div></div>
+      <table>
+        <thead><tr><th>VM</th><th>Nœud</th><th>Pool</th><th style="text-align:right">CPU</th><th style="text-align:right">RAM</th></tr></thead>
+        <tbody>
+          <tr><td>101 · prod-api</td><td>node-1</td><td>production</td><td style="text-align:right"><span class="mini-bar"><div style="width:72%;background:var(--blue)"></div></span>72 %</td><td style="text-align:right">6,1 / 8 Go</td></tr>
+          <tr><td>102 · prod-db</td><td>node-1</td><td>production</td><td style="text-align:right"><span class="mini-bar"><div style="width:48%;background:var(--blue)"></div></span>48 %</td><td style="text-align:right">12,4 / 16 Go</td></tr>
+          <tr><td>105 · ci-runner</td><td>node-2</td><td>devops</td><td style="text-align:right"><span class="mini-bar"><div style="width:35%;background:var(--blue)"></div></span>35 %</td><td style="text-align:right">3,0 / 8 Go</td></tr>
+          <tr><td>110 · win-fs</td><td>node-2</td><td>bureautique</td><td style="text-align:right"><span class="mini-bar"><div style="width:12%;background:var(--blue)"></div></span>12 %</td><td style="text-align:right">2,2 / 4 Go</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="panel-head"><div class="panel-title">Santé des nœuds</div></div>
+      <table>
+        <thead><tr><th>Nœud</th><th>Site</th><th style="text-align:right">CPU</th><th style="text-align:right">RAM</th><th style="text-align:right">Disk</th><th style="text-align:right">Uptime</th></tr></thead>
+        <tbody>
+          <tr><td><span class="status-dot" style="background:var(--ok)"></span>node-1</td><td>Site A</td><td style="text-align:right">34 %</td><td style="text-align:right">61 %</td><td style="text-align:right">31 %</td><td style="text-align:right">42 j</td></tr>
+          <tr><td><span class="status-dot" style="background:var(--ok)"></span>node-2</td><td>Site B</td><td style="text-align:right">29 %</td><td><span style="color:var(--warn)">78 %</span></td><td style="text-align:right"><span style="color:var(--warn)">82 %</span></td><td style="text-align:right">42 j</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Échantillon — ce qui change vs le dashboard actuel :</b><br/>
+    1. <b>Sélecteur de période</b> (1 h / 24 h / 7 j / 30 j) sur le graphe central — données RRD brutes, résolution adaptative (nouvel endpoint <code>/api/metrics?timeframe=…</code>)<br/>
+    2. <b>Sparklines live 5 min</b> dans chaque carte KPI (ring buffer des snapshots WebSocket, zéro backend)<br/>
+    3. <b>Aires en dégradé</b> + tooltip au survol + seuils 80/90 % en pointillés (vs courbes plates actuelles)<br/>
+    4. <b>Cartes Stockage & Réseau</b> : barres en dégradé par datastore, badges d'interfaces, graphe RX/TX<br/>
+    5. <b>Pastille de statut</b> dans la topbar (score santé) + jauge en panneau dédié — layout en 5 rangées pensé comme un tout
+  </div>
+</div>
+
+<script>
+// ---------- utilitaires SVG ----------
+function el(tag, attrs) {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+/** chemin lissé catmull-rom -> bezier */
+function smoothPath(pts) {
+  if (pts.length < 2) return '';
+  let d = `M ${pts[0][0]},${pts[0][1]}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C ${c1x},${c1y} ${c2x},${c2y} ${p2[0]},${p2[1]}`;
+  }
+  return d;
+}
+
+/** random walk déterministe */
+function genSeries(n, base, amp, seed) {
+  const out = []; let v = base; let s = seed;
+  const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  for (let i = 0; i < n; i++) {
+    v += (rnd() - 0.5) * amp;
+    v = Math.max(4, Math.min(96, v + Math.sin(i / (n / 6)) * amp * 0.35));
+    out.push(Math.round(v * 10) / 10);
+  }
+  return out;
+}
+
+function timeLabels(n, tf) {
+  const now = Date.now();
+  const stepMs = { '1h': 5 * 60e3, '24h': 3600e3, '7d': 30 * 60e3, '30d': 86400e3 }[tf];
+  const fmt = tf === '30d'
+    ? (t) => new Date(t).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })
+    : tf === '7d'
+      ? (t) => new Date(t).toLocaleDateString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+      : (t) => new Date(t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  return Array.from({ length: n }, (_, i) => fmt(now - (n - 1 - i) * stepMs));
+}
+
+function addGradient(defs, id, color, o1, o2) {
+  const g = el('linearGradient', { id, x1: '0', y1: '0', x2: '0', y2: '1' });
+  g.appendChild(el('stop', { offset: '0%', 'stop-color': color, 'stop-opacity': String(o1) }));
+  g.appendChild(el('stop', { offset: '100%', 'stop-color': color, 'stop-opacity': String(o2) }));
+  defs.appendChild(g);
+}
+
+// ---------- sparklines KPIs ----------
+function sparkline(id, values, color) {
+  const box = document.getElementById(id);
+  const W = 200, H = 34;
+  const min = Math.min(...values), max = Math.max(...values);
+  const pts = values.map((v, i) => [
+    (i / (values.length - 1)) * W,
+    H - 3 - ((v - min) / Math.max(0.001, max - min)) * (H - 8),
+  ]);
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none' });
+  addGradient(svg, 'g-' + id, color, 0.35, 0);
+  const line = smoothPath(pts);
+  svg.appendChild(el('path', { d: `${line} L ${W},${H} L 0,${H} Z`, fill: `url(#g-${id})` }));
+  svg.appendChild(el('path', { d: line, fill: 'none', stroke: color, 'stroke-width': '1.6' }));
+  box.appendChild(svg);
+}
+
+sparkline('spark-cpu', genSeries(60, 34, 7, 7), '#60a5fa');
+sparkline('spark-ram', genSeries(60, 61, 4, 21), '#a78bfa');
+sparkline('spark-vm', Array.from({ length: 60 }, (_, i) => (i > 12 && i < 20 ? 4 : 3)), '#34d399');
+sparkline('spark-disk', genSeries(60, 26, 1.2, 5), '#fbbf24');
+
+// ---------- graphe principal (métriques + timeframe) ----------
+const TF = { '1h': 60, '24h': 48, '7d': 56, '30d': 30 };
+let currentTF = '24h';
+
+function renderMain(tf) {
+  currentTF = tf;
+  const box = document.getElementById('main-chart');
+  const tt = document.getElementById('tt');
+  box.querySelectorAll('svg').forEach((s) => s.remove());
+
+  const n = TF[tf];
+  const cpu = genSeries(n, 34, 8, 11);
+  const ram = genSeries(n, 61, 5, 29);
+  const labels = timeLabels(n, tf);
+
+  const W = box.clientWidth || 700, H = box.clientHeight || 250;
+  const padL = 34, padR = 10, padT = 12, padB = 24;
+  const iw = W - padL - padR, ih = H - padT - padB;
+
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}` });
+  const defs = el('defs', {});
+  addGradient(defs, 'gc', '#60a5fa', 0.28, 0.02);
+  addGradient(defs, 'gr', '#a78bfa', 0.28, 0.02);
+  svg.appendChild(defs);
+
+  for (let v = 0; v <= 100; v += 25) {
+    const y = padT + ih - (v / 100) * ih;
+    svg.appendChild(el('line', { x1: padL, y1: y, x2: W - padR, y2: y, stroke: 'rgba(148,163,184,0.09)', 'stroke-width': 1 }));
+    const t = el('text', { x: padL - 8, y: y + 3.5, 'text-anchor': 'end', fill: '#64748b', 'font-size': '10' });
+    t.textContent = v;
+    svg.appendChild(t);
+  }
+  for (const [v, c] of [[80, 'rgba(245,158,11,0.35)'], [90, 'rgba(239,68,68,0.4)']]) {
+    const y = padT + ih - (v / 100) * ih;
+    svg.appendChild(el('line', { x1: padL, y1: y, x2: W - padR, y2: y, stroke: c, 'stroke-width': 1, 'stroke-dasharray': '4 4' }));
+  }
+  const step = Math.max(1, Math.floor(n / 5));
+  for (let i = 0; i < n; i += step) {
+    const x = padL + (i / (n - 1)) * iw;
+    const t = el('text', { x, y: H - 6, 'text-anchor': 'middle', fill: '#64748b', 'font-size': '10' });
+    t.textContent = labels[i];
+    svg.appendChild(t);
+  }
+
+  const toPts = (vals) => vals.map((v, i) => [padL + (i / (n - 1)) * iw, padT + ih - (v / 100) * ih]);
+  const cpuPts = toPts(cpu), ramPts = toPts(ram);
+
+  svg.appendChild(el('path', { d: `${smoothPath(ramPts)} L ${padL + iw},${padT + ih} L ${padL},${padT + ih} Z`, fill: 'url(#gr)' }));
+  svg.appendChild(el('path', { d: smoothPath(ramPts), fill: 'none', stroke: '#a78bfa', 'stroke-width': 2 }));
+  svg.appendChild(el('path', { d: `${smoothPath(cpuPts)} L ${padL + iw},${padT + ih} L ${padL},${padT + ih} Z`, fill: 'url(#gc)' }));
+  svg.appendChild(el('path', { d: smoothPath(cpuPts), fill: 'none', stroke: '#60a5fa', 'stroke-width': 2 }));
+
+  const hoverLine = el('line', { y1: padT, y2: padT + ih, stroke: 'rgba(148,163,184,0.4)', 'stroke-width': 1, visibility: 'hidden' });
+  svg.appendChild(hoverLine);
+  const dotC = el('circle', { r: 3.5, fill: '#60a5fa', stroke: '#0B0F19', 'stroke-width': 1.5, visibility: 'hidden' });
+  const dotR = el('circle', { r: 3.5, fill: '#a78bfa', stroke: '#0B0F19', 'stroke-width': 1.5, visibility: 'hidden' });
+  svg.appendChild(dotC); svg.appendChild(dotR);
+
+  box.appendChild(svg);
+
+  const onMove = (ev) => {
+    const rect = box.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const i = Math.round(((x - padL) / iw) * (n - 1));
+    if (i < 0 || i > n - 1) return hide();
+    const px = padL + (i / (n - 1)) * iw;
+    hoverLine.setAttribute('x1', px); hoverLine.setAttribute('x2', px);
+    hoverLine.setAttribute('visibility', 'visible');
+    dotC.setAttribute('cx', px); dotC.setAttribute('cy', cpuPts[i][1]); dotC.setAttribute('visibility', 'visible');
+    dotR.setAttribute('cx', px); dotR.setAttribute('cy', ramPts[i][1]); dotR.setAttribute('visibility', 'visible');
+    tt.innerHTML = `<div class="tt-time">${labels[i]}</div>
+      <div class="tt-row"><i style="background:#60a5fa"></i> CPU ${cpu[i].toFixed(1)} %</div>
+      <div class="tt-row"><i style="background:#a78bfa"></i> RAM ${ram[i].toFixed(1)} %</div>`;
+    tt.style.opacity = '1';
+    const flip = px > W - 160;
+    tt.style.left = flip ? (px - 150) + 'px' : (px + 14) + 'px';
+    tt.style.top = Math.max(8, Math.min(cpuPts[i][1], ramPts[i][1]) - 24) + 'px';
+  };
+  const hide = () => {
+    hoverLine.setAttribute('visibility', 'hidden');
+    dotC.setAttribute('visibility', 'hidden');
+    dotR.setAttribute('visibility', 'hidden');
+    tt.style.opacity = '0';
+  };
+  svg.addEventListener('mousemove', onMove);
+  svg.addEventListener('mouseleave', hide);
+}
+
+document.getElementById('tf-seg').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  document.querySelectorAll('#tf-seg button').forEach((x) => x.classList.remove('active'));
+  b.classList.add('active');
+  renderMain(b.dataset.tf);
+});
+
+// ---------- jauge health ----------
+function gauge(containerId, score, color) {
+  const box = document.getElementById(containerId);
+  const W = 260, H = 170;
+  const cx = W / 2, cy = H * 0.58, r = 66;
+  const pt = (deg) => {
+    const rad = (deg * Math.PI) / 180;
+    return [cx + r * Math.sin(rad), cy - r * Math.cos(rad)];
+  };
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}` });
+  const defs = el('defs', {});
+  const f = el('filter', { id: 'glow', x: '-50%', y: '-50%', width: '200%', height: '200%' });
+  const bl = el('feGaussianBlur', { stdDeviation: '6', result: 'b' });
+  const mrg = el('feMerge', {});
+  mrg.appendChild(el('feMergeNode', { in: 'b' }));
+  mrg.appendChild(el('feMergeNode', { in: 'SourceGraphic' }));
+  f.appendChild(bl); f.appendChild(mrg);
+  defs.appendChild(f);
+  svg.appendChild(defs);
+
+  const start = -135, sweep = 270;
+  const [sx, sy] = pt(start), [ex, ey] = pt(start + sweep);
+  svg.appendChild(el('path', {
+    d: `M ${sx},${sy} A ${r},${r} 0 1 1 ${ex},${ey}`,
+    fill: 'none', stroke: 'rgba(148,163,184,0.15)', 'stroke-width': 12, 'stroke-linecap': 'round',
+  }));
+  const endDeg = start + (sweep * score) / 100;
+  const [px, py] = pt(endDeg);
+  svg.appendChild(el('path', {
+    d: `M ${sx},${sy} A ${r},${r} 0 ${(endDeg - start) > 180 ? 1 : 0} 1 ${px},${py}`,
+    fill: 'none', stroke: color, 'stroke-width': 12, 'stroke-linecap': 'round', filter: 'url(#glow)',
+  }));
+  box.appendChild(svg);
+
+  const center = document.createElement('div');
+  center.className = 'gauge-center';
+  center.innerHTML = `<div class="gauge-score" style="color:${color}">${Math.round(score)}</div><div class="gauge-label">Nominal</div>`;
+  box.appendChild(center);
+}
+gauge('gauge', 100, '#10b981');
+
+// ---------- graphe capacité (30 j + projection) ----------
+function renderCapacity() {
+  const box = document.getElementById('cap-chart');
+  const tt = document.getElementById('tt-cap');
+  const nHist = 30, nProj = 30;
+  const cpuH = genSeries(nHist, 32, 4, 31), ramH = genSeries(nHist, 58, 3, 37), diskH = genSeries(nHist, 24, 1.5, 43);
+  const proj = (h, slope) => h.map((v, i) => Math.min(99, v + slope * i)).slice(-nProj);
+  const cpuP = proj(cpuH, 0.05), ramP = proj(ramH, 0.12), diskP = proj(diskH, 0.35);
+
+  const W = box.clientWidth || 600, H = box.clientHeight || 210;
+  const padL = 34, padR = 10, padT = 10, padB = 22;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const total = nHist + nProj;
+
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}` });
+  const defs = el('defs', {});
+  addGradient(defs, 'gcap-d', '#fbbf24', 0.15, 0.01);
+  svg.appendChild(defs);
+
+  for (let v = 0; v <= 100; v += 25) {
+    const y = padT + ih - (v / 100) * ih;
+    svg.appendChild(el('line', { x1: padL, y1: y, x2: W - padR, y2: y, stroke: 'rgba(148,163,184,0.09)' }));
+    const t = el('text', { x: padL - 8, y: y + 3.5, 'text-anchor': 'end', fill: '#64748b', 'font-size': '10' });
+    t.textContent = v;
+    svg.appendChild(t);
+  }
+  // bandes seuils 80/90
+  const y80 = padT + ih - 0.8 * ih, y90 = padT + ih - 0.9 * ih;
+  svg.appendChild(el('rect', { x: padL, y: y90, width: iw, height: y80 - y90, fill: 'rgba(245,158,11,0.06)' }));
+  svg.appendChild(el('rect', { x: padL, y: padT, width: iw, height: y90 - padT, fill: 'rgba(239,68,68,0.07)' }));
+  // séparateur historique / projection
+  const xSplit = padL + (nHist / total) * iw;
+  svg.appendChild(el('line', { x1: xSplit, y1: padT, x2: xSplit, y2: padT + ih, stroke: 'rgba(148,163,184,0.3)', 'stroke-dasharray': '3 4' }));
+  const tNow = el('text', { x: xSplit, y: padT + 8, 'text-anchor': 'middle', fill: '#64748b', 'font-size': '9' });
+  tNow.textContent = 'aujourd\'hui';
+  svg.appendChild(tNow);
+
+  const dayLbl = (i) => {
+    const d = new Date(Date.now() - (nHist - i) * 86400e3);
+    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+  };
+  for (let i = 0; i < total; i += 7) {
+    const x = padL + (i / (total - 1)) * iw;
+    const t = el('text', { x, y: H - 5, 'text-anchor': 'middle', fill: '#64748b', 'font-size': '10' });
+    t.textContent = i < nHist ? dayLbl(i) : '+' + (i - nHist + 1) + ' j';
+    svg.appendChild(t);
+  }
+
+  const toPts = (hist, pr) => {
+    const all = hist.concat(pr);
+    return all.map((v, i) => [padL + (i / (total - 1)) * iw, padT + ih - (v / 100) * ih]);
+  };
+  const draw = (hist, pr, color, id) => {
+    const pts = toPts(hist, pr);
+    const h = pts.slice(0, nHist), p = pts.slice(nHist - 1);
+    if (id) {
+      svg.appendChild(el('path', { d: `${smoothPath(h)} L ${h[h.length-1][0]},${padT+ih} L ${h[0][0]},${padT+ih} Z`, fill: `url(#${id})` }));
+    }
+    svg.appendChild(el('path', { d: smoothPath(h), fill: 'none', stroke: color, 'stroke-width': 2 }));
+    svg.appendChild(el('path', { d: smoothPath(p), fill: 'none', stroke: color, 'stroke-width': 1.6, 'stroke-dasharray': '5 4', opacity: 0.75 }));
+  };
+  draw(diskH, diskP, '#fbbf24', 'gcap-d');
+  draw(ramH, ramP, '#a78bfa', null);
+  draw(cpuH, cpuP, '#60a5fa', null);
+
+  box.appendChild(svg);
+}
+
+// ---------- graphe réseau RX/TX ----------
+function renderNet() {
+  const box = document.getElementById('net-chart');
+  const n = 48;
+  const rx = genSeries(n, 30, 14, 42).map((v) => v * 0.9);
+  const tx = genSeries(n, 18, 10, 77).map((v) => v * 0.6);
+  const W = box.clientWidth || 400, H = box.clientHeight || 130;
+  const padL = 42, padR = 6, padT = 6, padB = 16;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const maxV = Math.max(...rx, ...tx) * 1.15;
+
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}` });
+  const defs = el('defs', {});
+  addGradient(defs, 'grx', '#34d399', 0.3, 0.02);
+  addGradient(defs, 'gtx', '#fbbf24', 0.3, 0.02);
+  svg.appendChild(defs);
+
+  for (let v = 0; v <= 2; v++) {
+    const y = padT + ih - (v / 2) * ih;
+    svg.appendChild(el('line', { x1: padL, y1: y, x2: W - padR, y2: y, stroke: 'rgba(148,163,184,0.09)' }));
+    const t = el('text', { x: padL - 6, y: y + 3, 'text-anchor': 'end', fill: '#64748b', 'font-size': '9' });
+    t.textContent = Math.round(((maxV / 2) * v) / 1024) + ' Mo/s';
+    svg.appendChild(t);
+  }
+
+  const toPts = (vals) => vals.map((v, i) => [padL + (i / (n - 1)) * iw, padT + ih - (v / maxV) * ih]);
+  const rxP = toPts(rx), txP = toPts(tx);
+  svg.appendChild(el('path', { d: `${smoothPath(txP)} L ${padL + iw},${padT + ih} L ${padL},${padT + ih} Z`, fill: 'url(#gtx)' }));
+  svg.appendChild(el('path', { d: smoothPath(txP), fill: 'none', stroke: '#fbbf24', 'stroke-width': 1.6 }));
+  svg.appendChild(el('path', { d: `${smoothPath(rxP)} L ${padL + iw},${padT + ih} L ${padL},${padT + ih} Z`, fill: 'url(#grx)' }));
+  svg.appendChild(el('path', { d: smoothPath(rxP), fill: 'none', stroke: '#34d399', 'stroke-width': 1.6 }));
+  box.appendChild(svg);
+}
+
+renderMain('24h');
+renderCapacity();
+renderNet();
+window.addEventListener('resize', () => { renderMain(currentTF); renderCapacity(); renderNet(); });
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "default": "proxmox",
+  "endpoints": [
+    {
+      "id": "proxmox",
+      "name": "Proxmox — 192.168.1.80",
+      "url": "https://192.168.1.80:8006",
+      "user": "supervision@pam",
+      "tokenId": "A1234567890B",
+      "tokenValue": "CHANGE_ME"
+    }
+  ]
+}

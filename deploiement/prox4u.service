@@ -1,0 +1,32 @@
+# Prox4u — service systemd (persistance au boot + redémarrage auto)
+#
+# Installation (voir DEPLOY.md §8) :
+#   sudo cp deploy/prox4u.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now prox4u
+#
+# Prérequis : utilisateur système `proxmox` propriétaire de /opt/prox4u,
+# Node.js ≥ 20 en /usr/bin/node (paquet système recommandé).
+# InfluxDB tourne en conteneur Docker (restart: unless-stopped) → démarre avec Docker.
+
+[Unit]
+Description=Prox4u - dashboard de supervision (supervision dashboard)
+Documentation=file:/opt/prox4u/DEPLOY.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=proxmox
+Group=proxmox
+WorkingDirectory=/opt/prox4u
+# .env est lu par l'application depuis WorkingDirectory
+ExecStart=/usr/bin/env node packages/server/dist/index.js
+Restart=always
+RestartSec=5
+# Hardening minimal (l'app lit data/ et écrit logs/ + data/consolidation-state.json)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
