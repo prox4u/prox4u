@@ -1,0 +1,22 @@
+{
+  "sites": [
+    {
+      "id": "site-principal",
+      "name": "Site principal",
+      "endpoint": "proxmox",
+      "nodes": ["proxmox"]
+    },
+    {
+      "id": "proxsite1",
+      "name": "ProxSite1",
+      "endpoint": "clusterproxmox",
+      "nodes": ["ProxSite1"]
+    },
+    {
+      "id": "proxsite2",
+      "name": "ProxSite2",
+      "endpoint": "clusterproxmox",
+      "nodes": ["ProxSite2"]
+    }
+  ]
+}

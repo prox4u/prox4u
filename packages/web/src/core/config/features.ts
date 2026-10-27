@@ -1,0 +1,23 @@
+/**
+ * Feature flags des plugins (disjoncteurs) :
+ * - flag ON  (défaut) → le module est servi par son plugin ;
+ * - flag OFF → le module est désactivé proprement (écran de repli ModuleDisabled,
+ *   pas d'entrée de menu, pas de route morte).
+ *
+ * Bascule sans modifier le code, via variables d'environnement Vite :
+ *   VITE_USE_PLUGIN_STORAGE=false pnpm dev
+ */
+const env = import.meta.env;
+
+export const FEATURES = {
+  // Legacy supprimé après validation (étape 2) : défaut ON, disjoncteur opt-out.
+  USE_PLUGIN_HYPERVISION: env.VITE_USE_PLUGIN_HYPERVISION !== 'false',
+  // Legacy supprimé après validation (étape 3) : défaut ON, disjoncteur opt-out.
+  USE_PLUGIN_NETWORK: env.VITE_USE_PLUGIN_NETWORK !== 'false',
+  // Legacy supprimé après validation (étape 4) : défaut ON, disjoncteur opt-out.
+  USE_PLUGIN_STORAGE: env.VITE_USE_PLUGIN_STORAGE !== 'false',
+  // Inventaire VMs/LXC (arborescence vCenter + détail) : défaut ON, disjoncteur opt-out.
+  USE_PLUGIN_VM_INVENTORY: env.VITE_USE_PLUGIN_VM_INVENTORY !== 'false',
+} as const;
+
+export type FeatureFlag = keyof typeof FEATURES;

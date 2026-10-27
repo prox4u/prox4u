@@ -1,0 +1,25 @@
+{
+  "usage": {
+    "warnPct": 70,
+    "critPct": 90
+  },
+  "hostRamProvisionPct": 10,
+  "cpu": {
+    "okMax": 2,
+    "warnMax": 4
+  },
+  "ram": {
+    "okMax": 1,
+    "warnMax": 1.2
+  },
+  "disk": {
+    "okMax": 1,
+    "warnMax": 1.5
+  },
+  "risk": {
+    "warnPct": 80,
+    "critPct": 100,
+    "warnRatio": 2,
+    "critRatio": 3
+  }
+}

@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.env
+clusters.json
+secret
+*.local
+.DS_Store
+*.log
+
+# Logs d'exécution du serveur
+logs/
+
+# Données locales (InfluxDB : volume, token admin, état consolidateur)
+data/
+
+# Tarballs de release produits par deploiement/20-package-release.sh
+deploiement/releases/
+releases/
+
+# Outils d'agent locaux
+.opencode/
+.playwright-mcp/
+
+# TypeScript incremental build
+*.tsbuildinfo

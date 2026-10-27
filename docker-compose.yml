@@ -1,0 +1,69 @@
+services:
+  influxdb:
+    image: influxdb:3.11.5-core
+    container_name: prox4u-influxdb
+    # user non-root propriétaire de ./data/influxdb (configurable via .env)
+    user: "${INFLUX_UID:-1500}:${INFLUX_GID:-1500}"
+    ports:
+      # localhost-only : l'app se connecte en https://localhost:8181 (même machine) ;
+      # l'API InfluxDB n'est pas exposée au réseau. Explorer passe par le service Docker.
+      - "127.0.0.1:8181:8181"
+    # TLS : générer les certificats avant le premier up → ./deploiement/40-tls-init.sh
+    command:
+      - influxdb3
+      - serve
+      # node-id = nom du sous-dossier de données (data/influxdb/proxmox-manager/).
+      # Gardé stable « proxmox-manager » pour ne pas orpheliner l'historique existant
+      # (renommer → migration des métadonnées catalog/WAL, à faire stoppé + sauvegardé).
+      - --node-id=proxmox-manager
+      - --object-store=file
+      - --data-dir=/var/lib/influxdb3/data
+      - --admin-token-file=/run/secrets/admin-token
+      - --tls-cert=/etc/influxdb/tls/influxdb-cert.pem
+      - --tls-key=/etc/influxdb/tls/influxdb-key.pem
+      # Le défaut (432 fichiers Parquet ≈ 72 h de données) est insuffisant pour les
+      # requêtes du mois (30 j) sur la base consolidated → erreur « file limit ».
+      # 10000 = marge de plusieurs années à ~30 fichiers/jour/table.
+      - --query-file-limit=10000
+    secrets:
+      - admin-token
+    volumes:
+      - ./data/influxdb:/var/lib/influxdb3/data
+      - ./data/tls:/etc/influxdb/tls:ro
+    healthcheck:
+      test: ["CMD-SHELL", "TOK=$(tr -d '\\n' < /run/secrets/admin-token | sed 's/.*\"token\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/'); influxdb3 show databases --host https://localhost:8181 --token \"$$TOK\" --tls-no-verify >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # UI officielle InfluxDB 3 (Explorer) : requêtes SQL + visualisations + admin
+  # → https://localhost:8888 (cert auto-signé, même SAN que l'app)
+  explorer:
+    image: influxdata/influxdb3-ui:1.9.0
+    container_name: prox4u-influxdb-explorer
+    command: ["--mode=admin"]
+    ports:
+      - "8888:8443"
+    volumes:
+      - ./data/explorer:/db:rw
+      - ./data/explorer/config:/app-root/config:ro
+      # HTTPS de l'UI : même certificat que l'app (SAN localhost + IP VM) — chemins exacts attendus par nginx.conf
+      - ./data/tls/app-cert.pem:/etc/nginx/ssl/cert.pem:ro
+      - ./data/tls/app-key.pem:/etc/nginx/ssl/key.pem:ro
+      # Confiance vers InfluxDB (cert auto-signé, SAN DNS:influxdb)
+      - ./data/tls/influxdb-cert.pem:/ca-certs/influxdb-cert.pem:ro
+    environment:
+      SESSION_SECRET_KEY: ${EXPLORER_SESSION_KEY}
+      SSL_CERT_PATH: /etc/nginx/ssl/cert.pem
+      SSL_KEY_PATH: /etc/nginx/ssl/key.pem
+      NODE_EXTRA_CA_CERTS: /ca-certs/influxdb-cert.pem
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    restart: unless-stopped
+
+secrets:
+  admin-token:
+    file: ./data/influxdb/admin-token.json
