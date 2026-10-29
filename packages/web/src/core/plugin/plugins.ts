@@ -3,6 +3,7 @@ import { networkPlugin } from '../../plugins/network';
 import { storagePlugin } from '../../plugins/storage';
 import { vmInventoryPlugin } from '../../plugins/vm-inventory';
 import { vmInventoryPluginV2 } from '../../plugins/vm-inventory_v2';
+import { proxmoxInventoryPlugin } from '../../plugins/proxmox-inventory';
 import { FEATURES } from '../config/features';
 import type { Plugin } from './types';
 
@@ -21,4 +22,6 @@ export const PLUGINS: Plugin[] = [
   ...(FEATURES.USE_PLUGIN_STORAGE ? [storagePlugin] : []),
   // Famille vm-inventory : v1 (rollback) + v2 (console web PVE).
   ...(FEATURES.USE_PLUGIN_VM_INVENTORY ? [vmInventoryPlugin, vmInventoryPluginV2] : []),
+  // Famille proxmox-inventory : inventaire consolidé (une machine par ligne + export).
+  ...(FEATURES.USE_PLUGIN_PROXMOX_INVENTORY ? [proxmoxInventoryPlugin] : []),
 ];

@@ -42,6 +42,10 @@ export interface PveVmResource {
   disks?: VmDisk[];
   /** Adresses IP détectées par PVE (`ipaddresses` — guest agent / ARP) — absentes si non rapportées. */
   ipAddresses?: string[];
+  /** Tags de la VM (config `tags`, séparés par des virgules) — joints depuis la config. */
+  tags?: string[];
+  /** Description / notes (config `description`) — jointe depuis la config. */
+  notes?: string;
 }
 
 export interface PveNodeStatus {
@@ -435,6 +439,10 @@ export interface VmConfigInfo {
   diskStorage?: string;
   /** tous les disques de la VM (un par volume non-ISO de la config) — une VM peut en avoir plusieurs, sur des datastores différents. */
   disks?: VmDisk[];
+  /** tags (config `tags`, chaîne séparée par des virgules → tableau) */
+  tags?: string[];
+  /** description / notes (config `description`) */
+  description?: string;
 }
 
 /** Détail d'une VM (GET /api/vm-config?endpoint=&vmid=) : live + config + snapshots. */

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AppContext, Poller } from '../core/poller.js';
 import { registerAuth } from './auth/index.js';
 import { registerDashboard } from './dashboard/routes.js';
+import { registerProxInventory } from './proxinventory/routes.js';
 import { registerSupervision } from './supervision/routes.js';
 import { registerVmInventory } from './vminventory/routes.js';
 
@@ -12,6 +13,7 @@ import { registerVmInventory } from './vminventory/routes.js';
  * - dashboard : phase 1 (KPIs, PRA, capacity planning…)
  * - supervision : phase 1B (topologie réseau), storage, backups, alarms
  * - vminventory : GET /api/vm-config (détail VM)
+ * - proxinventory : GET /api/proxmox-inventory (inventaire consolidé multi-endpoints)
  * `register` peut être asynchrone (initialisation de dépendances).
  */
 export interface Module {
@@ -24,4 +26,5 @@ export const modules: Module[] = [
   { name: 'dashboard', register: registerDashboard },
   { name: 'supervision', register: registerSupervision },
   { name: 'vminventory', register: registerVmInventory },
+  { name: 'proxinventory', register: registerProxInventory },
 ];
