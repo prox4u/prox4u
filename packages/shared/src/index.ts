@@ -21,7 +21,7 @@ export { buildStorageInventory, buildStorageInventoryAll, filterStorageRows, sto
 export type { StorageRow, StorageRowAll, StorageVmRef, StorageKind, StorageInventoryFilter, StorageInventoryEndpoint, StorageInventoryResponse, StorageSortKey, StorageSortDir, StorageSort, DatastorePoint, DatastoreHistoryEntry, DatastoreHistoryResponse, DatastoreRange } from './storage-inventory.js';
 export { buildVmTree, DEFAULT_VM_FILTER, filterVmRows, sortVmRows } from './vm-inventory.js';
 export type { VmTreeNode, VmInventoryFilter, VmSortKey, VmSortDir } from './vm-inventory.js';
-export { DEFAULT_INV_FILTER, filterInvRows, sortInvRows, invSummary, invTotalDiskMb, invToTxt, invToCsv, invToJson, invToFormat } from './proxmox-inventory.js';
+export { DEFAULT_INV_FILTER, filterInvRows, sortInvRows, invSummary, invTotalDiskMb, invToTxt, invToCsv, invToJson, invToFormat, osFamilyFromId, ostypeFamily, osDisplay } from './proxmox-inventory.js';
 export type { InvDisk, InvInterface, InvVm, ProxmoxInventoryEndpoint, ProxmoxInventoryResponse, InvFilter, InvSortKey, InvSortDir, InvSummary } from './proxmox-inventory.js';
 export {
   authorizedModuleIds,

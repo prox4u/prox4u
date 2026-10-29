@@ -19,8 +19,10 @@ export interface PveVmResource {
   cpu: number | null;
   /** cœurs alloués (joint par le server depuis la config VM, absent de /cluster/resources) */
   cpuAlloc?: number;
-  /** famille OS (Linux/Unix, Windows, LXC, Autre) — jointe depuis la config */
+  /** famille OS (Linux/Unix, Windows, LXC, Autre) — jointe depuis la config (dernier recours) */
   os?: string;
+  /** code `ostype` PVE brut (ex. `l26`, `w2k22`) — joint depuis la config, repli pour les VMs sans agent */
+  ostype?: string;
   /** octets utilisés */
   mem: number | null;
   /** octets alloués */
@@ -430,8 +432,10 @@ export interface VmDisk {
 export interface VmConfigInfo {
   /** cœurs alloués */
   cpuAlloc: number;
-  /** OS (qemu) ou image (lxc) */
+  /** OS (qemu) ou image (lxc) — famille, dernier recours si ni agent ni ostype */
   os: string;
+  /** code `ostype` PVE brut (ex. `l26`, `w2k22`) — repli famille OS sans agent */
+  ostype?: string;
   pool: string | null;
   /** interfaces réseau branchées sur un pont (parsing bridge= des interfaces netN / mpN) */
   nets: ParsedVmNet[];
@@ -496,6 +500,28 @@ export interface AgentFsUsage {
   dev: string;
   usedBytes: number;
   totalBytes: number;
+}
+
+/**
+ * OS réel remonté par l'agent invité (QGA guest-get-osinfo) — GET /nodes/{n}/qemu/{vmid}/agent/get-osinfo.
+ * `null` si VM arrêtée, agent absent, ou PVE sans l'endpoint. C'est la source fiable du nom de OS
+ * (la config `ostype`/`os` ne donne que la famille, souvent vide).
+ */
+export interface VmOsInfo {
+  /** id de la distribution (« ubuntu », « debian », « centos », « windows », …) */
+  id: string | null;
+  /** nom court (« Ubuntu », « Debian GNU/Linux ») */
+  name: string | null;
+  /** nom versionné (« Ubuntu 24.04.5 LTS », « Debian GNU/Linux 13 (trixie) ») */
+  prettyName: string | null;
+  /** version (« 24.04.5 LTS (Noble Numbat) », « 13 (trixie) ») */
+  version: string | null;
+  /** version-id (« 24.04 », « 13 ») */
+  versionId: string | null;
+  /** libellé du noyau (« 6.17.0-35-generic ») */
+  kernelRelease: string | null;
+  /** architecture (« x86_64 ») */
+  arch: string | null;
 }
 
 /** Point d'occupation d'un filesystem de VM (GET /api/vm-fs) — InfluxDB vm_fs. */
