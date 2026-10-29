@@ -9,6 +9,7 @@ import {
   invToJson,
   invToTxt,
   invTotalDiskMb,
+  archLabel,
   osDisplay,
   osFamilyFromId,
   osPrettyFromOstype,
@@ -27,6 +28,7 @@ function inv(partial: Partial<InvVm> & Pick<InvVm, 'vmid' | 'name'>): InvVm {
     osType: 'Linux/Unix',
     osPretty: 'Ubuntu 24.04 LTS',
     osKernel: '6.17.0-generic',
+    osArch: 'x86_64',
     cpuCores: 4,
     cpuPct: 10,
     ramAllocMb: 8192,
@@ -86,6 +88,13 @@ describe('décodage famille OS', () => {
     expect(osPrettyFromOstype('w2k22')).toBe('Windows');
     expect(osPrettyFromOstype('l26')).toBeNull(); // code court → pas de distro connue
     expect(osPrettyFromOstype(undefined)).toBeNull();
+  });
+  it('archLabel : normalise amd64/x86_64/arm64', () => {
+    expect(archLabel('amd64')).toBe('x86_64');
+    expect(archLabel('x86_64')).toBe('x86_64');
+    expect(archLabel('i386')).toBe('x86');
+    expect(archLabel('aarch64')).toBe('arm64');
+    expect(archLabel(null)).toBeNull();
   });
   it('fmtSize : unités Mo / Go / To', () => {
     expect(fmtSize(6)).toBe('6 Mo');

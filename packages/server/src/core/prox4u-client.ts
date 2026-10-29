@@ -230,6 +230,8 @@ export class Prox4uClient implements DataSource {
         if (cached.value.ostype) v.ostype = cached.value.ostype;
         // Nom d'hôte — joint depuis la config (sans agent invité).
         if (cached.value.hostname) v.hostname = cached.value.hostname;
+        // Architecture — jointe depuis la config (sans agent invité).
+        if (cached.value.arch) v.arch = cached.value.arch;
       }
     }
     return vms;
@@ -385,6 +387,7 @@ export class Prox4uClient implements DataSource {
         os: type === 'qemu' ? friendlyOs(str(c.os)) : 'LXC',
         ostype: str(c.ostype),
         hostname: str(c.hostname),
+        arch: str(c.arch),
         pool: str(c.pool) ?? null,
         nets: parseVmNets(type, c),
         diskStorage: diskStorageOf(c, type),

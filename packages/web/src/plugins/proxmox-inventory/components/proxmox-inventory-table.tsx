@@ -108,7 +108,11 @@ export function ProxmoxInventoryTable({ vms, filter, onFilterChange, sortKey, so
         return (
           <div className="leading-tight">
             <div className="font-medium">{osDisplay(v)}</div>
-            {v.osKernel && <div className="text-[10px] text-muted-foreground">noyau {v.osKernel}</div>}
+            {(v.osArch || v.osKernel) && (
+              <div className="text-[10px] text-muted-foreground">
+                {[v.osArch, v.osKernel ? `noyau ${v.osKernel}` : null].filter(Boolean).join(' · ')}
+              </div>
+            )}
           </div>
         );
       case 'cpuCores': return v.cpuCores ?? na(t);
