@@ -3,7 +3,7 @@ import {
   buildTopology,
   impactAnalysis,
   ipInSubnet,
-  managementSegments,
+  internalNetworkSegments,
   matchAgentNetsByMac,
   parseVmNets,
   primaryAgentIp,
@@ -214,27 +214,28 @@ describe('ipInSubnet', () => {
   });
 });
 
-describe('managementSegments', () => {
-  it('pont dont le sous-réseau porte l’IP de gestion → segment natif de gestion', () => {
-    const t = topo({ nodes: [node({ ip: '192.168.1.10' })] });
-    expect(managementSegments(t)).toEqual(new Set([segmentKey('vmbr0', null)]));
+describe('internalNetworkSegments', () => {
+  it('pont sans port physique → segment interne Proxmox', () => {
+    const nfs = { name: 'nfs', ip: null, subnet: null, gateway: null, ports: [], comment: null };
+    const t = topo({ nodes: [node({ bridges: [nfs] })] });
+    expect(internalNetworkSegments(t)).toEqual(new Set([segmentKey('nfs', null)]));
   });
 
-  it('IP hors du sous-réseau du pont (ou nœud sans IP) → aucun segment', () => {
-    expect(managementSegments(topo({ nodes: [node({ ip: '10.99.99.99' })] }))).toEqual(new Set());
-    expect(managementSegments(topo({ nodes: [node({ ip: null })] }))).toEqual(new Set());
+  it('pont branché sur une NIC physique (ou aucun pont) → aucun segment interne', () => {
+    // Le vmbr0 par défaut porte ports:['nic0'] (NIC physique) → réseau externe.
+    expect(internalNetworkSegments(topo())).toEqual(new Set());
+    expect(internalNetworkSegments(topo({ nodes: [node({ bridges: [] })] }))).toEqual(new Set());
   });
 
-  it('plusieurs nœuds sur des ponts différents → tous les segments de gestion', () => {
+  it('plusieurs nœuds, chacun avec un pont sans port → tous les segments internes', () => {
+    const nfs = { name: 'nfs', ip: null, subnet: null, gateway: null, ports: [], comment: null };
+    const storage = { name: 'storage', ip: null, subnet: null, gateway: null, ports: [], comment: null };
     const t = buildTopology({
       endpointId: 'ep1',
-      nodes: [
-        node({ node: 'n1', ip: '192.168.1.10', bridges: [{ name: 'vmbr0', ip: '192.168.1.10/24', subnet: '192.168.1.0/24', gateway: null, ports: [], comment: null }] }),
-        node({ node: 'n2', ip: '10.0.0.5', bridges: [{ name: 'vmbr1', ip: '10.0.0.5/24', subnet: '10.0.0.0/24', gateway: null, ports: [], comment: null }] }),
-      ],
+      nodes: [node({ node: 'n1', bridges: [nfs] }), node({ node: 'n2', bridges: [storage] })],
       vms: [vm()],
     });
-    expect(managementSegments(t)).toEqual(new Set([segmentKey('vmbr0', null), segmentKey('vmbr1', null)]));
+    expect(internalNetworkSegments(t)).toEqual(new Set([segmentKey('nfs', null), segmentKey('storage', null)]));
   });
 });
 

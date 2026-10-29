@@ -92,7 +92,7 @@ describe('sélection de réseau (déroulé) — filtre + encode/decode', () => {
 // --- buildNetworkInventory --------------------------------------------------------
 
 describe('buildNetworkInventory — kind interne/externe', () => {
-  it('management sur le segment qui porte l’IP de gestion d’un nœud, external sinon', () => {
+  it('management = pont sans NIC physique, external = pont branché sur une NIC (ou VLAN)', () => {
     const nodes: TopologyNode[] = [
       {
         node: 'pve1',
@@ -100,21 +100,21 @@ describe('buildNetworkInventory — kind interne/externe', () => {
         ip: '192.168.1.10',
         nics: [],
         bridges: [
-          { name: 'vmbr0', ip: '192.168.1.10/24', subnet: '192.168.1.0/24', gateway: null, ports: [], comment: null },
-          { name: 'vmbr1', ip: null, subnet: null, gateway: null, ports: [], comment: null },
+          { name: 'vmbr0', ip: '192.168.1.10/24', subnet: '192.168.1.0/24', gateway: null, ports: ['nic0'], comment: null },
+          { name: 'nfs', ip: null, subnet: null, gateway: null, ports: [], comment: null },
         ],
       },
     ];
     const vms = [
       vm(100, 'web-1', 'running', 'pve1', [NET('net0', 'vmbr0', null), NET('net1', 'vmbr0', 10)], 10, 5),
-      vm(101, 'storage-1', 'running', 'pve1', [NET('net0', 'vmbr1', null)], 0, 0),
+      vm(101, 'storage-1', 'running', 'pve1', [NET('net0', 'nfs', null)], 0, 0),
     ];
     const t = { endpointId: 'a', switches: [], nodes, vms, vlans: [10] };
     const rows = buildNetworkInventory(t);
     const byKey = (bridge: string, vlan: number | null) => rows.find((r) => r.bridge === bridge && r.vlan === vlan)!;
-    expect(byKey('vmbr0', null).kind).toBe('management'); // porte l'IP de gestion du nœud
+    expect(byKey('vmbr0', null).kind).toBe('external'); // NIC physique → externe
     expect(byKey('vmbr0', 10).kind).toBe('external'); // VLAN → externe
-    expect(byKey('vmbr1', null).kind).toBe('external'); // pont sans IP → externe
+    expect(byKey('nfs', null).kind).toBe('management'); // sans NIC physique → interne Proxmox
   });
 });
 

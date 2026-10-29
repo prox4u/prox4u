@@ -13,12 +13,12 @@ export {
   riskSeverity,
 } from './overcommit.js';
 export type { OvercommitMetric, OvercommitReport } from './overcommit.js';
-export { subnetOf, parseVmNets, buildTopology, segmentKey, impactAnalysis, ipInSubnet, managementSegments, matchAgentNetsByMac, primaryAgentIp } from './network.js';
+export { subnetOf, parseVmNets, buildTopology, segmentKey, impactAnalysis, ipInSubnet, internalNetworkSegments, matchAgentNetsByMac, primaryAgentIp } from './network.js';
 export type { NetworkKind } from './network.js';
 export { segmentImpact, buildNetworkInventory, buildNetworkInventoryAll, filterNetworkRows, encodeNetSel, decodeNetSel } from './network-inventory.js';
 export type { NetworkRow, NetworkRowAll, NetworkVmRef, NetworkSeverity, InventoryFilter } from './network-inventory.js';
-export { buildStorageInventory, buildStorageInventoryAll, filterStorageRows, storageSeverity, sortStorageRows } from './storage-inventory.js';
-export type { StorageRow, StorageRowAll, StorageVmRef, StorageKind, StorageInventoryFilter, StorageInventoryEndpoint, StorageInventoryResponse, StorageSortKey, StorageSortDir, StorageSort } from './storage-inventory.js';
+export { buildStorageInventory, buildStorageInventoryAll, filterStorageRows, storageSeverity, sortStorageRows, buildDatastoreForecast } from './storage-inventory.js';
+export type { StorageRow, StorageRowAll, StorageVmRef, StorageKind, StorageInventoryFilter, StorageInventoryEndpoint, StorageInventoryResponse, StorageSortKey, StorageSortDir, StorageSort, DatastorePoint, DatastoreHistoryEntry, DatastoreHistoryResponse, DatastoreRange } from './storage-inventory.js';
 export { buildVmTree, DEFAULT_VM_FILTER, filterVmRows, sortVmRows } from './vm-inventory.js';
 export type { VmTreeNode, VmInventoryFilter, VmSortKey, VmSortDir } from './vm-inventory.js';
 export {

@@ -273,7 +273,8 @@ async function computeCapacity(ctx: AppContext, poller: Poller, ep: EndpointRunt
     nodes.map((n) => ep.source.getRrddata('node', n.node, undefined, 'month')),
   );
   return {
-    cpu: buildForecast('cpu', aggregateDaily(series, nodes, (p, n) => (p.cpu !== null && n.cpus ? (p.cpu / n.cpus) * 100 : null))),
+    // Le `cpu` du RRD nœud est une fraction 0–1 (même échelle que le status) → ×100, pas /cpus
+    cpu: buildForecast('cpu', aggregateDaily(series, nodes, (p) => (p.cpu !== null ? p.cpu * 100 : null))),
     ram: buildForecast('ram', aggregateDaily(series, nodes, (p, n) => (p.mem !== null && n.memTotal ? (p.mem / n.memTotal) * 100 : null))),
     disk: buildForecast('disk', poller.getDiskHistory(ep.id)),
     source: 'rrd',
@@ -306,7 +307,8 @@ async function computeTrends(ctx: AppContext, ep: EndpointRuntime): Promise<Tren
     const series = await Promise.all(
       nodes.map((n) => ep.source.getRrddata('node', n.node, undefined, 'week')),
     );
-    const cpuDays = aggregateDaily(series, nodes, (p, n) => (p.cpu !== null && n.cpus ? (p.cpu / n.cpus) * 100 : null));
+    // cpu du RRD nœud = fraction 0–1 de la capacité → ×100 (pas /cpus)
+    const cpuDays = aggregateDaily(series, nodes, (p) => (p.cpu !== null ? p.cpu * 100 : null));
     const ramDays = aggregateDaily(series, nodes, (p, n) => (p.mem !== null && n.memTotal ? (p.mem / n.memTotal) * 100 : null));
     const ramByDay = new Map(ramDays.map((d) => [d.time, d.value]));
     trend7d = cpuDays.map((d) => ({
@@ -439,8 +441,8 @@ async function computeMetrics(
     const n = filtered[i].node;
     for (const p of points) {
       const e = byTime.get(p.time) ?? { cpuSum: 0, cpuN: 0, ramSum: 0, ramN: 0, diskSum: 0, diskN: 0, netIn: 0, netOut: 0 };
-      if (p.cpu !== null && n.cpus) {
-        e.cpuSum += (p.cpu / n.cpus) * 100;
+      if (p.cpu !== null) {
+        e.cpuSum += p.cpu * 100; // fraction 0–1 du RRD nœud → ×100
         e.cpuN += 1;
       }
       if (p.mem !== null && n.memTotal) {
@@ -533,8 +535,9 @@ async function computeOvercommitRisk(
     const h = p95?.get(v.vmid) ?? null;
     const cpuP95Pct = h?.cpuPct ?? null;
     const memP95Bytes = h?.memBytes ?? null;
-    // cpu_pct est un % de l'allocation → conversion en cœurs absolus
-    demandCores += cpuP95Pct !== null ? (cpuP95Pct / 100) * (v.cpuAlloc ?? 0) : (v.cpu ?? 0);
+    // cpu_pct est un % de l'allocation → conversion en cœurs absolus.
+    // Fallback sans historique : QEMU cpu en unités de cœur, LXC cpu fraction → × cœurs.
+    demandCores += cpuP95Pct !== null ? (cpuP95Pct / 100) * (v.cpuAlloc ?? 0) : v.type === 'lxc' ? (v.cpu ?? 0) * (v.cpuAlloc ?? 0) : (v.cpu ?? 0);
     demandRam += memP95Bytes ?? (v.mem ?? 0);
     vmDetails.push({ vmid: v.vmid, name: v.name, cpuP95Pct, memP95Bytes });
   }

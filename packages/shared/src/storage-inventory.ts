@@ -9,16 +9,22 @@
  * GET /api/storage-inventory : storages + VMs avec leur champ `storage`).
  */
 
+import { buildForecast } from './capacity.js';
 import { usageSeverity } from './overcommit.js';
-import type { OvercommitConfig, PveStorage, PveStorageType, SeverityOrNa } from './types.js';
+import type { CapacityForecast, OvercommitConfig, PveStorage, PveStorageType, SeverityOrNa } from './types.js';
 
-/** VM dont le disque est sur un datastore — vue plate pour l'inventaire. */
+/**
+ * Un disque de VM sur un datastore — vue plate pour l'inventaire. Une VM à
+ * plusieurs disques (sur des datastores différents) produit une référence par
+ * datastore : `diskBytes` est la taille allouée (config `size=`) du/des disques
+ * de la VM sur CE datastore.
+ */
 export interface StorageVmRef {
   vmid: number;
   name: string;
   node: string;
   status: 'running' | 'stopped' | 'paused' | 'unknown';
-  /** octets de disque alloué sur ce datastore. */
+  /** taille allouée du disque de la VM sur ce datastore (config `size=`), en octets. */
   diskBytes: number;
   /** nom du datastore qui héberge le disque de la VM. */
   storage: string;
@@ -144,7 +150,7 @@ export function buildStorageInventoryAll(
 }
 
 /** Colonnes triables de l'inventaire (en-têtes cliquables). */
-export type StorageSortKey = 'datastore' | 'server' | 'type' | 'capacity' | 'vms' | 'state';
+export type StorageSortKey = 'datastore' | 'server' | 'type' | 'capacity' | 'volumes' | 'vms' | 'state';
 
 /** Sens de tri — asc = croissant, desc = décroissant. */
 export type StorageSortDir = 'asc' | 'desc';
@@ -178,6 +184,8 @@ export function sortStorageRows<T extends StorageRow>(rows: T[], config: Overcom
         return a.type.localeCompare(b.type);
       case 'capacity':
         return a.pct - b.pct;
+      case 'volumes':
+        return a.diskAllocated - b.diskAllocated;
       case 'vms':
         return a.running + a.stopped - (b.running + b.stopped);
       case 'state':
@@ -217,4 +225,63 @@ export function filterStorageRows<T extends StorageRow>(rows: T[], query: string
       .toLowerCase();
     return haystack.includes(q);
   });
+}
+
+// --- Capacity planning par datastore -------------------------------------------------
+
+/** Point brut d'occupation d'un datastore (un tick du poller). */
+export interface DatastorePoint {
+  /** unix seconds. */
+  time: number;
+  /** octets utilisés. */
+  used: number;
+  /** octets totaux (0 = capacité inconnue, point ignoré). */
+  total: number;
+}
+
+const DAY_SEC = 86_400;
+
+/**
+ * Capacity planning d'un datastore : construit la série journalière
+ * (moyenne des % utilisés/total, minuit UTC) puis applique la prévision disque
+ * standard (`buildForecast`). Fonctions pures testées — aucun I/O.
+ *
+ * - moins de 7 jours d'historique valide → `insufficientData` (pas de projection).
+ * - pente ≤ 0 → `daysTo80`/`daysTo90` = null (datastore stable ou en décrue).
+ */
+export function buildDatastoreForecast(points: DatastorePoint[]): CapacityForecast {
+  const byDay = new Map<number, { sum: number; n: number }>();
+  for (const p of points) {
+    if (!p.total || p.total <= 0) continue; // capacité inconnue → pas de % fiable
+    const day = p.time - (p.time % DAY_SEC);
+    const pct = (p.used / p.total) * 100;
+    const e = byDay.get(day) ?? { sum: 0, n: 0 };
+    e.sum += pct;
+    e.n += 1;
+    byDay.set(day, e);
+  }
+  const daily = [...byDay.entries()]
+    .map(([time, { sum, n }]) => ({ time, value: Math.round((sum / n) * 10) / 10 }))
+    .sort((a, b) => a.time - b.time);
+  return buildForecast('disk', daily);
+}
+
+/** Un datastore avec son historique d'occupation et sa prévision de saturation. */
+export interface DatastoreHistoryEntry {
+  storage: string;
+  /** capacité totale actuelle du datastore (octets). */
+  totalBytes: number;
+  /** série temporelle d'occupation (utilisé/total), triée par temps. */
+  points: DatastorePoint[];
+  forecast: CapacityForecast;
+}
+
+/** Portée d'historique demandée : 1 an (RRD hebdo) ou 31 j (RRD journalier). */
+export type DatastoreRange = 'year' | 'month';
+
+/** Réponse de GET /api/storage-datastore-history. */
+export interface DatastoreHistoryResponse {
+  endpointId: string;
+  range: DatastoreRange;
+  datastores: DatastoreHistoryEntry[];
 }

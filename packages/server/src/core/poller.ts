@@ -4,6 +4,7 @@ import {
   computePra,
   isThinStorage,
   usageSeverity,
+  type AgentFsUsage,
   type Alert,
   type DashboardSnapshot,
   type EndpointSnapshot,
@@ -45,6 +46,8 @@ export interface AppContext {
 }
 
 const DAY_MS = 86_400_000;
+/** Intervalle d'interrogation de l'agent invité pour l'usage disque QEMU (get-fsinfo). */
+const DISK_USAGE_TTL_MS = 5 * 60 * 1000;
 
 interface DailySample {
   time: number;
@@ -75,6 +78,19 @@ export class Poller {
   private multi: MultiDashboardSnapshot | null = null;
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
+  /**
+   * Compteurs cumulés PVE (netin/netout/diskread/diskwrite) du poll précédent,
+   * par VM. /cluster/resources renvoie des totaux depuis le boot (pas des débits) →
+   * on en dérive le débit/s par delta avec ce snapshot. Clé : endpoint/nœud/vmid.
+   */
+  private ioPrev = new Map<string, Array<{ t: number; in: number; out: number; rd: number; wr: number }>>();
+  /**
+   * Usage disque RÉEL des VMs QEMU via l'agent invité (get-fsinfo), en cache throttle.
+   * L'agent est interrogé au plus toutes les DISK_USAGE_TTL_MS par VM (l'usage disque
+   * change lentement — inutile de le relancer à chaque tick de 5 s). Clé : endpoint/nœud/vmid.
+   * `fs` = derniers filesystems connus (un par point de montage) ; null si l'agent n'a jamais répondu.
+   */
+  private diskUsage = new Map<string, { at: number; fs: AgentFsUsage[] }>();
 
   constructor(
     private ctx: AppContext,
@@ -168,7 +184,9 @@ export class Poller {
       const totalDiskAlloc = allocVms.reduce((s, v) => s + (v.maxdisk ?? 0), 0);
 
       const nodeHealth = nodes.map((n) => {
-        const cpuPct = n.online && n.cpus ? (n.cpu ?? 0) / n.cpus * 100 : 0;
+        // Le champ `cpu` du status nœud est déjà une fraction 0–1 du CPU total
+        // (pas des unités de cœur) → on ne divise PAS par n.cpus.
+        const cpuPct = n.online ? (n.cpu ?? 0) * 100 : 0;
         const ramPct = n.online && n.memTotal ? ((n.memUsed ?? 0) / n.memTotal) * 100 : 0;
         const diskPct = n.online && n.rootfsTotal ? ((n.rootfsUsed ?? 0) / n.rootfsTotal) * 100 : 0;
         return {
@@ -193,7 +211,8 @@ export class Poller {
 
       const online = nodes.filter((n) => n.online);
       const totalCpus = online.reduce((s, n) => s + (n.cpus ?? 0), 0);
-      const usedCpus = online.reduce((s, n) => s + (n.cpu ?? 0), 0);
+      // `n.cpu` est une fraction 0–1 → conversion en unités de cœur (× cpus)
+      const usedCpus = online.reduce((s, n) => s + (n.cpu ?? 0) * (n.cpus ?? 0), 0);
       const totalRam = online.reduce((s, n) => s + (n.memTotal ?? 0), 0);
       const usedRam = online.reduce((s, n) => s + (n.memUsed ?? 0), 0);
       const storWithCap = storages.filter((s) => s.total && s.total > 0);
@@ -250,7 +269,7 @@ export class Poller {
         type: v.type,
         status: v.status,
         node: v.node,
-        cpuPct: round1(v.cpuAlloc ? ((v.cpu ?? 0) / v.cpuAlloc) * 100 : 0),
+        cpuPct: round1(vmCpuPct(v)),
         memBytes: Math.round(v.mem ?? 0),
         maxmemBytes: v.maxmem,
         diskBytes: v.disk != null ? Math.round(v.disk) : null,
@@ -287,7 +306,7 @@ export class Poller {
       };
       st.snapshot = snap;
       st.lastError = null;
-      this.writeInflux(rt.id, nodes, nodeHealth, vms, kpis);
+      await this.writeInflux(rt.id, rt.source, nodes, nodeHealth, vms, kpis, storageInfos);
       return { id: rt.id, name: rt.name, url: rt.url, ok: true, snapshot: snap };
     } catch (err) {
       st.lastError = (err as Error).message;
@@ -306,11 +325,49 @@ export class Poller {
   }
 
   /**
+   * Convertit les compteurs cumulés PVE (octets totaux depuis le boot) en débits/s.
+   * PVE rafraîchit ses compteurs ~toutes les 10 s alors que l'app poll toutes les 5 s :
+   * un delta simple (÷ intervalle de poll) produit des pics surestimés et des zéros.
+   * On divise donc par le temps RÉEL écoulé sur une fenêtre glissante (30 s) : le
+   * débit = (cumul_fin − cumul_début) / (t_fin − t_début), ce qui lisse les zéros/pics
+   * et restaure le débit moyen réel. Reset de compteur (reboot) borné à 0.
+   */
+  private deltaCounters(
+    endpointId: string,
+    node: string,
+    vmid: number,
+    cur: { in: number; out: number; rd: number; wr: number },
+    now: number,
+    windowMs = 30_000,
+  ): { in: number; out: number; rd: number; wr: number } {
+    const key = `${endpointId}/${node}/${vmid}`;
+    const buf = this.ioPrev.get(key) ?? [];
+    buf.push({ t: now, ...cur });
+    while (buf.length > 2 && now - buf[0].t > windowMs) buf.shift();
+    this.ioPrev.set(key, buf);
+    if (buf.length < 2) return { in: 0, out: 0, rd: 0, wr: 0 };
+    const first = buf[0];
+    const last = buf[buf.length - 1];
+    const dt = (last.t - first.t) / 1000; // temps réel sur la fenêtre
+    if (dt <= 0) return { in: 0, out: 0, rd: 0, wr: 0 };
+    const rate = (c: number, p: number) => Math.max(0, (c - p) / dt);
+    return { in: rate(last.in, first.in), out: rate(last.out, first.out), rd: rate(last.rd, first.rd), wr: rate(last.wr, first.wr) };
+  }
+
+  /**
    * Écrit les mesures du tick dans InfluxDB (base raw, précision seconde),
    * avec le tag `cluster` = id de l'endpoint. Mode mock exclu : les données
    * simulées ne doivent pas polluer l'historique.
    */
-  private writeInflux(clusterId: string, nodes: PveNodeStatus[], nodeHealth: NodeHealth[], vms: PveVmResource[], kpis: KpiSummary): void {
+  private async writeInflux(
+    clusterId: string,
+    source: DataSource,
+    nodes: PveNodeStatus[],
+    nodeHealth: NodeHealth[],
+    vms: PveVmResource[],
+    kpis: KpiSummary,
+    storages: { storage: string; usedBytes: number; totalBytes: number }[],
+  ): Promise<void> {
     const influx = this.ctx.influx;
     if (!influx.enabled || this.ctx.config.mock) return;
     const ts = Math.floor(Date.now() / 1000);
@@ -330,17 +387,50 @@ export class Poller {
         ),
       );
     }
+    // Occupation par datastore (used/total) — séries temporelles du graphique
+    // d'occupation et du capacity planning par datastore (vue stockage).
+    for (const s of storages) {
+      if (!s.totalBytes || s.totalBytes <= 0) continue;
+      influx.enqueue(
+        buildLine(
+          'datastore_metrics',
+          { cluster: clusterId, storage: s.storage },
+          {
+            used_bytes: Math.round(s.usedBytes),
+            total_bytes: Math.round(s.totalBytes),
+          },
+          ts,
+        ),
+      );
+    }
     // PVE ≥ 9 : /nodes/{n}/status n'expose plus netin/netout → le trafic réseau du
-    // nœud est dérivé de la somme des VMs en marche (même convention que le KPI
-    // réseau du dashboard) et écrit dans une mesure dédiée `node_net` : les lignes
-    // historiques de node_metrics ont un net à zéro, la lecture séparée évite toute dilution.
-    const vmNetByNode = new Map<string, { in: number; out: number }>();
+    // nœud est dérivé de la somme des débits des VMs en marche, écrit dans `node_net`.
+    // ATTENTION : netin/netout/diskread/diskwrite de /cluster/resources sont des
+    // CUMULATIFS (octets totaux depuis le boot), pas des débits/s → conversion par
+    // delta avec le poll précédent (deltaCounters). Le 1er poll renvoie 0.
+    const now = Date.now();
+    const vmIo = new Map<number, { in: number; out: number; rd: number; wr: number }>();
     for (const v of vms) {
       if (v.status !== 'running') continue;
-      const e = vmNetByNode.get(v.node) ?? { in: 0, out: 0 };
-      e.in += v.netin ?? 0;
-      e.out += v.netout ?? 0;
-      vmNetByNode.set(v.node, e);
+      vmIo.set(
+        v.vmid,
+        this.deltaCounters(clusterId, v.node, v.vmid, {
+          in: v.netin ?? 0,
+          out: v.netout ?? 0,
+          rd: v.diskread ?? 0,
+          wr: v.diskwrite ?? 0,
+        }, now),
+      );
+    }
+    const nodeNetByNode = new Map<string, { in: number; out: number }>();
+    for (const v of vms) {
+      if (v.status !== 'running') continue;
+      const r = vmIo.get(v.vmid);
+      if (!r) continue;
+      const e = nodeNetByNode.get(v.node) ?? { in: 0, out: 0 };
+      e.in += r.in;
+      e.out += r.out;
+      nodeNetByNode.set(v.node, e);
     }
     for (const n of nodes) {
       if (!n.online) continue;
@@ -358,7 +448,7 @@ export class Poller {
           ts,
         ),
       );
-      const net = vmNetByNode.get(n.node);
+      const net = nodeNetByNode.get(n.node);
       influx.enqueue(
         buildLine(
           'node_net',
@@ -371,24 +461,96 @@ export class Poller {
         ),
       );
     }
+    // Occupation disque (réelle) PAR FILESYSTEM : QEMU via l'agent invité (get-fsinfo, throttle 5 min),
+    // LXC via /cluster/resources (disk = rootfs utilisé, maxdisk = alloué — déjà réels).
+    // Le RRD `disk` vaut 0 pour les QEMU → l'agent est la seule source fiable par VM.
+    // Les appels agent sont lancés EN PARALLÈLE (Promise.all) : le blocage du tick est
+    // borné à un seul timeout agent (8 s), pas à N×timeout — et jamais infini.
+    const nowDu = Date.now();
+    // filesystems par VM (une entrée par point de montage) → mesure vm_fs.
+    const fsByVm = new Map<number, AgentFsUsage[]>();
+    // agrégat pour vm_metrics (disk_bytes = somme used, disk_alloc_bytes = somme total).
+    const diskByVm = new Map<number, { used: number | null; alloc: number | null }>();
+    const qemuToFetch: PveVmResource[] = [];
     for (const v of vms) {
       if (v.status !== 'running') continue;
+      const alloc = v.maxdisk ?? null;
+      if (v.type !== 'qemu') {
+        // LXC : un seul filesystem rootfs (pas d'agent).
+        const used = Math.round(v.disk ?? 0);
+        const allocN = v.maxdisk ?? 0;
+        if (allocN > 0) {
+          fsByVm.set(v.vmid, [{ mountpoint: '/', dev: 'rootfs', usedBytes: used, totalBytes: allocN }]);
+          diskByVm.set(v.vmid, { used, alloc: allocN });
+        } else {
+          diskByVm.set(v.vmid, { used: used > 0 ? used : null, alloc: null });
+        }
+        continue;
+      }
+      const cached = this.diskUsage.get(`${clusterId}/${v.node}/${v.vmid}`);
+      if (cached && nowDu - cached.at < DISK_USAGE_TTL_MS) {
+        fsByVm.set(v.vmid, cached.fs);
+        const used = cached.fs.reduce((s, f) => s + f.usedBytes, 0);
+        const tot = cached.fs.reduce((s, f) => s + f.totalBytes, 0);
+        diskByVm.set(v.vmid, { used: used > 0 ? used : null, alloc: tot > 0 ? tot : alloc });
+      } else {
+        qemuToFetch.push(v);
+      }
+    }
+    if (qemuToFetch.length > 0) {
+      const results = await Promise.all(qemuToFetch.map((v) => source.getAgentFsUsage(v.node, v.vmid)));
+      for (let i = 0; i < qemuToFetch.length; i++) {
+        const v = qemuToFetch[i];
+        const fs = results[i];
+        const k = `${clusterId}/${v.node}/${v.vmid}`;
+        const alloc = v.maxdisk ?? null;
+        const cached = this.diskUsage.get(k);
+        if (fs && fs.length > 0) {
+          this.diskUsage.set(k, { at: nowDu, fs });
+          fsByVm.set(v.vmid, fs);
+          const used = fs.reduce((s, f) => s + f.usedBytes, 0);
+          const tot = fs.reduce((s, f) => s + f.totalBytes, 0);
+          diskByVm.set(v.vmid, { used: used > 0 ? used : null, alloc: tot > 0 ? tot : alloc });
+        } else if (cached) {
+          fsByVm.set(v.vmid, cached.fs); // agent indispo → dernier usage connu
+          const used = cached.fs.reduce((s, f) => s + f.usedBytes, 0);
+          diskByVm.set(v.vmid, { used: used > 0 ? used : null, alloc });
+        } else {
+          diskByVm.set(v.vmid, { used: null, alloc }); // pas encore de donnée agent
+        }
+      }
+    }
+    for (const v of vms) {
+      if (v.status !== 'running') continue;
+      const r = vmIo.get(v.vmid) ?? { in: 0, out: 0, rd: 0, wr: 0 };
+      const du = diskByVm.get(v.vmid) ?? { used: null, alloc: null };
+      const fields: Record<string, number> = {
+        // QEMU : cpu en unités de cœur → ÷ cpuAlloc × 100. LXC : fraction 0–1 → × 100.
+        cpu_pct: round1(vmCpuPct(v)),
+        mem_bytes: Math.round(v.mem ?? 0),
+        // I/O par VM : débits/s calculés par delta des compteurs cumulés PVE
+        disk_read_bps: Math.round(r.rd),
+        disk_write_bps: Math.round(r.wr),
+        net_in_bps: Math.round(r.in),
+        net_out_bps: Math.round(r.out),
+      };
+      // Occupation disque (agrégat) : omise si inconnue (graphe démarre plus tard, comme l'I/O).
+      if (du.used != null) fields.disk_bytes = Math.round(du.used);
+      if (du.alloc != null) fields.disk_alloc_bytes = Math.round(du.alloc);
       influx.enqueue(
-        buildLine(
-          'vm_metrics',
-          { cluster: clusterId, node: v.node, vmid: String(v.vmid), name: v.name },
-          {
-            cpu_pct: round1(v.cpuAlloc ? ((v.cpu ?? 0) / v.cpuAlloc) * 100 : 0),
-            mem_bytes: Math.round(v.mem ?? 0),
-            // I/O par VM (onglet Monitor) — disques en octets/s, réseau en bits/s (unité PVE, comme node_metrics)
-            disk_read_bps: Math.round(v.diskread ?? 0),
-            disk_write_bps: Math.round(v.diskwrite ?? 0),
-            net_in_bps: Math.round(v.netin ?? 0),
-            net_out_bps: Math.round(v.netout ?? 0),
-          },
-          ts,
-        ),
+        buildLine('vm_metrics', { cluster: clusterId, node: v.node, vmid: String(v.vmid), name: v.name }, fields, ts),
       );
+      // Occupation disque PAR FILESYSTEM → mesure vm_fs (une ligne par point de montage).
+      for (const f of fsByVm.get(v.vmid) ?? []) {
+        influx.enqueue(
+          buildLine(
+            'vm_fs',
+            { cluster: clusterId, node: v.node, vmid: String(v.vmid), name: v.name, mountpoint: f.mountpoint, dev: f.dev },
+            { used_bytes: Math.round(f.usedBytes), total_bytes: Math.round(f.totalBytes) },
+            ts,
+          ),
+        );
+      }
     }
   }
 }
@@ -426,7 +588,7 @@ function topConsumers(vms: PveVmResource[]): TopConsumer[] {
       name: v.name,
       node: v.node,
       pool: v.pool ?? null,
-      cpuPct: round1(v.cpuAlloc ? ((v.cpu ?? 0) / v.cpuAlloc) * 100 : 0),
+      cpuPct: round1(vmCpuPct(v)),
       memBytes: v.mem ?? 0,
       memPct: round1(v.maxmem ? ((v.mem ?? 0) / v.maxmem) * 100 : 0),
     }))
@@ -453,7 +615,8 @@ function poolAggregates(vms: PveVmResource[]): PoolAggregate[] {
     const name = v.pool ?? 'Sans pool';
     if (v.cpuAlloc) {
       alloc.set(name, (alloc.get(name) ?? 0) + v.cpuAlloc);
-      used.set(name, (used.get(name) ?? 0) + (v.cpu ?? 0));
+      // LXC : cpu est un % d'allocation → converti en unités de cœur avant la somme
+      used.set(name, (used.get(name) ?? 0) + vmCpuCores(v));
     }
   }
   const result = [...byPool.values()].map((a) => ({
@@ -469,4 +632,21 @@ function dayKey(t: number): string {
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+/**
+ * % d'allocation CPU d'une VM. Les échelles PVE diffèrent selon le type :
+ *  - QEMU : `cpu` en unités de CŒUR (1.0 = 100 % d'UN cœur) → ÷ cpuAlloc × 100.
+ *  - LXC  : `cpu` en FRACTION 0–1 de l'allocation (0.08 = 8 % des cœurs alloués)
+ *           → × 100 (même nature que le CPU nœud, abstrait du nb de cœurs).
+ * Vérifié : LXC à 8.5 % (top interne) → cpu(field) ≈ 0.08, RRD cpu ≈ 0.08 (= 8 %).
+ */
+function vmCpuPct(v: { type: string; cpu?: number | null; cpuAlloc?: number }): number {
+  if (v.type === 'lxc') return (v.cpu ?? 0) * 100;
+  return v.cpuAlloc ? ((v.cpu ?? 0) / v.cpuAlloc) * 100 : 0;
+}
+
+/** Usage CPU d'une VM en unités de cœur (pour les sommes/pools) : % d'allocation × cœurs / 100. */
+function vmCpuCores(v: { type: string; cpu?: number | null; cpuAlloc?: number }): number {
+  return (vmCpuPct(v) * (v.cpuAlloc ?? 0)) / 100;
 }

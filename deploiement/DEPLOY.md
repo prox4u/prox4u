@@ -54,10 +54,26 @@ Le script crée, par commandes `pveum` (aucune GUI) :
 
 *The script creates, via `pveum` commands (no GUI):*
 
-1. le rôle **`ManagerReader`** — 100 % lecture seule, calibré sur les endpoints de l'app (`DA.Read` + permissions `*Audit`) ;
+1. le rôle **`ManagerReader`** — 100 % lecture seule, calibré sur les endpoints de l'app (`DA.Read` + permissions `*Audit`, **dont `VM.GuestAgent.Audit`** pour l'occupation disque réelle des VMs QEMU — voir encadré ci-dessous) ;
 2. l'utilisateur dédié **`manager@pve`** (indépendant de LDAP/AD, révocable seul) ;
 3. le **token API** `manager` + droits sur tout le datacenter ;
 4. un **auto-test** (`GET /cluster/resources` + `/nodes/<n>/status`) qui confirme que les droits suffisent.
+
+> **Accorder le rôle à un user de monitoring existant** (ex. `supervision@pam`, déjà utilisé dans `.env`/`clusters.json`) : le rôle accordé **doit inclure `VM.Audit`** (liste des VMs) **et** `VM.GuestAgent.Audit` (occupation disque par partition). Le rôle du kit `ManagerReader` l'inclut déjà ; pour l'accorder à un user existant :
+>
+> ```bash
+> # accord du rôle sur tout le datacenter (le « / » propage à /vms, /nodes, …)
+> pveum acl modify / --user supervision@pam --roles ManagerReader
+> ```
+>
+> Si tu utilises **ton propre rôle** (pas `ManagerReader`), vérifie qu'il a les deux privilèges — sinon l'inventaire se vide ou le disque QEMU ne se remplit pas :
+>
+> ```bash
+> pveum role modify <TonRole> --privs "DA.Read,DA.Audit,VM.Audit,VM.GuestAgent.Audit,Sys.Audit,SDA.Audit,SDI.Audit,SN.Audit"
+> pveum acl modify / --user supervision@pam --roles <TonRole>
+> ```
+>
+> *Granting the role to an existing monitoring user (e.g. `supervision@pam`, already in `.env`/`clusters.json`): the granted role **must include `VM.Audit`** (VM listing) **and** `VM.GuestAgent.Audit` (per-partition disk usage). The kit's `ManagerReader` role already has both. If you use your own role, make sure it carries those two privileges — otherwise the inventory empties or QEMU disk stays blank.*
 
 La valeur du token est affichée **une seule fois** — noter les trois champs :
 
@@ -72,6 +88,27 @@ La valeur du token est affichée **une seule fois** — noter les trois champs :
 Variables optionnelles du script : `PVE_APP_USER` (défaut `manager@pve`), `PVE_TOKEN_ID` (défaut `manager`), `PVE_COMMENT`. Mode d'aperçu : `./deploiement/10-proxmox-token.sh --dry-run`.
 
 *Optional variables: `PVE_APP_USER` (default `manager@pve`), `PVE_TOKEN_ID` (default `manager`), `PVE_COMMENT`. Preview mode: `./deploiement/10-proxmox-token.sh --dry-run`.*
+
+> ### Occupation disque réelle des VMs QEMU — agent invité / Real QEMU VM disk usage — guest agent
+>
+> Le RRD Proxmox `disk` ne mesure l'usage disque **que des conteneurs LXC** ; pour les **VMs QEMU il vaut 0** (PVE n'agrège l'usage disque QEMU qu'au niveau du datastore, jamais par VM). L'app lit donc l'occupation disque réelle des QEMU via l'**agent invité** (`qemu-guest-agent`) :
+>
+> - **Endpoint** : `GET /nodes/{n}/qemu/{vmid}/agent/get-fsinfo` — renvoie **un filesystem par partition** (point de montage + périphérique + `used-bytes`/`total-bytes`). Seuls les fs rattachés à un disque VM (champ `disk` non vide) sont retenus. Les vrais montages réseau (NFS/CIFS) n'ont pas de champ `disk` → automatiquement exclus.
+> - **Graphe par partition** : l'onglet Monitor affiche **un graphe par filesystem** (ex. `/` sur `sda1`, `/NFS` sur `sda6`) — espace utilisé + taille du fs (allocation de la partition), avec légende. Les données sont stockées dans la mesure InfluxDB `vm_fs` (une série par point de montage) + un agrégat total dans `vm_metrics` (`disk_bytes`/`disk_alloc_bytes`).
+> - **Privilège requis** : `VM.GuestAgent.Audit` **uniquement** (lecture agent). **Pas besoin** de `VM.GuestAgent.Unrestricted` (c'est le privilège d'exécution de commandes dans le guest, inutilisé ici). Le rôle `ManagerReader` du kit l'inclut déjà.
+> - **Fréquence** : l'agent est interrogé **au plus toutes les 5 min** par VM (throttle côté poller) — l'usage disque change lentement, inutile de le relancer à chaque tick de 5 s.
+> - **LXC** : pas d'agent — un seul filesystem rootfs, usage venu du champ `disk` (utilisé) / `maxdisk` (alloué) de `/cluster/resources`, déjà réel.
+> - **Si l'agent est absent / VM arrêtée / PVE sans l'endpoint** : le champ est simplement omis (le graphe « démarre plus tard », comme l'I/O) — aucune erreur.
+>
+> *The Proxmox RRD `disk` only measures **LXC container** disk usage; for **QEMU VMs it is 0**. The app therefore reads real QEMU disk usage via the **guest agent**: `GET …/agent/get-fsinfo`, summing `used-bytes`/`total-bytes` of the filesystems backed by a VM disk (non-empty `disk` field) — network mounts have no `disk` field and are excluded. Only `VM.GuestAgent.Audit` is required (no `Unrestricted`). The agent is polled at most every 5 min per VM. LXC usage comes from `/cluster/resources` `disk`/`maxdisk`. If the agent is absent / VM stopped, the field is simply omitted.*
+>
+> **⚠️ Contrainte PVE 9.1.1** : sur cette build, les endpoints REST agent `agent/fs-info` (« not implemented ») et `agent/exec` (HTTP 596 « Broken pipe ») sont **cassés** — seul **`agent/get-fsinfo`** fonctionne. C'est pour cela que l'app utilise `get-fsinfo` (et non `fs-info`/`exec`). Sur les versions où `agent/exec` fonctionne, rien ne change côté app.
+>
+> *PVE 9.1.1 caveat: on that build the agent REST endpoints `agent/fs-info` (“not implemented”) and `agent/exec` (HTTP 596 “Broken pipe”) are **broken** — only **`agent/get-fsinfo`** works. That is why the app uses `get-fsinfo`.*
+>
+> **⚠️ Piège `pveum acl modify`** : `pveum acl modify <path> --user <u> --role <R>` **REMPLACE** le rôle de l'utilisateur sur ce path. Lancer `pveum acl modify /vms --user manager@pve --role <R>` avec un `<R>` qui n'inclut **pas** `VM.Audit` **supprime** le droit de liste des VMs → `/cluster/resources` ne renvoie plus aucune VM → **inventaire vide**. Pour ajouter un droit agent sans casser la lecture : soit le rôle inclut déjà `VM.Audit` (cas du `ManagerReader` du kit), soit utiliser l'ACL additive `pveum acl add <path> --user <u> --role <R>` (qui **ajoute** un path/rôle sans remplacer).
+>
+> *`pveum acl modify <path> …` **REPLACES** the user's role on that path. Running it on `/vms` with a role lacking `VM.Audit` **removes** VM listing → `/cluster/resources` returns no VMs → **empty inventory**. To add an agent right without breaking read access, use the additive `pveum acl add <path> …` (adds, does not replace).*
 
 ## 3. Transfert du kit / Kit transfer
 

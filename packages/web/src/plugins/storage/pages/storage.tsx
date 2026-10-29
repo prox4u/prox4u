@@ -20,6 +20,13 @@ export function StoragePage() {
   const view = searchParams.get('view') ?? 'all';
   const query = searchParams.get('q') ?? '';
   const typeSel = searchParams.get('type') ?? '';
+  const range = (searchParams.get('range') === 'month' ? 'month' : 'year') as 'year' | 'month';
+  const setRange = (r: 'year' | 'month') =>
+    setSearchParams((p) => {
+      if (r === 'year') p.delete('range');
+      else p.set('range', r);
+      return p;
+    }, { replace: true });
   const setView = (v: string) => {
     setSearchParams((p) => {
       if (v === 'all') p.delete('view');
@@ -91,6 +98,8 @@ export function StoragePage() {
               onQueryChange={setQuery}
               typeSel={typeSel}
               onTypeChange={setType}
+              range={range}
+              onRangeChange={setRange}
             />
           </div>
           <button

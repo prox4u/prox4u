@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PveStorage, PveStorageType } from './types.js';
 import { DEFAULT_OVERCOMMIT_CONFIG } from './overcommit.js';
 import {
+  buildDatastoreForecast,
   buildStorageInventory,
   buildStorageInventoryAll,
   filterStorageRows,
@@ -241,5 +242,60 @@ describe('sortStorageRows', () => {
     const before = rows.map((r) => r.key).join(',');
     sortStorageRows(rows, cfg, { key: 'capacity', dir: 'desc' });
     expect(rows.map((r) => r.key).join(',')).toBe(before);
+  });
+});
+
+// --- buildDatastoreForecast -------------------------------------------------------
+
+describe('buildDatastoreForecast', () => {
+  const GB = 1024 ** 3;
+
+  it('moins de 7 jours → insufficientData, pas de projection', () => {
+    // 3 jours seulement d'historique
+    const pts = [
+      { time: 1_000_000, used: 10 * GB, total: 100 * GB },
+      { time: 1_086_400, used: 11 * GB, total: 100 * GB },
+      { time: 1_172_800, used: 12 * GB, total: 100 * GB },
+    ];
+    const f = buildDatastoreForecast(pts);
+    expect(f.insufficientData).toBe(true);
+    expect(f.projection).toHaveLength(0);
+    expect(f.daysTo90).toBeNull();
+  });
+
+  it('série croissante → jours avant 90 % estimés', () => {
+    // 30 jours, croissance linéaire de 1 %/j (10 % → 40 %)
+    const pts: { time: number; used: number; total: number }[] = [];
+    const base = 1_700_000_000 - (30 * 86_400);
+    for (let i = 0; i < 30; i++) {
+      pts.push({ time: base + i * 86_400, used: (10 + i) * GB, total: 100 * GB });
+    }
+    const f = buildDatastoreForecast(pts);
+    expect(f.insufficientData).toBe(false);
+    expect(f.slopePerDay).toBeCloseTo(1, 1);
+    expect(f.daysTo90).not.toBeNull();
+    // dernière valeur = 39 % → (90 - 39) / 1 ≈ 51 j
+    expect(f.daysTo90!).toBeGreaterThanOrEqual(45);
+    expect(f.daysTo90!).toBeLessThanOrEqual(56);
+  });
+
+  it('série stable (pente ≈ 0) → daysTo90 null', () => {
+    const pts: { time: number; used: number; total: number }[] = [];
+    const base = 1_700_000_000 - (30 * 86_400);
+    for (let i = 0; i < 30; i++) {
+      pts.push({ time: base + i * 86_400, used: 50 * GB, total: 100 * GB });
+    }
+    const f = buildDatastoreForecast(pts);
+    expect(f.daysTo90).toBeNull();
+    expect(f.daysTo80).toBeNull();
+  });
+
+  it('points sans capacité (total=0) ignorés dans la moyenne journalière', () => {
+    const pts = [
+      { time: 1_000_000, used: 0, total: 0 }, // ignoré
+      { time: 1_000_100, used: 25 * GB, total: 100 * GB }, // 25 %
+    ];
+    const f = buildDatastoreForecast(pts);
+    expect(f.insufficientData).toBe(true); // 1 seul jour valide
   });
 });

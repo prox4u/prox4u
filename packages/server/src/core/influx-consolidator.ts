@@ -173,32 +173,113 @@ export class InfluxConsolidator {
     );
     if (storageLines.length > 0) await influx.writeLp(influx.aggDb, storageLines);
 
-    const vmRows = await influx.querySql<SqlRow>(
-      influx.rawDb,
+    // Occupation disque : champ absent de la base si aucune VM QEMU running avec agent
+    // n'a écrit dans cette fenêtre (ex. fenêtre ne contenant que le cluster de test).
+    // InfluxDB 3 Core lève « No field named » sur un champ absent du scan → repli sans
+    // ces deux champs (sinon lastTs resterait bloqué sur la fenêtre à jamais).
+    const vmDiskSelect = `, AVG(disk_bytes) AS disk_bytes, AVG(disk_alloc_bytes) AS disk_alloc_bytes`;
+    const vmSql = (disk: string) =>
       `SELECT date_bin(INTERVAL '5 minutes', time) AS t, ${clusterCol} AS cluster, node, vmid, name,
               AVG(cpu_pct) AS cpu_pct, AVG(mem_bytes) AS mem_bytes,
               AVG(disk_read_bps) AS disk_read_bps, AVG(disk_write_bps) AS disk_write_bps,
-              AVG(net_in_bps) AS net_in_bps, AVG(net_out_bps) AS net_out_bps
+              AVG(net_in_bps) AS net_in_bps, AVG(net_out_bps) AS net_out_bps${disk}
         FROM vm_metrics WHERE time >= '${iso(from)}' AND time < '${iso(to)}'
-        GROUP BY t, cluster, node, vmid, name ORDER BY t`,
-    );
-    const vmLines = vmRows.map((r) =>
-      buildLine(
-        'vm_metrics',
-        { cluster: String(r.cluster), node: String(r.node), vmid: String(r.vmid), name: String(r.name ?? '') },
-        {
-          cpu_pct: round2(num(r.cpu_pct)),
-          mem_bytes: Math.round(num(r.mem_bytes)),
+        GROUP BY t, cluster, node, vmid, name ORDER BY t`;
+    let vmRows: SqlRow[];
+    try {
+      vmRows = await influx.querySql<SqlRow>(influx.rawDb, vmSql(vmDiskSelect));
+    } catch (err) {
+      if (/No field named (disk_bytes|disk_alloc_bytes)/.test((err as Error).message ?? '')) {
+        vmRows = await influx.querySql<SqlRow>(influx.rawDb, vmSql(''));
+      } else {
+        throw err;
+      }
+    }
+    const vmLines = vmRows.map((r) => {
+      const fields: Record<string, number> = {
+        cpu_pct: round2(num(r.cpu_pct)),
+        mem_bytes: Math.round(num(r.mem_bytes)),
           // champs absents sur les anciennes lignes raw → AVG NULL → 0 (fenêtres pré-extension du poller)
           disk_read_bps: Math.round(num(r.disk_read_bps)),
           disk_write_bps: Math.round(num(r.disk_write_bps)),
           net_in_bps: Math.round(num(r.net_in_bps)),
           net_out_bps: Math.round(num(r.net_out_bps)),
+        };
+        // Occupation disque (réelle) : omise si la fenêtre n'en contient pas (agent indispo / VM récente).
+        if (r.disk_bytes != null) fields.disk_bytes = Math.round(num(r.disk_bytes));
+        if (r.disk_alloc_bytes != null) fields.disk_alloc_bytes = Math.round(num(r.disk_alloc_bytes));
+        return buildLine(
+          'vm_metrics',
+          { cluster: String(r.cluster), node: String(r.node), vmid: String(r.vmid), name: String(r.name ?? '') },
+          fields,
+          influxTsToUnix(r.t),
+        );
+      });
+    if (vmLines.length > 0) await influx.writeLp(influx.aggDb, vmLines);
+
+    // Occupation disque PAR FILESYSTEM (mesure vm_fs du poller) — état (gauge), pas un flux →
+    // MAX sur la fenêtre (valeur représentative), une série par point de montage. Mesure
+    // récente : si aucune ligne vm_fs dans la fenêtre, la requête lève « No field named » → repli.
+    const fsDiskSelect = `, MAX(used_bytes) AS used_bytes, MAX(total_bytes) AS total_bytes`;
+    const fsSql = (disk: string) =>
+      `SELECT date_bin(INTERVAL '5 minutes', time) AS t, ${clusterCol} AS cluster, node, vmid, name, mountpoint, dev${disk}
+         FROM vm_fs WHERE time >= '${iso(from)}' AND time < '${iso(to)}'
+         GROUP BY t, cluster, node, vmid, name, mountpoint, dev ORDER BY t`;
+    let fsRows: SqlRow[] = [];
+    try {
+      fsRows = await influx.querySql<SqlRow>(influx.rawDb, fsSql(fsDiskSelect));
+    } catch (err) {
+      if (/No field named/.test((err as Error).message ?? '')) {
+        fsRows = await influx.querySql<SqlRow>(influx.rawDb, fsSql(''));
+      } else if (!/cannot find table|table vm_fs|does not exist/i.test((err as Error).message ?? '')) {
+        throw err;
+      }
+    }
+    const fsLines = fsRows
+      .filter((r) => r.used_bytes != null)
+      .map((r) =>
+        buildLine(
+          'vm_fs',
+          {
+            cluster: String(r.cluster),
+            node: String(r.node),
+            vmid: String(r.vmid),
+            name: String(r.name ?? ''),
+            mountpoint: String(r.mountpoint ?? '/'),
+            dev: String(r.dev ?? ''),
+          },
+          {
+            used_bytes: Math.round(num(r.used_bytes)),
+            total_bytes: Math.round(num(r.total_bytes)),
+          },
+          influxTsToUnix(r.t),
+        ),
+      );
+    if (fsLines.length > 0) await influx.writeLp(influx.aggDb, fsLines);
+
+    // Occupation réelle par datastore (mesure datastore_metrics du poller) —
+    // agrégée dans le bucket infini pour que l'historique d'occupation survive
+    // aux 31 j de rétention raw. Dernier point de chaque fenêtre (l'usage est un
+    // état, pas un flux → on ne fait pas de moyenne).
+    const dsRows = await influx.querySql<SqlRow>(
+      influx.rawDb,
+      `SELECT date_bin(INTERVAL '5 minutes', time) AS t, ${clusterCol} AS cluster, storage,
+              MAX(used_bytes) AS used, MAX(total_bytes) AS total
+        FROM datastore_metrics WHERE time >= '${iso(from)}' AND time < '${iso(to)}'
+        GROUP BY t, cluster, storage ORDER BY t`,
+    );
+    const dsLines = dsRows.map((r) =>
+      buildLine(
+        'datastore_metrics',
+        { cluster: String(r.cluster), storage: String(r.storage) },
+        {
+          used_bytes: Math.round(num(r.used)),
+          total_bytes: Math.round(num(r.total)),
         },
         influxTsToUnix(r.t),
       ),
     );
-    if (vmLines.length > 0) await influx.writeLp(influx.aggDb, vmLines);
+    if (dsLines.length > 0) await influx.writeLp(influx.aggDb, dsLines);
   }
 }
 

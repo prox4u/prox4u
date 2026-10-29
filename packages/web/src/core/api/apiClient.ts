@@ -1,4 +1,4 @@
-import type { MetricsTimeframe } from '@prox4u/shared';
+import type { DatastoreHistoryResponse, MetricsTimeframe, VmFsResponse } from '@prox4u/shared';
 import type {
   CapacityResponse,
   MetricsResponse,
@@ -49,6 +49,11 @@ export function fetchStorageInventory(): Promise<StorageInventoryResponse> {
   return getJson<StorageInventoryResponse>('/api/storage-inventory');
 }
 
+/** Historique d'occupation + capacity planning par datastore d'un endpoint. */
+export function fetchStorageDatastoreHistory(endpoint: string, range: 'year' | 'month' = 'year'): Promise<DatastoreHistoryResponse> {
+  return getJson<DatastoreHistoryResponse>(`/api/storage-datastore-history?endpoint=${encodeURIComponent(endpoint)}&range=${range}`);
+}
+
 /** Détail d'une VM (live + config + snapshots) — plugin vm-inventory. */
 export function fetchVmDetail(endpoint: string, vmid: number): Promise<VmDetailResponse> {
   return getJson<VmDetailResponse>(`/api/vm-config?endpoint=${encodeURIComponent(endpoint)}&vmid=${vmid}`);
@@ -58,5 +63,12 @@ export function fetchVmDetail(endpoint: string, vmid: number): Promise<VmDetailR
 export function fetchVmMetrics(endpoint: string, vmid: number, timeframe: MetricsTimeframe): Promise<VmMetricsResponse> {
   return getJson<VmMetricsResponse>(
     `/api/vm-metrics?endpoint=${encodeURIComponent(endpoint)}&vmid=${vmid}&timeframe=${timeframe}`,
+  );
+}
+
+/** Occupation disque PAR FILESYSTEM d'une VM (InfluxDB vm_fs) — onglet Monitor, un graphe par partition. */
+export function fetchVmFs(endpoint: string, vmid: number, timeframe: MetricsTimeframe): Promise<VmFsResponse> {
+  return getJson<VmFsResponse>(
+    `/api/vm-fs?endpoint=${encodeURIComponent(endpoint)}&vmid=${vmid}&timeframe=${timeframe}`,
   );
 }

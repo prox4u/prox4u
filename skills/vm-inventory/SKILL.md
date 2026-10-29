@@ -43,7 +43,13 @@ Page `/vms` : **inventaire des VMs et conteneurs LXC** du parc multi-endpoints, 
 - **Désactivé sans URL** (mode démo : mock sans `url`) — tooltip `vm.console.unavailable`. i18n : `vm.console.web` / `vm.console.unavailable`.
 - Décision utilisateur : lien vers l'UI PVE, **pas de noVNC intégré**.
 
-## 7. Hors périmètre
+## 7. Onglet Monitor (v2) — historiques par VM
+- `components/vm-monitor.tsx` : graphiques historiques depuis InfluxDB, timeframes 1 h / 24 h / 7 j / 30 j, auto-refresh 60 s, export CSV du timeframe affiché (général + par graphe).
+- **Deux mesures** : `vm_metrics` (CPU/RAM/I/O/réseau — `/api/vm-metrics`) et `vm_fs` (**occupation disque PAR FILESYSTEM** — `/api/vm-fs`).
+- **Occupation disque par partition** : un **graphe par filesystem** (point de montage + périphérique, ex. `/` sur `sda1`, `/NFS` sur `sda6`) — espace utilisé (courbe ambrée) + taille du fs (ligne pointillée indigo), **légende** `Utilisé`/`Alloué`. Source : agent invité QEMU `get-fsinfo` (fs sur disque VM, `disk` non vide — les vrais montages réseau sont exclus) ; LXC = un seul rootfs (`disk`/`maxdisk` de `/cluster/resources`). Le poller interroge l'agent **au plus toutes les 5 min** par VM (throttle) et écrit `vm_fs` (une série par mountpoint) + l'agrégat `disk_bytes`/`disk_alloc_bytes` dans `vm_metrics`.
+- **Privilège PVE** : `VM.GuestAgent.Audit` suffit (pas `Unrestricted`). Contrainte PVE 9.1.1 : seuls `agent/get-fsinfo` fonctionne (`agent/fs-info` « not implemented », `agent/exec` HTTP 596) — voir skill `operations` + `deploiement/DEPLOY.md` §2.
+- `maxmemBytes`/`maxdiskBytes` (du détail live) alimentent les lignes d'allocation RAM / le pied de page d'allocation totale.
+
+## 8. Hors périmètre
 - Actions power (start/stop/reboot) — reportées (« plus tard »), token PVE écriture requis.
-- Graphiques historiques par VM (RRD `vm_metrics` existe déjà côté serveur, à brancher en itération suivante).
 - Création/migration/suppression de VM.
