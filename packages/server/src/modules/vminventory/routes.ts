@@ -21,7 +21,7 @@ interface SnapCacheEntry {
 }
 
 /**
- * Inventaire VM — détail d'une VM (GET /api/vm-config?endpoint=&vmid=).
+ * Vue VM — détail d'une VM (GET /api/vm-config?endpoint=&vmid=).
  * - état live : snapshot courant du poller (push 5 s, pas de cache) ;
  * - config : getVmConfig (cache 1 h dans Prox4uClient) ;
  * - snapshots : appel PVE à la demande, cache 5 min par (endpoint, vmid) ;

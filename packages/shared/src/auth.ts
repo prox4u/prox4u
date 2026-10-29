@@ -237,7 +237,7 @@ export const DEFAULT_MODULES: ModuleDef[] = [
   },
   {
     id: 'vm-inventory',
-    name: 'Inventaire VM',
+    name: 'Vue VM',
     description: 'Parc VMs/LXC multi-endpoints (arborescence type vCenter)',
     globallyEnabled: true,
   },
