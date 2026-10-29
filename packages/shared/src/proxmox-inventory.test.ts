@@ -3,6 +3,7 @@ import type { InvVm } from './types';
 import {
   DEFAULT_INV_FILTER,
   filterInvRows,
+  fmtSize,
   invSummary,
   invToCsv,
   invToJson,
@@ -10,6 +11,7 @@ import {
   invTotalDiskMb,
   osDisplay,
   osFamilyFromId,
+  osPrettyFromOstype,
   ostypeFamily,
   sortInvRows,
 } from './proxmox-inventory';
@@ -17,6 +19,7 @@ import {
 function inv(partial: Partial<InvVm> & Pick<InvVm, 'vmid' | 'name'>): InvVm {
   return {
     host: 'ep1',
+    hostname: null,
     node: 'n1',
     type: 'qemu',
     status: 'running',
@@ -71,10 +74,26 @@ describe('décodage famille OS', () => {
     expect(ostypeFamily('none')).toBe('Autre');
     expect(ostypeFamily(undefined)).toBe('Autre');
   });
-  it('osDisplay : OS réel sinon famille (LXC prioritaire)', () => {
-    expect(osDisplay({ type: 'qemu', osType: 'Linux/Unix', osPretty: 'Ubuntu 24.04 LTS' })).toBe('Ubuntu 24.04 LTS');
-    expect(osDisplay({ type: 'qemu', osType: 'Linux/Unix', osPretty: null })).toBe('Linux/Unix');
-    expect(osDisplay({ type: 'lxc', osType: 'Linux/Unix', osPretty: 'Debian 13' })).toBe('LXC');
+  it('osDisplay : OS réel sinon distro (ostype) sinon famille', () => {
+    expect(osDisplay({ osType: 'Linux/Unix', osPretty: 'Ubuntu 24.04 LTS' })).toBe('Ubuntu 24.04 LTS');
+    expect(osDisplay({ osType: 'Linux/Unix', osPretty: 'Debian' })).toBe('Debian');
+    expect(osDisplay({ osType: 'Linux/Unix', osPretty: null })).toBe('Linux/Unix');
+  });
+  it('osPrettyFromOstype : distro amicale (LXC) / null (code QEMU)', () => {
+    expect(osPrettyFromOstype('debian')).toBe('Debian');
+    expect(osPrettyFromOstype('ubuntu')).toBe('Ubuntu');
+    expect(osPrettyFromOstype('linux')).toBe('Linux');
+    expect(osPrettyFromOstype('w2k22')).toBe('Windows');
+    expect(osPrettyFromOstype('l26')).toBeNull(); // code court → pas de distro connue
+    expect(osPrettyFromOstype(undefined)).toBeNull();
+  });
+  it('fmtSize : unités Mo / Go / To', () => {
+    expect(fmtSize(6)).toBe('6 Mo');
+    expect(fmtSize(1073)).toBe('1.0 Go');
+    expect(fmtSize(7606)).toBe('7.4 Go');
+    expect(fmtSize(1466031)).toBe('1.40 To');
+    expect(fmtSize(815781)).toBe('796.7 Go'); // sous le To → reste en Go
+    expect(fmtSize(1048576)).toBe('1.00 To');
   });
 });
 
@@ -132,23 +151,26 @@ describe('invSummary', () => {
 });
 
 describe('exports', () => {
-  const vms = [inv({ vmid: 100, name: 'web', tags: ['prod'], notes: 'Serveur web' })];
-  it('CSV a un BOM + séparateur ; + multi |', () => {
+  const vms = [inv({ vmid: 100, name: 'web', hostname: 'web-01', tags: ['prod'], notes: 'Serveur web' })];
+  it('CSV a un BOM + séparateur ; + multi | + nom d\'hôte', () => {
     const csv = invToCsv(vms);
     expect(csv.charCodeAt(0)).toBe(0xfeff);
-    expect(csv).toContain('Nom;VMID;Host');
-    expect(csv).toContain('"web";"100";');
+    expect(csv).toContain('Nom;Nom d\'hôte;VMID;Host');
+    expect(csv).toContain('"web";"web-01";"100";');
     expect(csv).toContain('"prod";');
   });
-  it('JSON est une liste hiérarchique', () => {
+  it('JSON est une liste hiérarchique (+ hostname)', () => {
     const parsed = JSON.parse(invToJson(vms));
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed[0].cpu.cores).toBe(4);
     expect(parsed[0].tags).toEqual(['prod']);
+    expect(parsed[0].hostname).toBe('web-01');
+    expect(parsed[0].os.name).toBe('Ubuntu 24.04 LTS');
   });
-  it('TXT a un en-tête + bloc par VM', () => {
+  it('TXT a un en-tête + bloc par VM (+ hôte)', () => {
     const txt = invToTxt(vms);
     expect(txt).toContain('INVENTAIRE PROXMOX — 1 VM(s)');
     expect(txt).toContain('[100] web');
+    expect(txt).toContain('Hôte     : web-01');
   });
 });

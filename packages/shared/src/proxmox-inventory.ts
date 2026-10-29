@@ -38,6 +38,8 @@ export interface InvVm {
   host: string;
   vmid: number;
   name: string;
+  /** nom d'hôte (config `hostname`) — sans agent invité ; null si absent */
+  hostname: string | null;
   node: string;
   type: 'qemu' | 'lxc';
   status: string;
@@ -102,13 +104,27 @@ export function ostypeFamily(ostype?: string | null): 'Windows' | 'Linux/Unix' |
 }
 
 /**
- * Affichage OS d'une ligne d'inventaire : OS réel et versionné si l'agent l'a remonté,
- * sinon « LXC » pour un conteneur, sinon la famille (Linux/Unix, Windows, Autre).
+ * Nom amical d'une distribution à partir du champ `ostype` PVE.
+ * LXC : ostype est le nom de distro (« debian », « ubuntu ») → « Debian », « Ubuntu ».
+ * QEMU : ostype est un code court (« l26 ») → aucune distro précise connue → null
+ * (l'appelant retombe sur la famille). « linux » générique → « Linux ».
  */
-export function osDisplay(v: Pick<InvVm, 'type' | 'osType' | 'osPretty'>): string {
-  if (v.type === 'lxc') return 'LXC';
-  if (v.osPretty) return v.osPretty;
-  return v.osType ?? 'Autre';
+export function osPrettyFromOstype(ostype?: string | null): string | null {
+  if (!ostype || ostype === 'none') return null;
+  const o = ostype.toLowerCase();
+  if (o === 'linux') return 'Linux';
+  if (o.startsWith('l') && o.length > 1 && o.slice(1).match(/^[0-9]+$/)) return null; // l26, l24… → code, pas une distro
+  if (o.startsWith('w')) return 'Windows';
+  // noms de distro (LXC) : debian, ubuntu, centos, rhel, fedora, arch, gentoo, alpine, sles, opensuse, freebsd…
+  return ostype.charAt(0).toUpperCase() + ostype.slice(1);
+}
+
+/**
+ * Affichage OS d'une ligne d'inventaire : OS réel et versionné si l'agent l'a remonté
+ * (QEMU), sinon la distro issue de `ostype` (LXC / QEMU arrêté), sinon la famille.
+ */
+export function osDisplay(v: Pick<InvVm, 'osType' | 'osPretty'>): string {
+  return v.osPretty ?? v.osType ?? 'Autre';
 }
 
 // --- Filtres / tri / recherche ----------------------------------------------------------
@@ -148,6 +164,17 @@ export function invTotalDiskMb(v: InvVm): number | null {
   return vals.length > 0 ? vals.reduce((s, x) => s + x, 0) : null;
 }
 
+/**
+ * Formate une taille (en Mo) en unités lisibles : Mo < Go < To.
+ * 1500 → « 1500 Mo », 7606 → « 7.4 Go », 1466031 → « 1.40 To ».
+ * L'appelant gère le null (→ N/A) avant d'appeler.
+ */
+export function fmtSize(mb: number): string {
+  if (mb >= 1024 * 1024) return `${(mb / (1024 * 1024)).toFixed(2)} To`;
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} Go`;
+  return `${Math.round(mb)} Mo`;
+}
+
 const STATUS_ORDER: Record<string, number> = { running: 0, paused: 1, stopped: 2, unknown: 3 };
 
 /** Recherche globale + filtres colonne (nœud/type/état + plages CPU/RAM/volume). */
@@ -166,7 +193,7 @@ export function filterInvRows(vms: InvVm[], f: InvFilter): InvVm[] {
     if (f.diskMax != null && disk > f.diskMax) return false;
     if (q) {
       const hay = [
-        v.name, String(v.vmid), v.node, v.type, v.status,
+        v.name, v.hostname ?? '', String(v.vmid), v.node, v.type, v.status,
         v.osType ?? '', v.osPretty ?? '', v.osKernel ?? '',
         ...v.ips, ...v.tags, v.notes ?? '',
       ].join(' ').toLowerCase();
@@ -271,10 +298,11 @@ export function invToTxt(vms: InvVm[]): string {
   L.push('');
   for (const v of [...vms].sort((a, b) => a.node.localeCompare(b.node) || a.vmid - b.vmid)) {
     L.push(`[${v.vmid}] ${v.name || v.vmid} — ${v.node} (${v.type}, ${v.status || '?'})`);
+    if (v.hostname) L.push(`    Hôte     : ${v.hostname}`);
     L.push(`    OS       : ${osDisplay(v)}${v.osKernel ? `  [noyau ${v.osKernel}]` : ''}`);
     if (v.disks.length) {
       L.push('    Disques  :');
-      for (const d of v.disks) L.push(`       ${pad(d.mountpoint, 12)} ${Math.round(d.usedMb ?? 0)} / ${Math.round(d.totalMb ?? 0)} Mo (${Math.round(d.usedPct ?? 0)}%)  ${d.dev ?? ''}`);
+      for (const d of v.disks) L.push(`       ${pad(d.mountpoint, 12)} ${fmtSize(d.usedMb ?? 0)} / ${fmtSize(d.totalMb ?? 0)} (${Math.round(d.usedPct ?? 0)}%)  ${d.dev ?? ''}`);
     }
     if (v.interfaces.length) {
       L.push('    Réseaux  :');
@@ -289,14 +317,14 @@ export function invToTxt(vms: InvVm[]): string {
 
 /** CSV : séparateur `;`, UTF-8 BOM (Excel), multi-valeurs `|`. */
 export function invToCsv(vms: InvVm[]): string {
-  const header = ['Nom', 'VMID', 'Host', 'Nœud', 'Type', 'État', 'OS', 'Noyau', 'CPU (cœurs)', 'CPU (%)',
+  const header = ['Nom', "Nom d'hôte", 'VMID', 'Host', 'Nœud', 'Type', 'État', 'OS', 'Noyau', 'CPU (cœurs)', 'CPU (%)',
     'RAM all. (Mo)', 'RAM used (Mo)', 'RAM (%)', 'Uptime (s)', 'Disques', 'Interfaces', 'IPs',
     'Tags', 'Notes', 'Template'];
   const esc = (x: unknown) => `"${String(x ?? NA).replace(/"/g, '""')}"`;
   const lines = [header.join(';')];
   for (const v of vms) {
     lines.push([
-      v.name, v.vmid, v.host, v.node, v.type, v.status, osDisplay(v), v.osKernel,
+      v.name, v.hostname, v.vmid, v.host, v.node, v.type, v.status, osDisplay(v), v.osKernel,
       v.cpuCores, v.cpuPct, v.ramAllocMb, v.ramUsedMb, v.ramUsedPct, v.uptimeS,
       v.disks.map(diskStr).join('|') || NA,
       v.interfaces.map(ifaceStr).join('|') || NA,
@@ -310,7 +338,7 @@ export function invToCsv(vms: InvVm[]): string {
 /** JSON : structure hiérarchique (objets imbriqués disques/interfaces/IPs). */
 export function invToJson(vms: InvVm[]): string {
   const out = vms.map((v) => ({
-    name: v.name, vmid: v.vmid, host: v.host, node: v.node, type: v.type,
+    name: v.name, hostname: v.hostname, vmid: v.vmid, host: v.host, node: v.node, type: v.type,
     status: v.status, template: v.template,
     os: { family: v.osType, name: v.osPretty, kernel: v.osKernel },
     cpu: { cores: v.cpuCores, usage_pct: v.cpuPct },

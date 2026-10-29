@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { InvFilter, InvSortDir, InvSortKey, InvVm, ProxmoxInventoryResponse } from '@prox4u/shared';
-import { DEFAULT_INV_FILTER, filterInvRows, invSummary, invToFormat, sortInvRows } from '@prox4u/shared';
+import { DEFAULT_INV_FILTER, filterInvRows, fmtSize, invSummary, invToFormat, sortInvRows } from '@prox4u/shared';
 import { fetchProxmoxInventory } from '../../../core/api/apiClient';
 import { Button } from '../../../components/ui/button';
 import { Card, CardContent } from '../../../components/ui/card';
@@ -79,8 +79,8 @@ export function ProxmoxInventoryPage() {
     [t('pxinv.summary.shown'), String(shown)],
     [t('pxinv.summary.running'), String(summary.running)],
     [t('pxinv.summary.stopped'), String(summary.stopped)],
-    [t('pxinv.summary.ramAlloc'), (summary.ramAllocMb / 1024).toFixed(1)],
-    [t('pxinv.summary.ramUsed'), (summary.ramUsedMb / 1024).toFixed(1)],
+    [t('pxinv.summary.ramAlloc'), fmtSize(summary.ramAllocMb)],
+    [t('pxinv.summary.ramUsed'), fmtSize(summary.ramUsedMb)],
     [t('pxinv.summary.cores'), String(Math.round(summary.cpuCores))],
     [t('pxinv.summary.cpuAvg'), summary.cpuPctAvg.toFixed(1)],
     [t('pxinv.summary.agentOk'), `${summary.agentOk}/${summary.total}`],

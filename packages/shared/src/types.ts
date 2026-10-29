@@ -48,6 +48,8 @@ export interface PveVmResource {
   tags?: string[];
   /** Description / notes (config `description`) — jointe depuis la config. */
   notes?: string;
+  /** Nom d'hôte (config `hostname`) — joint depuis la config, sans agent invité. */
+  hostname?: string;
 }
 
 export interface PveNodeStatus {
@@ -436,6 +438,8 @@ export interface VmConfigInfo {
   os: string;
   /** code `ostype` PVE brut (ex. `l26`, `w2k22`) — repli famille OS sans agent */
   ostype?: string;
+  /** nom d'hôte (config `hostname`) — sans agent invité */
+  hostname?: string;
   pool: string | null;
   /** interfaces réseau branchées sur un pont (parsing bridge= des interfaces netN / mpN) */
   nets: ParsedVmNet[];

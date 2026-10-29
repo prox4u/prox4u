@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { InvFilter, InvSortDir, InvSortKey, InvVm } from '@prox4u/shared';
-import { invTotalDiskMb, osDisplay } from '@prox4u/shared';
+import { fmtSize, invTotalDiskMb, osDisplay } from '@prox4u/shared';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge';
 import { Input, Select } from '../../../components/ui/input';
@@ -28,6 +28,7 @@ interface Col {
 
 const COLS: Col[] = [
   { key: 'name', labelKey: 'pxinv.col.name', kind: 'text', sortKey: 'name' },
+  { key: 'hostname', labelKey: 'pxinv.col.hostname', kind: 'text' },
   { key: 'vmid', labelKey: 'pxinv.col.vmid', kind: 'num', sortKey: 'vmid' },
   { key: 'host', labelKey: 'pxinv.col.host', kind: 'text' },
   { key: 'node', labelKey: 'pxinv.col.node', kind: 'enum', sortKey: 'node', filter: 'node' },
@@ -55,7 +56,7 @@ function na(t: (k: string) => string): string {
 function diskBadge(d: InvVm['disks'][number]): { label: string; tone: 'default' | 'warn' | 'crit' } {
   const pct = d.usedPct ?? 0;
   return {
-    label: `${d.mountpoint} ${Math.round(d.usedMb ?? 0)}/${Math.round(d.totalMb ?? 0)}Mo (${Math.round(pct)}%)`,
+    label: `${d.mountpoint} ${fmtSize(d.usedMb ?? 0)}/${fmtSize(d.totalMb ?? 0)} (${Math.round(pct)}%)`,
     tone: pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'default',
   };
 }
@@ -91,6 +92,7 @@ export function ProxmoxInventoryTable({ vms, filter, onFilterChange, sortKey, so
   const cell = (v: InvVm, c: Col): React.ReactNode => {
     switch (c.key) {
       case 'name': return v.name;
+      case 'hostname': return v.hostname ?? na(t);
       case 'vmid': return v.vmid;
       case 'host': return v.host;
       case 'node': return v.node;
@@ -106,8 +108,8 @@ export function ProxmoxInventoryTable({ vms, filter, onFilterChange, sortKey, so
         );
       case 'cpuCores': return v.cpuCores ?? na(t);
       case 'cpuPct': return v.cpuPct != null ? `${v.cpuPct.toFixed(1)} %` : na(t);
-      case 'ramAllocMb': return v.ramAllocMb ?? na(t);
-      case 'ramUsedMb': return v.ramUsedMb ?? na(t);
+      case 'ramAllocMb': return v.ramAllocMb != null ? fmtSize(v.ramAllocMb) : na(t);
+      case 'ramUsedMb': return v.ramUsedMb != null ? fmtSize(v.ramUsedMb) : na(t);
       case 'ramUsedPct': return v.ramUsedPct != null ? `${v.ramUsedPct.toFixed(1)} %` : na(t);
       case 'uptimeS': return v.uptimeS != null ? String(Math.round(v.uptimeS)) : na(t);
       case 'disks':
