@@ -148,7 +148,7 @@ export const en: Record<string, string> = {
 
   'nav.topology': 'Network topology',
   'nav.storage': 'Storage',
-  'nav.vmInventory': 'VM inventory',
+  'nav.vmInventory': 'VM view',
   'nav.proxmoxInventory': 'Proxmox inventory',
 
   'topo.title': 'Network topology — auto-discovered',
@@ -292,8 +292,8 @@ export const en: Record<string, string> = {
   'storage.type.iscsi': 'iSCSI',
   'storage.type.cifs': 'CIFS',
 
-  'vm.title': 'VM inventory',
-  'vm.loading': 'Loading VM inventory…',
+  'vm.title': 'VM view',
+  'vm.loading': 'Loading VM view…',
   'vm.hint': 'All VMs and LXC containers across the fleet, live (5 s push). vCenter-style tree: Datacenter → cluster → node → VM.',
   'vm.tree.datacenter': 'Datacenter',
   'vm.search.placeholder': 'Search name or vmid…',
@@ -365,7 +365,7 @@ export const en: Record<string, string> = {
   'vm.snap.yes': 'yes',
   'vm.snap.no': 'no',
   'vm.snap.none': 'No snapshot',
-  // --- VM inventory v2: Summary view (vSphere-style panel grid) ---
+  // --- VM view v2: Summary view (vSphere-style panel grid) ---
   'vm.sum.guestOs': 'Guest OS',
   'vm.sum.vmDetails': 'Virtual Machine Details',
   'vm.sum.hardware': 'VM Hardware',
@@ -481,7 +481,7 @@ export const en: Record<string, string> = {
   'admin.users.error.self': 'You cannot deactivate or demote your own account',
   'admin.users.empty': 'No user',
   'admin.error.generic': 'The operation failed, please try again',
-  // --- VM inventory: console ---
+  // --- VM view: console ---
   'vm.console.web': 'Web console (PVE UI)',
   'vm.console.unavailable': 'Console unavailable — endpoint without a PVE URL (demo mode)?',
 

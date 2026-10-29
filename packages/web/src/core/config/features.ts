@@ -16,7 +16,7 @@ export const FEATURES = {
   USE_PLUGIN_NETWORK: env.VITE_USE_PLUGIN_NETWORK !== 'false',
   // Legacy supprimé après validation (étape 4) : défaut ON, disjoncteur opt-out.
   USE_PLUGIN_STORAGE: env.VITE_USE_PLUGIN_STORAGE !== 'false',
-  // Inventaire VMs/LXC (arborescence vCenter + détail) : défaut ON, disjoncteur opt-out.
+  // Vue VMs/LXC (arborescence vCenter + détail) : défaut ON, disjoncteur opt-out.
   USE_PLUGIN_VM_INVENTORY: env.VITE_USE_PLUGIN_VM_INVENTORY !== 'false',
   // Inventaire Proxmox consolidé (une machine par ligne, export) : défaut ON, disjoncteur opt-out.
   USE_PLUGIN_PROXMOX_INVENTORY: env.VITE_USE_PLUGIN_PROXMOX_INVENTORY !== 'false',

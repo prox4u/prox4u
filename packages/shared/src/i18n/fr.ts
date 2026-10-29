@@ -148,7 +148,7 @@ export const fr: Record<string, string> = {
 
   'nav.topology': 'Topologie réseau',
   'nav.storage': 'Stockage',
-  'nav.vmInventory': 'Inventaire VM',
+  'nav.vmInventory': 'Vue VM',
   'nav.proxmoxInventory': 'Inventaire Proxmox',
 
   'topo.title': 'Topologie réseau — auto-découverte',
@@ -292,7 +292,7 @@ export const fr: Record<string, string> = {
   'storage.type.iscsi': 'iSCSI',
   'storage.type.cifs': 'CIFS',
 
-  'vm.title': 'Inventaire des VMs',
+  'vm.title': 'Vue des VMs',
   'vm.loading': 'Chargement de l’inventaire VM…',
   'vm.hint': 'Toutes les VMs et conteneurs LXC du parc, en temps réel (push 5 s). Arborescence type vCenter : Datacenter → cluster → nœud → VM.',
   'vm.tree.datacenter': 'Datacenter',
@@ -365,7 +365,7 @@ export const fr: Record<string, string> = {
   'vm.snap.yes': 'oui',
   'vm.snap.no': 'non',
   'vm.snap.none': 'Aucun snapshot',
-  // --- Inventaire VM v2 : vue Résumé (grille de panneaux type vSphere) ---
+  // --- Vue VM v2 : vue Résumé (grille de panneaux type vSphere) ---
   'vm.sum.guestOs': 'OS invité',
   'vm.sum.vmDetails': 'Détails de la machine virtuelle',
   'vm.sum.hardware': 'Matériel VM',
@@ -481,7 +481,7 @@ export const fr: Record<string, string> = {
   'admin.users.error.self': 'Vous ne pouvez pas désactiver ni dégrader votre propre compte',
   'admin.users.empty': 'Aucun utilisateur',
   'admin.error.generic': 'L’opération a échoué, veuillez réessayer',
-  // --- Inventaire VM : console ---
+  // --- Vue VM : console ---
   'vm.console.web': 'Console web (UI PVE)',
   'vm.console.unavailable': 'Console indisponible — endpoint sans URL PVE (mode démo) ?',
 

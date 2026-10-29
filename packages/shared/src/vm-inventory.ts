@@ -1,7 +1,7 @@
 import type { VmSummary } from './types';
 
 /**
- * Inventaire des VMs (plugin vm-inventory) — groupement/filtrage/tri purs,
+ * Vue des VMs (plugin vm-inventory) — groupement/filtrage/tri purs,
  * même pattern que storage-inventory / network-inventory.
  */
 

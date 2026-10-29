@@ -3,7 +3,7 @@ import type { Plugin } from '../../core/plugin/types';
 import { VmInventoryPage } from './pages/vm-inventory';
 
 /**
- * Plugin Inventaire VM v2 — même périmètre que la v1 (parc VMs/LXC multi-endpoints,
+ * Plugin Vue VM v2 — même périmètre que la v1 (parc VMs/LXC multi-endpoints,
  * arborescence type vCenter, tableau filtrable, détail par onglets) + bouton
  * « Console web » qui ouvre la console de la VM dans l'UI PVE (nouvel onglet).
  *
@@ -14,7 +14,7 @@ import { VmInventoryPage } from './pages/vm-inventory';
 export const vmInventoryPluginV2: Plugin = {
   manifest: {
     id: 'vm-inventory_v2',
-    name: 'VM Inventory',
+    name: 'VM View',
     version: '0.2.0',
     routes: [
       { path: '/vms', element: VmInventoryPage },

@@ -170,7 +170,7 @@ describe('AuthStore', () => {
     expect(entries.map((m) => m.id)).toEqual(['vm-inventory', 'vm-inventory_v2', 'vm-inventory_v3']);
     for (const m of entries) {
       expect(m.globallyEnabled).toBe(false);
-      expect(m.name).toBe('Inventaire VM');
+      expect(m.name).toBe('Vue VM');
     }
   });
 
