@@ -38,7 +38,7 @@ describe('AuthStore', () => {
     const { verifyPassword } = await import('./password.js');
     expect(await verifyPassword(admin!.passwordHash!, 'proX4u')).toBe(true);
     // catalogue des familles de plugins, activé globalement par défaut
-    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-inventory']);
+    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-inventory', 'proxmox-inventory']);
     expect(store.listModules().every((m) => m.globallyEnabled)).toBe(true);
   });
 
@@ -69,7 +69,7 @@ describe('AuthStore', () => {
     const store = new AuthStore(file, logger);
     await store.init(hashPassword);
     // les ids inconnus sont retirés, le catalogue Prox4u est restauré
-    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-inventory']);
+    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-inventory', 'proxmox-inventory']);
     // les références aux modules retirés sont nettoyées
     expect(store.data.groupModules.some((gm) => gm.moduleId === 'supervision')).toBe(false);
     expect(store.data.userModules.some((um) => um.moduleId === 'dashboard')).toBe(false);
@@ -182,6 +182,7 @@ describe('AuthStore', () => {
     expect(store.listModules().map((m) => m.id).sort()).toEqual([
       'hypervision',
       'network',
+      'proxmox-inventory',
       'storage',
       'vm-inventory',
       'vm-inventory_v2',
@@ -213,6 +214,7 @@ describe('AuthStore', () => {
       'network',
       'storage',
       'vm-inventory',
+      'proxmox-inventory',
       'vm-inventory_v2',
     ]);
     expect(store2.data.userModules).toContainEqual({ userId: u.id, moduleId: 'vm-inventory_v2' });

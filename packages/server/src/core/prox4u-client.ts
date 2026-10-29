@@ -217,6 +217,9 @@ export class Prox4uClient implements DataSource {
         if (!v.storage && cached.value.diskStorage) v.storage = cached.value.diskStorage;
         // Disques (datastore + taille allouée) — joints depuis la config.
         if (cached.value.disks) v.disks = cached.value.disks;
+        // Tags + description — joints depuis la config (même cache 1 h).
+        if (cached.value.tags) v.tags = cached.value.tags;
+        if (cached.value.description) v.notes = cached.value.description;
       }
     }
     return vms;
@@ -374,6 +377,8 @@ export class Prox4uClient implements DataSource {
         nets: parseVmNets(type, c),
         diskStorage: diskStorageOf(c, type),
         disks: disksOf(c, type),
+        tags: parseTags(c.tags),
+        description: str(c.description) ?? undefined,
       };
     } catch {
       return null;
@@ -593,6 +598,13 @@ function loadavg(v: unknown): [number, number, number] | null {
 
 function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/** Tags de la config PVE : chaîne « a,b,c » (ou tableau) → tableau non vide. */
+function parseTags(v: unknown): string[] | undefined {
+  const raw = Array.isArray(v) ? v : typeof v === 'string' && v.length > 0 ? v.split(',') : [];
+  const out = raw.map((t) => String(t).trim()).filter(Boolean);
+  return out.length > 0 ? out : undefined;
 }
 
 /**

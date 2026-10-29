@@ -1,4 +1,4 @@
-import type { DatastoreHistoryResponse, MetricsTimeframe, VmFsResponse } from '@prox4u/shared';
+import type { DatastoreHistoryResponse, MetricsTimeframe, ProxmoxInventoryResponse, VmFsResponse } from '@prox4u/shared';
 import type {
   CapacityResponse,
   MetricsResponse,
@@ -71,4 +71,9 @@ export function fetchVmFs(endpoint: string, vmid: number, timeframe: MetricsTime
   return getJson<VmFsResponse>(
     `/api/vm-fs?endpoint=${encodeURIComponent(endpoint)}&vmid=${vmid}&timeframe=${timeframe}`,
   );
+}
+
+/** Inventaire Proxmox consolidé de tous les endpoints (cache serveur 5 min) — plugin proxmox-inventory. */
+export function fetchProxmoxInventory(): Promise<ProxmoxInventoryResponse> {
+  return getJson<ProxmoxInventoryResponse>('/api/proxmox-inventory');
 }

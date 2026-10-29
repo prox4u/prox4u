@@ -241,4 +241,10 @@ export const DEFAULT_MODULES: ModuleDef[] = [
     description: 'Parc VMs/LXC multi-endpoints (arborescence type vCenter)',
     globallyEnabled: true,
   },
+  {
+    id: 'proxmox-inventory',
+    name: 'Inventaire Proxmox',
+    description: 'Vue consolidée d’une machine par ligne : OS, disques par filesystem, interfaces, IPs, export',
+    globallyEnabled: true,
+  },
 ];
