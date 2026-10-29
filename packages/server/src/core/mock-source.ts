@@ -1,4 +1,4 @@
-import type { AgentFsUsage, ParsedVmNet, PveNodeStatus, PvePool, PveStorage, PveVmResource, PveVmSnapshot, RrddataPoint, VmAgentNetIf } from '@prox4u/shared';
+import type { AgentFsUsage, ParsedVmNet, PveNodeStatus, PvePool, PveStorage, PveVmResource, PveVmSnapshot, RrddataPoint, VmAgentNetIf, VmOsInfo } from '@prox4u/shared';
 import type { DataSource, NodeNetwork, Timeframe, VmConfigInfo } from './data-source.js';
 
 const GB = 1024 ** 3;
@@ -348,6 +348,11 @@ export class MockSource implements DataSource {
       { mountpoint: '/', dev: 'sda1', usedBytes: Math.round(rootTotal * frac), totalBytes: rootTotal },
       { mountpoint: '/data', dev: 'sda2', usedBytes: Math.round(dataTotal * frac), totalBytes: dataTotal },
     ];
+  }
+
+  /** Démo : pas d'agent invité → pas d'OS réel (la famille OS se replie sur la config `ostype`). */
+  async getOsInfo(_node: string, _vmid: number): Promise<VmOsInfo | null> {
+    return null;
   }
 
   /** Déterministe : même MAC que la config net0 (mockMac) + IP identique à getResources. */

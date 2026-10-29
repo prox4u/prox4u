@@ -10,6 +10,7 @@ import type {
   RrddataPoint,
   VmAgentNetIf,
   VmConfigInfo,
+  VmOsInfo,
 } from '@prox4u/shared';
 
 export type Timeframe = 'hour' | 'day' | 'week' | 'month' | 'year';
@@ -66,6 +67,14 @@ export interface DataSource {
    * Source fiable d'usage disque par VM QEMU (le RRD `disk` vaut 0, `maxdisk` n'est que l'allocation).
    */
   getAgentFsUsage(node: string, vmid: number): Promise<AgentFsUsage[] | null>;
+
+  /**
+   * OS réel d'une VM QEMU via l'agent invité (QGA guest-get-osinfo) — GET
+   * /nodes/{n}/qemu/{vmid}/agent/get-osinfo. Renvoie la distro + version + noyau.
+   * `null` si VM arrêtée / agent absent / PVE sans l'endpoint (le repli famille OS
+   * se fait côté appelant sur la config `ostype`).
+   */
+  getOsInfo(node: string, vmid: number): Promise<VmOsInfo | null>;
 
   /** réseau des nœuds (NICs + ponts) — topologie auto-découverte */
   getNetwork(): Promise<NodeNetwork[]>;

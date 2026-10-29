@@ -6,6 +6,9 @@ import {
   type PveVmResource,
   type ProxmoxInventoryEndpoint,
   type VmAgentNetIf,
+  type VmOsInfo,
+  osFamilyFromId,
+  ostypeFamily,
 } from '@prox4u/shared';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 
@@ -44,8 +47,18 @@ function splitIps(ips: string[]): { ipv4: string[]; ipv6: string[] } {
   return { ipv4, ipv6 };
 }
 
+/**
+ * Famille OS d'une ligne : l'agent QGA (primaire, OS réel) sinon le code `ostype`
+ * de la config (repli VMs arrêtées / sans agent) sinon la famille `os` (dernier recours).
+ */
+function vmOsFamily(v: PveVmResource, osinfo: VmOsInfo | null): string | null {
+  if (osinfo?.id) return osFamilyFromId(osinfo.id);
+  if (v.ostype) return ostypeFamily(v.ostype);
+  return v.os ?? null;
+}
+
 /** Construit une ligne d'inventaire depuis la ressource PVE + données d'agent. */
-function buildInvVm(ep: EndpointRuntime, v: PveVmResource, fs: AgentFsUsage[] | null, nets: VmAgentNetIf[]): InvVm {
+function buildInvVm(ep: EndpointRuntime, v: PveVmResource, fs: AgentFsUsage[] | null, nets: VmAgentNetIf[], osinfo: VmOsInfo | null): InvVm {
   const ramAllocMb = v.maxmem ? round1(v.maxmem / MB) : null;
   const ramUsedMb = v.mem ? round1(v.mem / MB) : null;
   const ramUsedPct = v.maxmem && v.mem ? round1((v.mem / v.maxmem) * 100) : null;
@@ -88,7 +101,9 @@ function buildInvVm(ep: EndpointRuntime, v: PveVmResource, fs: AgentFsUsage[] | 
     type: v.type,
     status: v.status,
     template: !!v.template,
-    osType: v.os ?? null,
+    osType: vmOsFamily(v, osinfo),
+    osPretty: v.type === 'lxc' ? null : (osinfo?.prettyName ?? osinfo?.name ?? null),
+    osKernel: osinfo?.kernelRelease ?? null,
     cpuCores: v.cpuAlloc ?? null,
     cpuPct: cpuPct(v),
     ramAllocMb,
@@ -111,15 +126,18 @@ async function computeInventory(ep: EndpointRuntime): Promise<ProxmoxInventoryEn
     vms.map(async (v) => {
       // Les appels agent sont mis en cache (60 s / timeout 8 s) et best-effort :
       // une VM arrêtée ou sans agent renvoie null / [] sans bloquer l'inventaire.
-      const [fs, nets] = await Promise.all([
+      const [fs, nets, osinfo] = await Promise.all([
         v.type === 'qemu' && v.status === 'running'
           ? ep.source.getAgentFsUsage(v.node, v.vmid)
           : Promise.resolve(null),
         v.type === 'qemu'
           ? ep.source.getVmAgentNets(v.node, v.vmid)
           : ep.source.getLxcInterfaces(v.node, v.vmid),
+        v.type === 'qemu' && v.status === 'running'
+          ? ep.source.getOsInfo(v.node, v.vmid)
+          : Promise.resolve(null),
       ]);
-      out.push(buildInvVm(ep, v, fs, nets));
+      out.push(buildInvVm(ep, v, fs, nets, osinfo));
     }),
   );
   out.sort((a, b) => a.vmid - b.vmid);

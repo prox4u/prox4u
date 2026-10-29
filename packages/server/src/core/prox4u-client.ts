@@ -13,6 +13,7 @@ import {
   type RrddataPoint,
   type VmAgentNetIf,
   type VmDisk,
+  type VmOsInfo,
 } from '@prox4u/shared';
 import type { EndpointConfig } from './config.js';
 import type { DataSource, NodeNetwork, Timeframe, VmConfigInfo } from './data-source.js';
@@ -31,6 +32,10 @@ const CONFIG_TTL_MS = 60 * 60 * 1000;
 const AGENT_NETS_TTL_MS = 60 * 1000;
 /** Borne d'attente de l'agent invité pour l'usage disque (get-fsinfo) — appel posé sur le chemin du poller. */
 const AGENT_DISK_USAGE_TIMEOUT_MS = 8000;
+/** TTL du cache OS réel (get-osinfo) : l'OS d'une VM ne change pas — 5 min, aligné sur le cache de la route. */
+const AGENT_OSINFO_TTL_MS = 5 * 60 * 1000;
+/** Borne d'attente de l'agent invité pour le OS (get-osinfo). */
+const AGENT_OSINFO_TIMEOUT_MS = 8000;
 
 interface RawVm {
   vmid: number;
@@ -109,6 +114,7 @@ export class Prox4uClient implements DataSource {
   private agent: Agent;
   private configCache = new Map<string, { at: number; value: VmConfigInfo | null }>();
   private agentNetsCache = new Map<string, { at: number; value: VmAgentNetIf[] }>();
+  private osInfoCache = new Map<string, { at: number; value: VmOsInfo | null }>();
 
   constructor(private ep: EndpointConfig, tlsRejectUnauthorized: boolean) {
     this.agent = new Agent({ connect: { rejectUnauthorized: tlsRejectUnauthorized } });
@@ -220,6 +226,8 @@ export class Prox4uClient implements DataSource {
         // Tags + description — joints depuis la config (même cache 1 h).
         if (cached.value.tags) v.tags = cached.value.tags;
         if (cached.value.description) v.notes = cached.value.description;
+        // Code ostype — joint depuis la config (repli famille OS si pas d'agent).
+        if (cached.value.ostype) v.ostype = cached.value.ostype;
       }
     }
     return vms;
@@ -373,6 +381,7 @@ export class Prox4uClient implements DataSource {
       return {
         cpuAlloc: num(c.cores) ?? 0,
         os: type === 'qemu' ? friendlyOs(str(c.os)) : 'LXC',
+        ostype: str(c.ostype),
         pool: str(c.pool) ?? null,
         nets: parseVmNets(type, c),
         diskStorage: diskStorageOf(c, type),
@@ -486,6 +495,44 @@ export class Prox4uClient implements DataSource {
     }
   }
 
+  /**
+   * OS RÉEL d'une VM QEMU via l'agent invité — GET /nodes/{n}/qemu/{vmid}/agent/get-osinfo
+   * (QGA guest-get-osinfo). Renvoie la distro, la version et le noyau tels que vus par le
+   * système hôte invité. `null` si VM arrêtée, agent absent, ou PVE sans l'endpoint —
+   * le repli « famille OS » se fait alors sur la config `ostype` (côté route).
+   * Mise en cache 5 min (l'OS ne change pas) ; borne de 8 s pour ne jamais bloquer.
+   */
+  async getOsInfo(node: string, vmid: number): Promise<VmOsInfo | null> {
+    const k = key(node, vmid);
+    const cached = this.osInfoCache.get(k);
+    if (cached && Date.now() - cached.at < AGENT_OSINFO_TTL_MS) return cached.value;
+    const value = await this.fetchOsInfo(node, vmid);
+    this.osInfoCache.set(k, { at: Date.now(), value });
+    return value;
+  }
+
+  private async fetchOsInfo(node: string, vmid: number): Promise<VmOsInfo | null> {
+    try {
+      const raw = await this.get<RawOsInfo | { result?: RawOsInfo }>(
+        `/nodes/${node}/qemu/${vmid}/agent/get-osinfo`,
+        AGENT_OSINFO_TIMEOUT_MS,
+      );
+      const r = raw && !Array.isArray(raw) && 'result' in raw ? raw.result : (raw as RawOsInfo);
+      if (!r) return null;
+      return {
+        id: str(r.id) ?? null,
+        name: str(r.name) ?? null,
+        prettyName: str(r['pretty-name']) ?? null,
+        version: str(r.version) ?? null,
+        versionId: str(r['version-id']) ?? null,
+        kernelRelease: str(r['kernel-release']) ?? null,
+        arch: str(r.machine) ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async getRrddata(
     kind: 'node' | 'vm',
     node: string,
@@ -520,6 +567,17 @@ export class Prox4uClient implements DataSource {
           p.netout !== null,
       );
   }
+}
+
+/** Réponse brute QGA guest-get-osinfo (GET .../agent/get-osinfo). */
+interface RawOsInfo {
+  id?: string;
+  name?: string;
+  'pretty-name'?: string;
+  version?: string;
+  'version-id'?: string;
+  'kernel-release'?: string;
+  machine?: string;
 }
 
 interface RawStorage {

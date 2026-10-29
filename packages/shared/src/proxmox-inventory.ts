@@ -42,8 +42,12 @@ export interface InvVm {
   type: 'qemu' | 'lxc';
   status: string;
   template: boolean;
-  /** famille OS (Linux/Windows/LXC/Autre) — depuis la config PVE */
+  /** famille OS (Linux/Unix, Windows, LXC, Autre) — agent (primaire) sinon config `ostype`/`os` */
   osType: string | null;
+  /** OS réel et versionné (« Ubuntu 24.04.5 LTS », « Debian GNU/Linux 13 (trixie) », « LXC ») — null si inconnu */
+  osPretty: string | null;
+  /** libellé du noyau (« 6.17.0-35-generic ») — agent QGA, null sinon */
+  osKernel: string | null;
   cpuCores: number | null;
   /** % des cœurs alloués en cours d'utilisation */
   cpuPct: number | null;
@@ -71,6 +75,40 @@ export interface ProxmoxInventoryResponse {
   /** unix ms */
   generatedAt: number;
   endpoints: ProxmoxInventoryEndpoint[];
+}
+
+// --- Décodage famille OS ------------------------------------------------------------------
+
+/** Famille à partir de l'`id` d'une distribution tel que remonté par l'agent QGA (guest-get-osinfo). */
+export function osFamilyFromId(id: string | null): 'Windows' | 'Linux/Unix' | 'Autre' {
+  if (!id) return 'Autre';
+  const i = id.toLowerCase();
+  if (i === 'windows' || i.startsWith('win')) return 'Windows';
+  // Les BSD sont Unix-like → regroupés Linux/Unix (même sémantique que l'app existante).
+  return 'Linux/Unix';
+}
+
+/**
+ * Famille à partir du champ `ostype` de la config PVE (repli pour les VMs sans agent).
+ * PVE stocke des codes courts pour QEMU (`l26`, `w2k22`…) et des noms de distro complets
+ * pour LXC (`debian`, `ubuntu`…). Règle : Windows = `w*` / `windows` ; tout le reste qui
+ * n'est pas `none` est Linux/Unix (linux, l26, bsd*, freebsd, debian, ubuntu, centos, …).
+ */
+export function ostypeFamily(ostype?: string | null): 'Windows' | 'Linux/Unix' | 'Autre' {
+  if (!ostype || ostype === 'none') return 'Autre';
+  const o = ostype.toLowerCase();
+  if (o.startsWith('w') || o === 'windows') return 'Windows';
+  return 'Linux/Unix';
+}
+
+/**
+ * Affichage OS d'une ligne d'inventaire : OS réel et versionné si l'agent l'a remonté,
+ * sinon « LXC » pour un conteneur, sinon la famille (Linux/Unix, Windows, Autre).
+ */
+export function osDisplay(v: Pick<InvVm, 'type' | 'osType' | 'osPretty'>): string {
+  if (v.type === 'lxc') return 'LXC';
+  if (v.osPretty) return v.osPretty;
+  return v.osType ?? 'Autre';
 }
 
 // --- Filtres / tri / recherche ----------------------------------------------------------
@@ -128,7 +166,8 @@ export function filterInvRows(vms: InvVm[], f: InvFilter): InvVm[] {
     if (f.diskMax != null && disk > f.diskMax) return false;
     if (q) {
       const hay = [
-        v.name, String(v.vmid), v.node, v.type, v.status, v.osType ?? '',
+        v.name, String(v.vmid), v.node, v.type, v.status,
+        v.osType ?? '', v.osPretty ?? '', v.osKernel ?? '',
         ...v.ips, ...v.tags, v.notes ?? '',
       ].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
@@ -232,7 +271,7 @@ export function invToTxt(vms: InvVm[]): string {
   L.push('');
   for (const v of [...vms].sort((a, b) => a.node.localeCompare(b.node) || a.vmid - b.vmid)) {
     L.push(`[${v.vmid}] ${v.name || v.vmid} — ${v.node} (${v.type}, ${v.status || '?'})`);
-    if (v.osType) L.push(`    OS       : ${v.osType}`);
+    L.push(`    OS       : ${osDisplay(v)}${v.osKernel ? `  [noyau ${v.osKernel}]` : ''}`);
     if (v.disks.length) {
       L.push('    Disques  :');
       for (const d of v.disks) L.push(`       ${pad(d.mountpoint, 12)} ${Math.round(d.usedMb ?? 0)} / ${Math.round(d.totalMb ?? 0)} Mo (${Math.round(d.usedPct ?? 0)}%)  ${d.dev ?? ''}`);
@@ -250,14 +289,14 @@ export function invToTxt(vms: InvVm[]): string {
 
 /** CSV : séparateur `;`, UTF-8 BOM (Excel), multi-valeurs `|`. */
 export function invToCsv(vms: InvVm[]): string {
-  const header = ['Nom', 'VMID', 'Host', 'Nœud', 'Type', 'État', 'OS type', 'CPU (cœurs)', 'CPU (%)',
+  const header = ['Nom', 'VMID', 'Host', 'Nœud', 'Type', 'État', 'OS', 'Noyau', 'CPU (cœurs)', 'CPU (%)',
     'RAM all. (Mo)', 'RAM used (Mo)', 'RAM (%)', 'Uptime (s)', 'Disques', 'Interfaces', 'IPs',
     'Tags', 'Notes', 'Template'];
   const esc = (x: unknown) => `"${String(x ?? NA).replace(/"/g, '""')}"`;
   const lines = [header.join(';')];
   for (const v of vms) {
     lines.push([
-      v.name, v.vmid, v.host, v.node, v.type, v.status, v.osType,
+      v.name, v.vmid, v.host, v.node, v.type, v.status, osDisplay(v), v.osKernel,
       v.cpuCores, v.cpuPct, v.ramAllocMb, v.ramUsedMb, v.ramUsedPct, v.uptimeS,
       v.disks.map(diskStr).join('|') || NA,
       v.interfaces.map(ifaceStr).join('|') || NA,
@@ -273,7 +312,7 @@ export function invToJson(vms: InvVm[]): string {
   const out = vms.map((v) => ({
     name: v.name, vmid: v.vmid, host: v.host, node: v.node, type: v.type,
     status: v.status, template: v.template,
-    os: { type: v.osType },
+    os: { family: v.osType, name: v.osPretty, kernel: v.osKernel },
     cpu: { cores: v.cpuCores, usage_pct: v.cpuPct },
     ram: { allocated_mb: v.ramAllocMb, used_mb: v.ramUsedMb, used_pct: v.ramUsedPct },
     uptime_s: v.uptimeS,

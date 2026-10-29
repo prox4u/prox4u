@@ -8,6 +8,9 @@ import {
   invToJson,
   invToTxt,
   invTotalDiskMb,
+  osDisplay,
+  osFamilyFromId,
+  ostypeFamily,
   sortInvRows,
 } from './proxmox-inventory';
 
@@ -18,7 +21,9 @@ function inv(partial: Partial<InvVm> & Pick<InvVm, 'vmid' | 'name'>): InvVm {
     type: 'qemu',
     status: 'running',
     template: false,
-    osType: 'Linux',
+    osType: 'Linux/Unix',
+    osPretty: 'Ubuntu 24.04 LTS',
+    osKernel: '6.17.0-generic',
     cpuCores: 4,
     cpuPct: 10,
     ramAllocMb: 8192,
@@ -44,6 +49,32 @@ describe('invTotalDiskMb', () => {
         { mountpoint: '/data', dev: 'sda2', totalMb: 200, usedMb: 100, freeMb: 100, usedPct: 50 },
       ],
     }))).toBe(300);
+  });
+});
+
+describe('décodage famille OS', () => {
+  it('osFamilyFromId : id QGA → famille', () => {
+    expect(osFamilyFromId('ubuntu')).toBe('Linux/Unix');
+    expect(osFamilyFromId('debian')).toBe('Linux/Unix');
+    expect(osFamilyFromId('windows')).toBe('Windows');
+    expect(osFamilyFromId(null)).toBe('Autre');
+  });
+  it('ostypeFamily : code config PVE → famille', () => {
+    // codes courts QEMU
+    expect(ostypeFamily('l26')).toBe('Linux/Unix');
+    expect(ostypeFamily('w2k22')).toBe('Windows');
+    expect(ostypeFamily('w11')).toBe('Windows');
+    // noms de distro complets LXC
+    expect(ostypeFamily('debian')).toBe('Linux/Unix');
+    expect(ostypeFamily('ubuntu')).toBe('Linux/Unix');
+    expect(ostypeFamily('windows')).toBe('Windows');
+    expect(ostypeFamily('none')).toBe('Autre');
+    expect(ostypeFamily(undefined)).toBe('Autre');
+  });
+  it('osDisplay : OS réel sinon famille (LXC prioritaire)', () => {
+    expect(osDisplay({ type: 'qemu', osType: 'Linux/Unix', osPretty: 'Ubuntu 24.04 LTS' })).toBe('Ubuntu 24.04 LTS');
+    expect(osDisplay({ type: 'qemu', osType: 'Linux/Unix', osPretty: null })).toBe('Linux/Unix');
+    expect(osDisplay({ type: 'lxc', osType: 'Linux/Unix', osPretty: 'Debian 13' })).toBe('LXC');
   });
 });
 

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { InvFilter, InvSortDir, InvSortKey, InvVm } from '@prox4u/shared';
-import { invTotalDiskMb } from '@prox4u/shared';
+import { invTotalDiskMb, osDisplay } from '@prox4u/shared';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge';
 import { Input, Select } from '../../../components/ui/input';
@@ -97,7 +97,13 @@ export function ProxmoxInventoryTable({ vms, filter, onFilterChange, sortKey, so
       case 'type': return v.type;
       case 'status':
         return <Badge tone={v.status === 'running' ? 'ok' : v.status === 'stopped' ? 'default' : 'warn'}>{v.status}</Badge>;
-      case 'osType': return v.osType ?? na(t);
+      case 'osType':
+        return (
+          <div className="leading-tight">
+            <div className="font-medium">{osDisplay(v)}</div>
+            {v.osKernel && <div className="text-[10px] text-muted-foreground">noyau {v.osKernel}</div>}
+          </div>
+        );
       case 'cpuCores': return v.cpuCores ?? na(t);
       case 'cpuPct': return v.cpuPct != null ? `${v.cpuPct.toFixed(1)} %` : na(t);
       case 'ramAllocMb': return v.ramAllocMb ?? na(t);
