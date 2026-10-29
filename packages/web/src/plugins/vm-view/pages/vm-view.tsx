@@ -14,7 +14,7 @@ import { VersionBadge } from '../../../components/ui/version-badge';
  * tableau filtrable au centre, panneau détail (onglets) à droite au clic sur une ligne.
  * Les données sont live (snapshot WS 5 s) ; seul le détail d'une VM passe par le REST.
  */
-export function VmInventoryPage() {
+export function VmViewPage() {
   const { t } = useTranslation();
   const multi = useMulti();
   const endpoints = useMemo(() => multi?.endpoints ?? [], [multi]);
@@ -85,7 +85,7 @@ export function VmInventoryPage() {
         <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
           {t('vm.title')}
           {/* Badge de version : permet de distinguer les versions en comparaison A/B. */}
-          <VersionBadge pluginId="vm-inventory" />
+          <VersionBadge pluginId="vm-view" />
         </h1>
         <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">{t('vm.hint')}</p>
       </div>

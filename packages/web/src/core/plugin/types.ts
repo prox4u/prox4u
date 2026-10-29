@@ -28,7 +28,7 @@ export interface PluginMenuItem {
 export interface PluginManifest {
   /**
    * Identifiant stable : famille ('hypervision') ou version dérivée
-   * '<famille>_vN' (ex. 'vm-inventory_v2'). Toute modification d'un module
+   * '<famille>_vN' (ex. 'vm-view_v2'). Toute modification d'un module
    * crée une nouvelle version — on ne modifie jamais une version en place.
    */
   id: string;
@@ -87,7 +87,7 @@ export const pluginMenuItemSchema = z.object({
 export const pluginManifestSchema = z.object({
   id: z
     .string()
-    .regex(PLUGIN_ID_RE, "id : minuscules, chiffres et tirets + suffixe _vN optionnel (ex. 'storage', 'vm-inventory_v2')"),
+    .regex(PLUGIN_ID_RE, "id : minuscules, chiffres et tirets + suffixe _vN optionnel (ex. 'storage', 'vm-view_v2')"),
   name: z.string().min(1),
   version: z.string().regex(/^\d+\.\d+\.\d+(-[\w.]+)?$/, 'version semver (ex. 0.1.0)'),
   routes: z.array(pluginRouteSchema).optional(),

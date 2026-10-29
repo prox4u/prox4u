@@ -1,6 +1,6 @@
 import { MonitorSmartphone } from 'lucide-react';
 import type { Plugin } from '../../core/plugin/types';
-import { VmInventoryPage } from './pages/vm-inventory';
+import { VmViewPage } from './pages/vm-view';
 
 /**
  * Plugin Vue VM v2 — même périmètre que la v1 (parc VMs/LXC multi-endpoints,
@@ -11,19 +11,19 @@ import { VmInventoryPage } from './pages/vm-inventory';
  * version `<id>_vN` — la v1 reste intacte en rollback. L'admin active la version
  * à exposer (onglet Administration → Versions).
  */
-export const vmInventoryPluginV2: Plugin = {
+export const vmViewPluginV2: Plugin = {
   manifest: {
-    id: 'vm-inventory_v2',
+    id: 'vm-view_v2',
     name: 'VM View',
     version: '0.2.0',
     routes: [
-      { path: '/vms', element: VmInventoryPage },
+      { path: '/vms', element: VmViewPage },
     ],
     menu: [
-      { id: 'vm-inventory', to: '/vms', labelKey: 'nav.vmInventory', icon: MonitorSmartphone, order: 40 },
+      { id: 'vm-view', to: '/vms', labelKey: 'nav.vmView', icon: MonitorSmartphone, order: 40 },
     ],
   },
   init(ctx) {
-    ctx.logger.info('vm-inventory_v2 prêt — 1 route + 1 entrée de menu exposées au host (console web PVE)');
+    ctx.logger.info('vm-view_v2 prêt — 1 route + 1 entrée de menu exposées au host (console web PVE)');
   },
 };

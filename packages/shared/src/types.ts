@@ -390,7 +390,7 @@ export interface VmSummary {
   cpuPct: number;
   memBytes: number;
   maxmemBytes: number | null;
-  // --- Vue VM (plugin vm-inventory) ---
+  // --- Vue VM (plugin vm-view) ---
   /** octets disque utilisés (null si indisponible) */
   diskBytes: number | null;
   /** octets disque alloués (null si indisponible) */

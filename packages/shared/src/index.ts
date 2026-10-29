@@ -19,8 +19,8 @@ export { segmentImpact, buildNetworkInventory, buildNetworkInventoryAll, filterN
 export type { NetworkRow, NetworkRowAll, NetworkVmRef, NetworkSeverity, InventoryFilter } from './network-inventory.js';
 export { buildStorageInventory, buildStorageInventoryAll, filterStorageRows, storageSeverity, sortStorageRows, buildDatastoreForecast } from './storage-inventory.js';
 export type { StorageRow, StorageRowAll, StorageVmRef, StorageKind, StorageInventoryFilter, StorageInventoryEndpoint, StorageInventoryResponse, StorageSortKey, StorageSortDir, StorageSort, DatastorePoint, DatastoreHistoryEntry, DatastoreHistoryResponse, DatastoreRange } from './storage-inventory.js';
-export { buildVmTree, DEFAULT_VM_FILTER, filterVmRows, sortVmRows } from './vm-inventory.js';
-export type { VmTreeNode, VmInventoryFilter, VmSortKey, VmSortDir } from './vm-inventory.js';
+export { buildVmTree, DEFAULT_VM_FILTER, filterVmRows, sortVmRows } from './vm-view.js';
+export type { VmTreeNode, VmViewFilter, VmSortKey, VmSortDir } from './vm-view.js';
 export { DEFAULT_INV_FILTER, filterInvRows, sortInvRows, invSummary, invTotalDiskMb, fmtSize, invToTxt, invToCsv, invToJson, invToFormat, osFamilyFromId, ostypeFamily, osPrettyFromOstype, osDisplay, archLabel } from './proxmox-inventory.js';
 export type { InvDisk, InvInterface, InvVm, ProxmoxInventoryEndpoint, ProxmoxInventoryResponse, InvFilter, InvSortKey, InvSortDir, InvSummary } from './proxmox-inventory.js';
 export {
