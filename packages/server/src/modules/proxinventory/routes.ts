@@ -7,6 +7,7 @@ import {
   type ProxmoxInventoryEndpoint,
   type VmAgentNetIf,
   type VmOsInfo,
+  archLabel,
   osFamilyFromId,
   osPrettyFromOstype,
   ostypeFamily,
@@ -107,6 +108,8 @@ function buildInvVm(ep: EndpointRuntime, v: PveVmResource, fs: AgentFsUsage[] | 
     // QEMU tournant : OS réel (agent) ; LXC / QEMU arrêté : distro depuis ostype.
     osPretty: osinfo?.prettyName ?? osinfo?.name ?? osPrettyFromOstype(v.ostype),
     osKernel: osinfo?.kernelRelease ?? null,
+    // Architecture : agent QGA pour QEMU, config pour LXC (normalisée amd64→x86_64).
+    osArch: archLabel(osinfo?.arch ?? v.arch),
     cpuCores: v.cpuAlloc ?? null,
     cpuPct: cpuPct(v),
     ramAllocMb,

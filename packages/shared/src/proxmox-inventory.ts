@@ -50,6 +50,8 @@ export interface InvVm {
   osPretty: string | null;
   /** libellé du noyau (« 6.17.0-35-generic ») — agent QGA, null sinon */
   osKernel: string | null;
+  /** architecture normalisée (« x86_64 », « arm64 ») — agent QGA (QEMU) ou config (LXC), null sinon */
+  osArch: string | null;
   cpuCores: number | null;
   /** % des cœurs alloués en cours d'utilisation */
   cpuPct: number | null;
@@ -127,6 +129,17 @@ export function osDisplay(v: Pick<InvVm, 'osType' | 'osPretty'>): string {
   return v.osPretty ?? v.osType ?? 'Autre';
 }
 
+/** Normalise un libellé d'architecture PVE/QGA vers une forme lisible et homogène. */
+export function archLabel(arch?: string | null): string | null {
+  if (!arch) return null;
+  const a = arch.toLowerCase();
+  if (a === 'amd64' || a === 'x86_64') return 'x86_64';
+  if (a === 'i386' || a === 'i686' || a === 'x86') return 'x86';
+  if (a === 'aarch64' || a === 'arm64') return 'arm64';
+  if (a === 'arm') return 'arm';
+  return arch;
+}
+
 // --- Filtres / tri / recherche ----------------------------------------------------------
 
 export interface InvFilter {
@@ -194,7 +207,7 @@ export function filterInvRows(vms: InvVm[], f: InvFilter): InvVm[] {
     if (q) {
       const hay = [
         v.name, v.hostname ?? '', String(v.vmid), v.node, v.type, v.status,
-        v.osType ?? '', v.osPretty ?? '', v.osKernel ?? '',
+        v.osType ?? '', v.osPretty ?? '', v.osKernel ?? '', v.osArch ?? '',
         ...v.ips, ...v.tags, v.notes ?? '',
       ].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
@@ -299,7 +312,7 @@ export function invToTxt(vms: InvVm[]): string {
   for (const v of [...vms].sort((a, b) => a.node.localeCompare(b.node) || a.vmid - b.vmid)) {
     L.push(`[${v.vmid}] ${v.name || v.vmid} — ${v.node} (${v.type}, ${v.status || '?'})`);
     if (v.hostname) L.push(`    Hôte     : ${v.hostname}`);
-    L.push(`    OS       : ${osDisplay(v)}${v.osKernel ? `  [noyau ${v.osKernel}]` : ''}`);
+    L.push(`    OS       : ${osDisplay(v)}${v.osArch ? `  [${v.osArch}]` : ''}${v.osKernel ? `  [noyau ${v.osKernel}]` : ''}`);
     if (v.disks.length) {
       L.push('    Disques  :');
       for (const d of v.disks) L.push(`       ${pad(d.mountpoint, 12)} ${fmtSize(d.usedMb ?? 0)} / ${fmtSize(d.totalMb ?? 0)} (${Math.round(d.usedPct ?? 0)}%)  ${d.dev ?? ''}`);
@@ -317,14 +330,14 @@ export function invToTxt(vms: InvVm[]): string {
 
 /** CSV : séparateur `;`, UTF-8 BOM (Excel), multi-valeurs `|`. */
 export function invToCsv(vms: InvVm[]): string {
-  const header = ['Nom', "Nom d'hôte", 'VMID', 'Host', 'Nœud', 'Type', 'État', 'OS', 'Noyau', 'CPU (cœurs)', 'CPU (%)',
+  const header = ['Nom', "Nom d'hôte", 'VMID', 'Host', 'Nœud', 'Type', 'État', 'OS', 'Noyau', 'Arch', 'CPU (cœurs)', 'CPU (%)',
     'RAM all. (Mo)', 'RAM used (Mo)', 'RAM (%)', 'Uptime (s)', 'Disques', 'Interfaces', 'IPs',
     'Tags', 'Notes', 'Template'];
   const esc = (x: unknown) => `"${String(x ?? NA).replace(/"/g, '""')}"`;
   const lines = [header.join(';')];
   for (const v of vms) {
     lines.push([
-      v.name, v.hostname, v.vmid, v.host, v.node, v.type, v.status, osDisplay(v), v.osKernel,
+      v.name, v.hostname, v.vmid, v.host, v.node, v.type, v.status, osDisplay(v), v.osKernel, v.osArch,
       v.cpuCores, v.cpuPct, v.ramAllocMb, v.ramUsedMb, v.ramUsedPct, v.uptimeS,
       v.disks.map(diskStr).join('|') || NA,
       v.interfaces.map(ifaceStr).join('|') || NA,
@@ -340,7 +353,7 @@ export function invToJson(vms: InvVm[]): string {
   const out = vms.map((v) => ({
     name: v.name, hostname: v.hostname, vmid: v.vmid, host: v.host, node: v.node, type: v.type,
     status: v.status, template: v.template,
-    os: { family: v.osType, name: v.osPretty, kernel: v.osKernel },
+    os: { family: v.osType, name: v.osPretty, kernel: v.osKernel, arch: v.osArch },
     cpu: { cores: v.cpuCores, usage_pct: v.cpuPct },
     ram: { allocated_mb: v.ramAllocMb, used_mb: v.ramUsedMb, used_pct: v.ramUsedPct },
     uptime_s: v.uptimeS,
