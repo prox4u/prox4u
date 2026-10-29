@@ -53,10 +53,15 @@ function na(t: (k: string) => string): string {
   return t('pxinv.na');
 }
 
-function diskBadge(d: InvVm['disks'][number]): { label: string; tone: 'default' | 'warn' | 'crit' } {
+/**
+ * Un disque = deux lignes : le badge porte le point de montage + l'occupation (%) —
+ * l'info actionable — et une sous-ligne atténuée donne les tailles utilisées/total.
+ */
+function diskBadge(d: InvVm['disks'][number]): { head: string; sub: string; tone: 'default' | 'warn' | 'crit' } {
   const pct = d.usedPct ?? 0;
   return {
-    label: `${d.mountpoint} ${fmtSize(d.usedMb ?? 0)}/${fmtSize(d.totalMb ?? 0)} (${Math.round(pct)}%)`,
+    head: `${d.mountpoint} · ${Math.round(pct)}%`,
+    sub: `${fmtSize(d.usedMb ?? 0)} / ${fmtSize(d.totalMb ?? 0)}`,
     tone: pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'default',
   };
 }
@@ -114,7 +119,19 @@ export function ProxmoxInventoryTable({ vms, filter, onFilterChange, sortKey, so
       case 'uptimeS': return v.uptimeS != null ? String(Math.round(v.uptimeS)) : na(t);
       case 'disks':
         return v.disks.length
-          ? <div className="flex flex-wrap gap-1">{v.disks.map((d) => { const b = diskBadge(d); return <Badge key={d.mountpoint} tone={b.tone}>{b.label}</Badge>; })}</div>
+          ? (
+            <div className="flex flex-col gap-1.5">
+              {v.disks.map((d) => {
+                const b = diskBadge(d);
+                return (
+                  <div key={d.mountpoint} className="flex flex-col gap-0.5">
+                    <Badge tone={b.tone}>{b.head}</Badge>
+                    <span className="pl-0.5 text-[10px] leading-none tabular-nums text-muted-foreground">{b.sub}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )
           : na(t);
       case 'interfaces':
         return v.interfaces.length
