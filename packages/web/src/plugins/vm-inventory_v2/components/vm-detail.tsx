@@ -325,7 +325,7 @@ export function VmDetail({ endpointId, endpointName, vmid, endpointUrl, lastUpda
 
             {/* Monitor : lazy — le composant n'est monté que quand l'onglet est ouvert. */}
             {tab === 'monitor' && (
-              <VmMonitor endpointId={endpointId} vmid={vmid} vmName={vm.name} maxmemBytes={vm.maxmemBytes} />
+              <VmMonitor endpointId={endpointId} vmid={vmid} vmName={vm.name} maxmemBytes={vm.maxmemBytes} maxdiskBytes={vm.maxdiskBytes} />
             )}
 
             {tab === 'config' && (

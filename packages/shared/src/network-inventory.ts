@@ -9,7 +9,7 @@
  */
 
 import {
-  managementSegments,
+  internalNetworkSegments,
   segmentKey,
   type ImpactResult,
   type NetworkKind,
@@ -40,7 +40,7 @@ export interface NetworkRow {
   bridge: string;
   /** ID VLAN — null = VLAN natif (non tagué). */
   vlan: number | null;
-  /** management = réseau interne Proxmox (porte l'IP de gestion d'un nœud) · external = le reste (VLAN, stockage, autres ponts). */
+  /** management = réseau interne Proxmox (pont sans NIC physique) · external = pont branché sur une NIC physique (gestion, production, VLAN…). */
   kind: NetworkKind;
   /** Union des sous-réseaux des ponts de ce segment (peut être vide). */
   subnets: string[];
@@ -112,7 +112,7 @@ export function buildNetworkInventory(topo: NetworkTopology): NetworkRow[] {
 
   // Groupement des interfaces VM par segment. Le trafic et les compteurs VMs
   // comptent chaque VM une seule fois par segment (pas de détail par interface en PVE 9).
-  const mgmt = managementSegments(topo);
+  const internal = internalNetworkSegments(topo);
   const rows = new Map<string, NetworkRow>();
   const counted = new Map<string, Set<number>>();
   for (const v of topo.vms) {
@@ -125,7 +125,7 @@ export function buildNetworkInventory(topo: NetworkTopology): NetworkRow[] {
           key,
           bridge: net.bridge,
           vlan: net.tag,
-          kind: mgmt.has(key) ? 'management' : 'external',
+          kind: internal.has(key) ? 'management' : 'external',
           subnets: info ? [...info.subnets] : [],
           nodes: info ? [...info.nodes] : [],
           vms: [],

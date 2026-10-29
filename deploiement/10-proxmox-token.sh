@@ -23,8 +23,11 @@ ROLE="ManagerReader"
 #   DA.Read        → /cluster/resources, /cluster/status, /pools, /cluster/storage
 #   Sys.Audit      → /nodes/{n}/status, RRD nœud, /storage, /nodes/{n}/network
 #   VM.Audit       → /nodes/{n}/qemu/{vmid}/rrddata (historique VM)
+#   VM.GuestAgent.Audit → /nodes/{n}/qemu/{vmid}/agent/get-fsinfo (occupation DISQUE
+#                   RÉELLE des VMs QEMU — le RRD `disk` vaut 0 pour les QEMU). C'est le
+#                   SEUL privilège agent requis : pas besoin de VM.GuestAgent.Unrestricted.
 #   SDA/SDI/SN/DA.Audit → /cluster/ceph/status + audit
-PRIVS='DA.Read,DA.Audit,VM.Audit,Sys.Audit,SDA.Audit,SDI.Audit,SN.Audit'
+PRIVS='DA.Read,DA.Audit,VM.Audit,VM.GuestAgent.Audit,Sys.Audit,SDA.Audit,SDI.Audit,SN.Audit'
 
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1

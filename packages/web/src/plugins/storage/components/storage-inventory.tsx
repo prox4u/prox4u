@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { EChartsOption } from 'echarts';
+import type { LineSeriesOption } from 'echarts/charts';
 import {
   ArrowDown,
   ArrowUp,
@@ -20,14 +22,21 @@ import {
   filterStorageRows,
   sortStorageRows,
   storageSeverity,
+  usageSeverity,
+  type DatastoreHistoryEntry,
   type PveStorageType,
+  type Severity,
   type SeverityOrNa,
   type StorageInventoryEndpoint,
   type StorageRowAll,
   type StorageSort,
   type StorageSortKey,
 } from '@prox4u/shared';
+import { fetchStorageDatastoreHistory } from '../../../core/api/apiClient';
 import { useOvercommitConfig } from '../../../core/data/use-endpoint';
+import { useEChart } from '../../../hooks/use-echart';
+import { useTheme } from '../../../store/theme';
+import { chartTheme } from '../../../lib/chart-theme';
 import { Badge } from '../../../components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/table';
 import { cn, formatBytes } from '../../../lib/utils';
@@ -43,6 +52,9 @@ interface Props {
   /** Type sélectionné dans le déroulé — '' = tous. */
   typeSel: string;
   onTypeChange: (t: string) => void;
+  /** Portée d'historique des graphiques d'occupation : 1 an (défaut) ou 31 j. */
+  range: 'year' | 'month';
+  onRangeChange: (r: 'year' | 'month') => void;
 }
 
 /** Icône par type de datastore (vue type vCenter). */
@@ -88,20 +100,41 @@ function CapacityBar({ pct, sev }: { pct: number; sev: SeverityOrNa }) {
 /** VMs visibles dans le drill-down avant « Afficher plus » (garde-fou prod). */
 const VM_PAGE = 50;
 
-export function StorageInventory({ endpoints, endpointNames, view, onViewChange, query, onQueryChange, typeSel, onTypeChange }: Props) {
+export function StorageInventory({ endpoints, endpointNames, view, onViewChange, query, onQueryChange, typeSel, onTypeChange, range, onRangeChange }: Props) {
   const { t } = useTranslation();
   const config = useOvercommitConfig();
-  const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  const [vmLimit, setVmLimit] = useState(VM_PAGE);
-  const [sort, setSort] = useState<StorageSort>({ key: 'datastore', dir: 'asc' });
+  // Déploiement multiple : chaque ligne est indépendante (l'utilisateur contrôle
+  // lui-même quel datastore est ouvert — plus aucun rabattage automatique).
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  // Pagination « Afficher plus » par ligne (clé = clé de la ligne).
+  const [vmLimits, setVmLimits] = useState<Map<string, number>>(new Map());
+  const [sort, setSort] = useState<StorageSort>({ key: 'server', dir: 'asc' });
+  // Historique d'occupation + forecast par datastore, indexé par endpointId.
+  const [history, setHistory] = useState<Record<string, DatastoreHistoryEntry[]>>({});
   const isAll = view === 'all';
 
+  // Récupère l'historique par datastore pour chaque endpoint (occupation +
+  // capacity planning). Rechargé quand la liste d'endpoints change (rafraîchi).
+  const loadHistory = useCallback(async () => {
+    const res = await Promise.all(endpoints.map((ep) => fetchStorageDatastoreHistory(ep.endpointId, range)));
+    const m: Record<string, DatastoreHistoryEntry[]> = {};
+    for (const r of res) m[r.endpointId] = r.datastores;
+    setHistory(m);
+  }, [endpoints, range]);
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
+
   const toggleSort = (key: StorageSortKey) =>
-    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'capacity' || key === 'vms' || key === 'state' ? 'desc' : 'asc' }));
-  const toggleRow = (key: string) => {
-    setExpandedKey((cur) => (cur === key ? null : key));
-    setVmLimit(VM_PAGE); // réinitialiser la pagination à chaque ligne dépliée
-  };
+    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'capacity' || key === 'volumes' || key === 'vms' || key === 'state' ? 'desc' : 'asc' }));
+  const toggleRow = (key: string) =>
+    setExpandedKeys((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const showMoreVms = (key: string) => setVmLimits((m) => new Map(m).set(key, (m.get(key) ?? VM_PAGE) + VM_PAGE));
 
   const allRows = useMemo(() => buildStorageInventoryAll(endpoints, endpointNames), [endpoints, endpointNames]);
   const scoped = useMemo<StorageRowAll[]>(() => {
@@ -196,6 +229,22 @@ export function StorageInventory({ endpoints, endpointNames, view, onViewChange,
           ))}
         </select>
 
+        {/* Portée d'historique des graphiques d'occupation (drill-down). */}
+        <div className="flex rounded-lg border p-0.5" role="group" aria-label={t('storage.range.label')}>
+          {(['year', 'month'] as const).map((r) => (
+            <button
+              key={r}
+              onClick={() => onRangeChange(r)}
+              className={cn(
+                'rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors',
+                range === r ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {t(r === 'year' ? 'storage.range.year' : 'storage.range.month')}
+            </button>
+          ))}
+        </div>
+
         <div className="relative min-w-[200px] flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -224,11 +273,12 @@ export function StorageInventory({ endpoints, endpointNames, view, onViewChange,
           <TableHeader>
             <tr>
               <th className="w-6" />
+              <SortHead label={t('storage.col.server')} sortKey="server" sort={sort} onSort={toggleSort} />
               <SortHead label={t('storage.col.datastore')} sortKey="datastore" sort={sort} onSort={toggleSort} />
-              {isAll && <SortHead label={t('storage.col.server')} sortKey="server" sort={sort} onSort={toggleSort} />}
               <SortHead label={t('storage.col.type')} sortKey="type" sort={sort} onSort={toggleSort} />
               <TableHead>{t('storage.col.node')}</TableHead>
               <SortHead label={t('storage.col.capacity')} sortKey="capacity" sort={sort} onSort={toggleSort} className="w-[240px]" />
+              <SortHead label={t('storage.col.volumes')} sortKey="volumes" sort={sort} onSort={toggleSort} className="text-right" align="right" />
               <TableHead>{t('storage.col.content')}</TableHead>
               <SortHead label={t('storage.col.vms')} sortKey="vms" sort={sort} onSort={toggleSort} className="text-right" align="right" />
               <SortHead label={t('storage.col.state')} sortKey="state" sort={sort} onSort={toggleSort} />
@@ -236,17 +286,18 @@ export function StorageInventory({ endpoints, endpointNames, view, onViewChange,
           </TableHeader>
           <TableBody>
             {rows.map((r) => {
-              const open = expandedKey === r.key;
+              const open = expandedKeys.has(r.key);
               const sev = storageSeverity(r, config);
+              const hist = history[r.endpointId]?.find((h) => h.storage === r.storage);
               return (
                 <FragmentRow
                   key={r.key}
                   row={r}
-                  isAll={isAll}
                   open={open}
                   sev={sev}
-                  vmLimit={vmLimit}
-                  onShowMore={() => setVmLimit((v) => v + VM_PAGE)}
+                  hist={hist}
+                  vmLimit={vmLimits.get(r.key) ?? VM_PAGE}
+                  onShowMore={() => showMoreVms(r.key)}
                   onToggle={() => toggleRow(r.key)}
                 />
               );
@@ -296,17 +347,18 @@ function SortHead({
 
 function FragmentRow({
   row,
-  isAll,
   open,
   sev,
+  hist,
   vmLimit,
   onShowMore,
   onToggle,
 }: {
   row: StorageRowAll;
-  isAll: boolean;
   open: boolean;
   sev: SeverityOrNa;
+  /** historique d'occupation + forecast du datastore (undefined = pas encore d'historique). */
+  hist: DatastoreHistoryEntry | undefined;
   vmLimit: number;
   onShowMore: () => void;
   onToggle: () => void;
@@ -321,13 +373,13 @@ function FragmentRow({
         <TableCell className="w-6 px-1">
           <ChevronRight className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', open && 'rotate-90')} />
         </TableCell>
+        <TableCell className="text-xs text-muted-foreground">{row.endpointName}</TableCell>
         <TableCell>
           <div className="flex items-center gap-2 text-xs font-medium">
             <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             {row.storage}
           </div>
         </TableCell>
-        {isAll && <TableCell className="text-xs text-muted-foreground">{row.endpointName}</TableCell>}
         <TableCell>
           <Badge tone={row.kind === 'shared' ? 'primary' : 'default'}>{t(`storage.type.${row.type}`)}</Badge>
         </TableCell>
@@ -346,6 +398,9 @@ function FragmentRow({
             </div>
           </div>
         </TableCell>
+        <TableCell className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+          {row.diskAllocated > 0 ? formatBytes(row.diskAllocated) : '—'}
+        </TableCell>
         <TableCell className="text-[11px] text-muted-foreground">{row.content.join(', ') || '—'}</TableCell>
         <TableCell className="text-right text-xs">
           <span className="font-medium">{row.running + row.stopped}</span>
@@ -359,7 +414,9 @@ function FragmentRow({
       </TableRow>
       {open && (
         <tr className="bg-muted/30">
-          <td colSpan={isAll ? 9 : 8} className="px-6 py-2">
+          <td colSpan={10} className="px-6 py-3">
+            <DatastorePanels hist={hist} allocPct={row.total > 0 ? (row.diskAllocated / row.total) * 100 : null} />
+            <div className="mt-3">
             {row.vms.length === 0 ? (
               <div className="text-[11px] text-muted-foreground">{t('storage.noVms')}</div>
             ) : (
@@ -379,7 +436,7 @@ function FragmentRow({
                       <tr key={v.vmid}>
                         <TableCell className="text-xs font-medium">{v.name}</TableCell>
                         <TableCell className="text-xs tabular-nums text-muted-foreground">{v.vmid}</TableCell>
-                        <TableCell className="text-right font-mono text-[11px] text-muted-foreground">{formatBytes(v.diskBytes)}</TableCell>
+                        <TableCell className="text-right font-mono text-[11px] tabular-nums">{formatBytes(v.diskBytes)}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{v.node}</TableCell>
                         <TableCell>
                           <Badge tone={v.status === 'running' ? 'ok' : 'default'}>{t(`storage.vmstatus.${v.status === 'running' ? 'running' : 'stopped'}`)}</Badge>
@@ -402,9 +459,165 @@ function FragmentRow({
                 )}
               </>
             )}
+            </div>
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/** Couleur d'aire/ligne = sévérité de l'occupation courante (cohérent 🟢🟠🔴). */
+const SEV_COLOR: Record<Severity, string> = { ok: '#10b981', warn: '#f59e0b', crit: '#ef4444' };
+/** Ligne d'allocation : indigo pointillés (comme le graphe ressource du monitor). */
+const ALLOC_COLOR = '#6366f1';
+
+/**
+ * Panneaux du drill-down datastore — même style que les graphs « monitor »
+ * (resource-chart) : ligne colorée par sévérité de l'occupation courante, aire en
+ * dégradé, bandes de seuil discrètes, ligne d'allocation indigo pointillée
+ * (diskAllocated/total), occupation courante en haut à droite. + capacity planning
+ * (jours avant 90 %, pente). Vide tant que le poller n'a pas d'historique.
+ */
+function DatastorePanels({ hist, allocPct }: { hist: DatastoreHistoryEntry | undefined; allocPct: number | null }) {
+  const { t } = useTranslation();
+  const config = useOvercommitConfig();
+  const theme = useTheme((s) => s.theme);
+  const ct = chartTheme(theme);
+
+  // Occupation courante (dernier point) → sévérité → couleur de la ligne.
+  const current = hist && hist.points.length > 0 ? (hist.points[hist.points.length - 1].used / hist.points[hist.points.length - 1].total) * 100 : null;
+  const sev = current !== null ? usageSeverity(current, config) : 'ok';
+  const color = SEV_COLOR[sev];
+
+  const option = useMemo<EChartsOption | null>(() => {
+    if (!hist || hist.points.length === 0) return null;
+    const data = hist.points.map((p) => [p.time * 1000, Math.round((p.used / p.total) * 1000) / 10]);
+    const proj = hist.forecast.projection.map((p) => [p.time * 1000, p.value]);
+    const { warnPct, critPct } = config.usage;
+    const series: LineSeriesOption[] = [
+      {
+        name: t('storage.drilldown.occupancy'),
+        type: 'line',
+        smooth: true,
+        symbol: 'none',
+        data,
+        lineStyle: { width: 2, color },
+        itemStyle: { color },
+        areaStyle: {
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: `${color}55` },
+              { offset: 1, color: `${color}00` },
+            ],
+          },
+        },
+        // bandes de seuils d'usage — fond très discret (style monitor)
+        markArea: {
+          silent: true,
+          data: [
+            [{ yAxis: 0, itemStyle: { color: '#10b981', opacity: 0.05 } }, { yAxis: warnPct }],
+            [{ yAxis: warnPct, itemStyle: { color: '#f59e0b', opacity: 0.07 } }, { yAxis: critPct }],
+            [{ yAxis: critPct, itemStyle: { color: '#ef4444', opacity: 0.08 } }, { yAxis: 100 }],
+          ],
+        },
+        // ligne d'allocation (indigo pointillés) — % du datastore engagé par les disques VMs
+        markLine:
+          allocPct !== null
+            ? {
+                silent: true,
+                symbol: 'none',
+                lineStyle: { type: 'dashed', color: ALLOC_COLOR, width: 1.5 },
+                label: { formatter: `${t('res.alloc')} ${Math.round(allocPct)} %`, color: ALLOC_COLOR, fontSize: 10, position: 'insideEndTop' },
+                data: [{ yAxis: Math.min(allocPct, 99) }],
+              }
+            : undefined,
+      },
+      {
+        name: t('capacity.projection'),
+        type: 'line',
+        smooth: true,
+        symbol: 'none',
+        data: proj,
+        lineStyle: { width: 2, type: 'dashed', color, opacity: 0.6 },
+        itemStyle: { color },
+      },
+    ];
+    return {
+      animation: false,
+      grid: { top: 24, right: 16, bottom: 20, left: 36 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: ct.tooltipBg,
+        borderColor: ct.tooltipBorder,
+        textStyle: { color: ct.tooltipText, fontSize: 11 },
+        axisPointer: { type: 'line', lineStyle: { color: ct.axisLine } },
+        valueFormatter: (v) => (typeof v === 'number' ? `${v.toFixed(1)} %` : String(v)),
+      },
+      legend: { top: 0, textStyle: { color: ct.legend, fontSize: 11 } },
+      xAxis: {
+        type: 'time',
+        axisLine: { lineStyle: { color: ct.axisLine } },
+        axisTick: { show: false },
+        axisLabel: { color: ct.axisLabel, fontSize: 10 },
+      },
+      yAxis: {
+        type: 'value',
+        min: 0,
+        max: 100,
+        axisLabel: { color: ct.axisLabel, fontSize: 10, formatter: '{value} %' },
+        splitLine: { lineStyle: { color: ct.splitLine } },
+      },
+      series,
+    };
+  }, [hist, allocPct, color, ct, t, config]);
+
+  const ref = useEChart(option);
+  const fc = hist?.forecast;
+
+  return (
+    <div className="grid gap-3 lg:grid-cols-[1fr_220px]">
+      <div className="rounded-lg border bg-card p-2">
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-xs font-semibold">{t('storage.drilldown.occupancy')}</span>
+          {current !== null && (
+            <span className={`text-sm font-semibold tabular-nums ${sev === 'crit' ? 'text-crit' : sev === 'warn' ? 'text-warn' : 'text-ok'}`}>
+              {current.toFixed(0)} %
+            </span>
+          )}
+        </div>
+        {!option ? (
+          <div className="flex h-32 items-center justify-center px-4 text-center text-[11px] text-muted-foreground">
+            {t('storage.drilldown.noData')}
+          </div>
+        ) : (
+          <div ref={ref} className="h-32 w-full" />
+        )}
+      </div>
+      <div className="rounded-lg border bg-card p-2">
+        <div className="mb-1 text-xs font-semibold">{t('storage.drilldown.capacity')}</div>
+        {!fc ? (
+          <div className="text-[11px] text-muted-foreground">—</div>
+        ) : (
+          <div className="space-y-1.5 text-[11px]">
+            {fc.insufficientData ? (
+              <Badge tone="default">{t('storage.drilldown.insufficient')}</Badge>
+            ) : fc.daysTo90 !== null ? (
+              <Badge tone={fc.daysTo90 < 30 ? 'crit' : fc.daysTo90 < 90 ? 'warn' : 'ok'}>
+                {t('capacity.daysTo90', { days: fc.daysTo90 })}
+              </Badge>
+            ) : (
+              <Badge tone="ok">{t('capacity.stable')}</Badge>
+            )}
+            <div className="text-muted-foreground">
+              {fc.insufficientData
+                ? '—'
+                : `pente ${fc.slopePerDay >= 0 ? '+' : ''}${fc.slopePerDay.toFixed(2)} %/j`}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

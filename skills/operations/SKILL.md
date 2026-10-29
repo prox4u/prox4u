@@ -9,7 +9,7 @@ description: Runbook production de Prox4u — kit de déploiement autonome (depl
 
 ## 1. Architecture cible
 - Serveur applicatif (hors infra Proxmox) : `/opt/prox4u`, app Node.js sur **:8080** (HTTPS si `TLS_CERT` défini), user système `proxmox`.
-- N serveurs Proxmox VE : API PVE sur **:8006** (sortant depuis le serveur applicatif). Token lecture seule `manager@pve` (rôle `ManagerReader`).
+- N serveurs Proxmox VE : API PVE sur **:8006** (sortant depuis le serveur applicatif). Token lecture seule `manager@pve` (rôle `ManagerReader` — `DA.Read` + `*Audit`, **dont `VM.GuestAgent.Audit`** pour l'occupation disque réelle des VMs QEMU via l'agent invité `get-fsinfo`, un graphe par partition dans le Monitor).
 - **InfluxDB = service externe en prod** : l'app pointe dessus via `.env` (`INFLUX_URL`, `INFLUX_TOKEN`, `INFLUX_CA_CERT`). **Ne pas déployer/pousser InfluxDB avec l'app.** Le `docker-compose.yml` à la racine (influxdb + explorer) est du dev local uniquement.
 - Réseau : sortant TCP 8006 vers chaque PVE · entrant TCP 8080 depuis les postes utilisateurs.
 
@@ -66,6 +66,9 @@ Conteneurs Docker éventuels : `restart: unless-stopped`.
 - **Certificat refusé par le navigateur** : SAN manquant → régénérer avec `TLS_SAN_EXTRA="IP:<ip>" ./40-tls-init.sh` (les utilisateurs arrivent via l'IP/hostname, pas `localhost`).
 - **Erreur d'auth PVE à chaque tick** : token révoqué/expiré → rotation (§6) ; re-tester avec l'auto-test de `10-proxmox-token.sh`.
 - **Courbe disque vide / null** : `storage_metrics` sans série encore (s'accumule depuis le 1er tick) ; bucket sans série → `null` (gap ECharts), ce n'est pas une erreur.
+- **Graphe « Occupation disque » vide (VMs QEMU)** : l'agent invité ne répond pas (VM arrêtée, `qemu-guest-agent` non installé, ou PVE sans l'endpoint). C'est attendu — le graphe « démarre plus tard », pas d'erreur. Vérifier `agent/get-fsinfo` à la main avec le token.
+- **Inventaire vide (0 VM) alors que les VMs sont up** : le token a perdu `VM.Audit` → `/cluster/resources` ne liste plus les VMs. Cause typique : `pveum acl modify /vms --user <u> --role <R>` avec un `<R>` sans `VM.Audit` **remplace** le rôle de lecture. Correction : `pveum role modify <R> --privs "VM.Audit,VM.GuestAgent.Audit,VM.GuestAgent.Unrestricted"` (ou `pveum acl add`, qui ajoute sans remplacer).
+- **Contrainte PVE 9.1.1** : les endpoints REST agent `agent/fs-info` (« not implemented ») et `agent/exec` (HTTP 596 « Broken pipe ») sont cassés sur cette build — seul **`agent/get-fsinfo`** fonctionne (c'est celui que l'app utilise). Sur une version où `agent/exec` marche, rien ne change côté app.
 - **Tuer un processus** : tuer par PID extrait de `ss -tlnp` — un pattern `pkill -f node` matche sa propre ligne.
 
 ## 8. Variables d'environnement clés (`.env`, gitignoré)

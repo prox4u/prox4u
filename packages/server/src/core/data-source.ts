@@ -1,4 +1,5 @@
 import type {
+  AgentFsUsage,
   NodeBridge,
   NodeNic,
   PveNodeStatus,
@@ -57,6 +58,14 @@ export interface DataSource {
 
   /** interfaces d'un conteneur LXC (PVE ≥ 9, netns lu côté hôte — fonctionne avec ip=manual) — [] si arrêté */
   getLxcInterfaces(node: string, vmid: number): Promise<VmAgentNetIf[]>;
+
+  /**
+   * usage disque RÉEL PAR FILESYSTEM d'une VM QEMU via l'agent invité (get-fsinfo,
+   * fs sur disques VM). Une entrée par point de montage / partition. `null` si VM arrêtée
+   * / agent absent / PVE sans l'endpoint ; `[]` si agent vivant mais aucun fs sur disque VM.
+   * Source fiable d'usage disque par VM QEMU (le RRD `disk` vaut 0, `maxdisk` n'est que l'allocation).
+   */
+  getAgentFsUsage(node: string, vmid: number): Promise<AgentFsUsage[] | null>;
 
   /** réseau des nœuds (NICs + ponts) — topologie auto-découverte */
   getNetwork(): Promise<NodeNetwork[]>;

@@ -130,20 +130,17 @@ export function ipInSubnet(ip: string, subnet: string): boolean {
 }
 
 /**
- * Segments « réseau interne Proxmox (gestion) » : les (pont, VLAN natif) portant
- * l'IP de gestion d'au moins un nœud — celle par laquelle on atteint l'API PVE.
- * L'API PVE n'a pas de flag interne/externe : on l'infère ici. En pratique c'est
- * le vmbr0 natif ; tout le reste (VLAN, stockage, autres ponts) est « externe ».
+ * Segments « réseau interne Proxmox » : les (pont, VLAN natif) SANS port physique —
+ * un pont non branché sur aucune NIC (ex. le bridge « nfs ») est un réseau interne,
+ * invisible depuis le monde extérieur. Un pont branché sur une NIC physique est le
+ * réseau externe/production (y compris le pont de gestion, qui est sur le câble).
+ * L'API PVE n'a pas de flag interne/externe : on l'infère ici depuis l'absence de ports.
  */
-export function managementSegments(topo: NetworkTopology): Set<string> {
+export function internalNetworkSegments(topo: NetworkTopology): Set<string> {
   const keys = new Set<string>();
   for (const node of topo.nodes) {
-    if (!node.ip) continue;
     for (const b of node.bridges) {
-      if (b.subnet && ipInSubnet(node.ip, b.subnet)) {
-        keys.add(segmentKey(b.name, null));
-        break;
-      }
+      if (b.ports.length === 0) keys.add(segmentKey(b.name, null));
     }
   }
   return keys;

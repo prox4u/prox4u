@@ -1,4 +1,4 @@
-import type { ParsedVmNet, PveNodeStatus, PvePool, PveStorage, PveVmResource, PveVmSnapshot, RrddataPoint, VmAgentNetIf } from '@prox4u/shared';
+import type { AgentFsUsage, ParsedVmNet, PveNodeStatus, PvePool, PveStorage, PveVmResource, PveVmSnapshot, RrddataPoint, VmAgentNetIf } from '@prox4u/shared';
 import type { DataSource, NodeNetwork, Timeframe, VmConfigInfo } from './data-source.js';
 
 const GB = 1024 ** 3;
@@ -329,6 +329,25 @@ export class MockSource implements DataSource {
 
   async getLxcInterfaces(node: string, vmid: number): Promise<VmAgentNetIf[]> {
     return this.mockLiveNets(node, vmid, 'lxc');
+  }
+
+  /** Mock : usage disque simulé PAR FILESYSTEM (une fraction déterministe de l'allocation) si la VM est running. */
+  async getAgentFsUsage(node: string, vmid: number): Promise<AgentFsUsage[] | null> {
+    const v = this.vms.find((x) => x.node === node && x.vmid === vmid);
+    // même règle que getResources : running si le nœud est online (pas de tirage aléatoire ici, déterminisme)
+    if (!v || v.type !== 'qemu' || node === PROFILES[this.scenario].offline) return null;
+    // même allocation que getResources (maxdisk = maxmem * 4)
+    const total = v.maxmem * 4;
+    if (total <= 0) return null;
+    // fraction déterministe (55–85 %) selon le vmid — usage simulé mais stable
+    const frac = 0.55 + ((vmid * 7) % 30) / 100;
+    // deux partitions simulées : `/` (sda1, 20 % de l'allocation) + `/data` (sda2, 80 %)
+    const rootTotal = Math.round(total * 0.2);
+    const dataTotal = total - rootTotal;
+    return [
+      { mountpoint: '/', dev: 'sda1', usedBytes: Math.round(rootTotal * frac), totalBytes: rootTotal },
+      { mountpoint: '/data', dev: 'sda2', usedBytes: Math.round(dataTotal * frac), totalBytes: dataTotal },
+    ];
   }
 
   /** Déterministe : même MAC que la config net0 (mockMac) + IP identique à getResources. */

@@ -38,6 +38,8 @@ export interface PveVmResource {
   pool?: string | null;
   /** Datastore sur lequel repose le disque de la VM (champ `storage` de /cluster/resources). */
   storage?: string;
+  /** Tous les disques de la VM (datastore + taille allouée) — joints depuis la config. Une VM peut en avoir plusieurs, sur des datastores différents. */
+  disks?: VmDisk[];
   /** Adresses IP détectées par PVE (`ipaddresses` — guest agent / ARP) — absentes si non rapportées. */
   ipAddresses?: string[];
 }
@@ -413,6 +415,14 @@ export interface PveVmSnapshot {
 }
 
 /** Configuration d'une VM (GET /nodes/{n}/{type}/{vmid}/config, parsé) — cache 1 h côté serveur. */
+/** Disque d'une VM (un volume de la config) : datastore + taille allouée. */
+export interface VmDisk {
+  /** nom du datastore qui héberge le disque (parse du préfixe « storage:volume »). */
+  storage: string;
+  /** taille allouée du disque (config `size=`), en octets. */
+  sizeBytes: number;
+}
+
 export interface VmConfigInfo {
   /** cœurs alloués */
   cpuAlloc: number;
@@ -423,6 +433,8 @@ export interface VmConfigInfo {
   nets: ParsedVmNet[];
   /** datastore du disque principal (parse de la config) — absent de /cluster/resources sur PVE 9. */
   diskStorage?: string;
+  /** tous les disques de la VM (un par volume non-ISO de la config) — une VM peut en avoir plusieurs, sur des datastores différents. */
+  disks?: VmDisk[];
 }
 
 /** Détail d'une VM (GET /api/vm-config?endpoint=&vmid=) : live + config + snapshots. */
@@ -453,6 +465,10 @@ export interface VmMetricsPoint {
   netInBps: number | null;
   /** réseau sortant, bits/s (unité PVE) */
   netOutBps: number | null;
+  /** espace disque utilisé par la VM, en octets. QEMU : via l'agent guest (get-fsinfo, fs sur disques VM). LXC : champ `disk` de /cluster/resources (rootfs). null si agent indisponible / VM trop récente. */
+  diskBytes: number | null;
+  /** espace disque alloué à la VM, en octets (champ `maxdisk`). */
+  diskAllocBytes: number | null;
 }
 
 /** Métriques historiques d'une VM (GET /api/vm-metrics?endpoint=&vmid=&timeframe=). */
@@ -461,6 +477,45 @@ export interface VmMetricsResponse {
   vmid: number;
   points: VmMetricsPoint[];
   /** 'influx' = données réelles · 'insufficientData' = pas de série (InfluxDB indisponible, VM arrêtée ou trop récente) */
+  source: 'influx' | 'insufficientData';
+}
+
+/** Usage disque d'un filesystem de VM (agent invité get-fsinfo, fs rattaché à un disque VM). */
+export interface AgentFsUsage {
+  /** point de montage (ex. `/`, `/NFS`) */
+  mountpoint: string;
+  /** nom du périphérique / partition (ex. `sda1`, `sda6`) */
+  dev: string;
+  usedBytes: number;
+  totalBytes: number;
+}
+
+/** Point d'occupation d'un filesystem de VM (GET /api/vm-fs) — InfluxDB vm_fs. */
+export interface VmFsPoint {
+  /** unix seconds */
+  time: number;
+  /** espace utilisé, octets */
+  usedBytes: number | null;
+  /** espace alloué (taille du fs), octets */
+  totalBytes: number | null;
+}
+
+/** Série d'occupation d'UN filesystem de la VM (un par point de montage / partition). */
+export interface VmFsSeries {
+  /** point de montage (ex. `/`, `/NFS`) */
+  mountpoint: string;
+  /** nom du périphérique / partition (ex. `sda1`, `sda6`) */
+  dev: string;
+  points: VmFsPoint[];
+}
+
+/** Occupation disque PAR PARTITION d'une VM (GET /api/vm-fs?endpoint=&vmid=&timeframe=). */
+export interface VmFsResponse {
+  timeframe: MetricsTimeframe;
+  vmid: number;
+  /** une série par filesystem (point de montage) de la VM */
+  series: VmFsSeries[];
+  /** 'influx' = données réelles · 'insufficientData' = pas de série (InfluxDB indisponible, VM arrêtée, agent absent) */
   source: 'influx' | 'insufficientData';
 }
 

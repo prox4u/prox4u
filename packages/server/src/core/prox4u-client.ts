@@ -2,6 +2,7 @@ import { Agent, fetch } from 'undici';
 import {
   parseVmNets,
   subnetOf,
+  type AgentFsUsage,
   type NodeBridge,
   type NodeNic,
   type PveNodeStatus,
@@ -11,6 +12,7 @@ import {
   type PveVmSnapshot,
   type RrddataPoint,
   type VmAgentNetIf,
+  type VmDisk,
 } from '@prox4u/shared';
 import type { EndpointConfig } from './config.js';
 import type { DataSource, NodeNetwork, Timeframe, VmConfigInfo } from './data-source.js';
@@ -27,6 +29,8 @@ export class PveError extends Error {
 
 const CONFIG_TTL_MS = 60 * 60 * 1000;
 const AGENT_NETS_TTL_MS = 60 * 1000;
+/** Borne d'attente de l'agent invité pour l'usage disque (get-fsinfo) — appel posé sur le chemin du poller. */
+const AGENT_DISK_USAGE_TIMEOUT_MS = 8000;
 
 interface RawVm {
   vmid: number;
@@ -56,6 +60,17 @@ interface RawAgentNet {
   name?: string;
   'hardware-address'?: string | null;
   'ip-addresses'?: Array<{ 'ip-address': string; prefix?: number }> | null;
+}
+
+/** Filesystem brut du guest agent (GET .../agent/get-fsinfo). `disk` vide = fs non rattaché à un disque VM. */
+interface RawAgentFs {
+  mountpoint?: string;
+  name?: string;
+  type?: string;
+  'used-bytes'?: number;
+  'total-bytes'?: number;
+  'total-bytes-privileged'?: number;
+  disk?: unknown[];
 }
 
 /** IP du guest ignorées dans l'inventaire : loopback et link-local. */
@@ -99,10 +114,16 @@ export class Prox4uClient implements DataSource {
     this.agent = new Agent({ connect: { rejectUnauthorized: tlsRejectUnauthorized } });
   }
 
-  private async get<T>(path: string): Promise<T> {
+  /**
+   * GET PVE. `timeoutMs` borne l'appel (AbortSignal) — indispensable pour les appels
+   * agent (get-fsinfo) posés sur le chemin critique du poller : un agent lent ne doit
+   * jamais bloquer le tick (garde `ticking` → tous les ticks suivants seraient sautés).
+   */
+  private async get<T>(path: string, timeoutMs?: number): Promise<T> {
     const res = await fetch(`${this.ep.url}/api2/json${path}`, {
       headers: { Authorization: `PVEAPIToken=${this.ep.tokenHeader}` },
       dispatcher: this.agent,
+      ...(timeoutMs != null ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -194,6 +215,8 @@ export class Prox4uClient implements DataSource {
         // PVE 9 : le champ `storage` de /cluster/resources est absent → on le
         // dérive du disque principal de la config (cache 1 h).
         if (!v.storage && cached.value.diskStorage) v.storage = cached.value.diskStorage;
+        // Disques (datastore + taille allouée) — joints depuis la config.
+        if (cached.value.disks) v.disks = cached.value.disks;
       }
     }
     return vms;
@@ -208,8 +231,10 @@ export class Prox4uClient implements DataSource {
       .map((n) => n.name ?? n.node)
       .filter((n): n is string => !!n);
 
-    // Capacités lvmthin par nœud : vg/lv -> {used, total}
+    // Capacités par nœud : lvmthin (vg/lv), lvm (arbo /disks/lvm), rootfs (dir).
+    // L'iscsi se déduit du VG lvm qui repose sur le LUN (champ `base` du datastore lvm).
     const thinCaps = new Map<string, { used: number; total: number }>();
+    const vgCaps = new Map<string, { used: number; total: number }>();
     const rootfsByNode = new Map<string, { used: number; total: number }>();
     await Promise.all(
       nodeNames.map(async (nodeName) => {
@@ -220,6 +245,17 @@ export class Prox4uClient implements DataSource {
           for (const t of thins) thinCaps.set(`${t.vg}/${t.lv}`, { used: t.used, total: t.lv_size });
         } catch {
           // nœud sans endpoint disks (ou hors ligne) : on ignore
+        }
+        try {
+          // Arbo VG : chaque enfant de niveau 1 est un VG {name, size, free}
+          const lvmTree = await this.get<{ children?: Array<{ name?: string; size?: number; free?: number }> }>(
+            `/nodes/${nodeName}/disks/lvm`,
+          );
+          for (const vg of lvmTree.children ?? []) {
+            if (vg.name && num(vg.size)) vgCaps.set(vg.name, { used: num(vg.size)! - (num(vg.free) ?? 0), total: num(vg.size)! });
+          }
+        } catch {
+          // ignoré
         }
         try {
           const s = await this.get<Record<string, unknown>>(`/nodes/${nodeName}/status`);
@@ -237,6 +273,21 @@ export class Prox4uClient implements DataSource {
       let total: number | null = num(s.total);
       if (s.type === 'lvmthin' && s.vgname && s.thinpool) {
         const cap = thinCaps.get(`${s.vgname}/${s.thinpool}`);
+        if (cap) {
+          used = cap.used;
+          total = cap.total;
+        }
+      } else if (s.type === 'lvm' && s.vgname) {
+        const cap = vgCaps.get(s.vgname);
+        if (cap) {
+          used = cap.used;
+          total = cap.total;
+        }
+      } else if (s.type === 'iscsi') {
+        // Pas d'endpoint de capacité iSCSI (/disks/iscsi = 501 sur PVE 9.2) :
+        // la taille du LUN est déduite du VG lvm qui repose dessus (son `base` = « {iscsi}:… »)
+        const hostVg = storages.find((o) => o.type === 'lvm' && o.base?.startsWith(`${s.storage}:`));
+        const cap = hostVg?.vgname ? vgCaps.get(hostVg.vgname) : undefined;
         if (cap) {
           used = cap.used;
           total = cap.total;
@@ -322,6 +373,7 @@ export class Prox4uClient implements DataSource {
         pool: str(c.pool) ?? null,
         nets: parseVmNets(type, c),
         diskStorage: diskStorageOf(c, type),
+        disks: disksOf(c, type),
       };
     } catch {
       return null;
@@ -393,6 +445,42 @@ export class Prox4uClient implements DataSource {
     }
   }
 
+  /**
+   * Usage disque RÉEL PAR FILESYSTEM d'une VM QEMU via l'agent invité —
+   * GET /nodes/{n}/qemu/{vmid}/agent/get-fsinfo. Ne nécessite que `VM.GuestAgent.Audit`
+   * (pas Unrestricted). Ne renvoie que les filesystems rattachés à un disque VM (champ
+   * `disk` non vide) — exclut /snap (squashfs), tmpfs, et les vrais montages réseau
+   * (NFS/CIFS n'ont pas de champ `disk`). `null` si VM arrêtée, agent absent, ou PVE sans
+   * l'endpoint ; `[]` si agent vivant mais aucun fs sur disque VM. C'est la seule source
+   * d'usage disque fiable par VM QEMU (le RRD `disk` vaut 0, `maxdisk` n'est que l'allocation).
+   */
+  async getAgentFsUsage(node: string, vmid: number): Promise<AgentFsUsage[] | null> {
+    try {
+      // timeout : l'agent est interrogé sur le chemin du poller — un guest lent doit
+      // faire renoncer l'appel (null), pas bloquer le tick.
+      const raw = await this.get<{ result?: RawAgentFs[] } | RawAgentFs[]>(
+        `/nodes/${node}/qemu/${vmid}/agent/get-fsinfo`,
+        AGENT_DISK_USAGE_TIMEOUT_MS,
+      );
+      const rows = Array.isArray(raw) ? raw : (raw?.result ?? []);
+      const out: AgentFsUsage[] = [];
+      for (const r of rows) {
+        if (!r.disk || r.disk.length === 0) continue; // ne garder que les fs sur un disque VM
+        const total = r['total-bytes'] ?? r['total-bytes-privileged'] ?? 0;
+        if (total <= 0) continue;
+        out.push({
+          mountpoint: r.mountpoint ?? '/',
+          dev: r.name ?? '',
+          usedBytes: r['used-bytes'] ?? 0,
+          totalBytes: total,
+        });
+      }
+      return out;
+    } catch {
+      return null;
+    }
+  }
+
   async getRrddata(
     kind: 'node' | 'vm',
     node: string,
@@ -414,7 +502,18 @@ export class Prox4uClient implements DataSource {
         netin: num(p.netin),
         netout: num(p.netout),
       }))
-      .filter((p) => p.cpu !== null || p.mem !== null);
+      // Un point est conservé s'il porte AU MOINS une métrique. Pour une VM
+      // arrêtée, cpu/mem sont null mais disk garde des valeurs historiques —
+      // il ne faut pas les jeter (sinon l'historique disque des VMs arrêtées
+      // est vide, d'où « historique insuffisant » sur les datastores iSCSI).
+      .filter(
+        (p) =>
+          p.cpu !== null ||
+          p.mem !== null ||
+          p.disk !== null ||
+          p.netin !== null ||
+          p.netout !== null,
+      );
   }
 }
 
@@ -429,6 +528,8 @@ interface RawStorage {
   thinpool?: string;
   /** Nœuds exposant le datastore (chaîne espace-séparée, ex. « pve1 pve2 »). */
   nodes?: string | null;
+  /** Datastore parent (ex. un lvm sur un LUN iSCSI : « baie-iscsi:0.0.0.scsi-… »). */
+  base?: string | null;
 }
 
 /** Entrée brute de GET /nodes/{n}/network (seuls les champs utilisés). */
@@ -517,6 +618,40 @@ function firstDiskVolume(c: Record<string, unknown>): string | undefined {
     if (v) return v;
   }
   return undefined;
+}
+
+/**
+ * Tous les disques d'une VM (un par volume non-ISO de la config). Une VM peut en
+ * avoir plusieurs, sur des datastores différents (ex. scsi0 sur « rapide », scsi1
+ * sur « local »). LXC : le rootfs seul. Renvoie le datastore + la taille allouée
+ * (`size=`) de chaque disque.
+ */
+export function disksOf(c: Record<string, unknown>, type: 'qemu' | 'lxc'): VmDisk[] {
+  const disks: VmDisk[] = [];
+  const add = (vol: string | undefined) => {
+    if (!vol) return;
+    const head = vol.split(',')[0];
+    const m = head.match(/^([A-Za-z0-9._-]+):?\/?/);
+    if (!m) return;
+    if (head.includes('/iso/') || /\.iso$/i.test(head)) return; // ISO / cdrom exclus
+    const sizeM = vol.match(/size=([\d.]+)([KMGTP]?)/i);
+    disks.push({ storage: m[1], sizeBytes: sizeM ? parseSize(sizeM[1], sizeM[2]) : 0 });
+  };
+  if (type === 'lxc') {
+    add(str(c.rootfs));
+  } else {
+    for (const k of Object.keys(c)) {
+      if (/^(scsi|virtio|sata|ide|efidisk)\d+$/.test(k)) add(str(c[k]));
+    }
+  }
+  return disks;
+}
+
+/** Taille « 1500G » / « 3325654K » / « 4M » → octets. */
+function parseSize(v: string, unit: string): number {
+  const n = parseFloat(v);
+  const mult: Record<string, number> = { '': 1, b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3, t: 1024 ** 4, p: 1024 ** 5 };
+  return Math.round(n * (mult[(unit ?? '').toLowerCase()] ?? 1));
 }
 
 function friendlyOs(os?: string): string {

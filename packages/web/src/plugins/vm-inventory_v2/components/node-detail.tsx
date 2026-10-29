@@ -128,9 +128,7 @@ export function NodeDetail({ endpointId, endpointName, node, vms, onClose, onOpe
         )}
         <div className="text-xs text-muted-foreground">
           {node.ip && <span>{node.ip}</span>}
-          {node.ip && node.version && <span> · </span>}
-          {node.version && <span>PVE {node.version}</span>}
-          {(node.ip || node.version) && node.uptimeSec !== null && <span> · </span>}
+          {node.ip && node.uptimeSec !== null && <span> · </span>}
           {node.uptimeSec !== null && <span>{t('common.uptime')} {formatUptime(node.uptimeSec)}</span>}
         </div>
       </div>

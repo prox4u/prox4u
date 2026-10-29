@@ -22,7 +22,7 @@ import '@xyflow/react/dist/style.css';
 import { useTranslation } from 'react-i18next';
 import { Network, Server, Waypoints, Cpu, Shield } from 'lucide-react';
 import {
-  managementSegments,
+  internalNetworkSegments,
   segmentKey,
   type ImpactResult,
   type NetworkTopology,
@@ -75,6 +75,8 @@ const Y_SWITCH = 0;
 const Y_NODE = SW.h + 90;
 const Y_BRIDGE = Y_NODE + ND.h + 80;
 const Y_SEGMENT = Y_BRIDGE + BR.h + 70;
+/** Marge du conteneur « localnetwork » (réseau interne Proxmox) autour des ponts. */
+const ZONE_PAD = 16;
 
 /** Palette des réseaux (pont + sous-réseau + VLAN) — couleurs vives lisibles sur fond sombre. */
 const NET_PALETTE = [
@@ -125,8 +127,8 @@ function layout(t: NetworkTopology): { nodes: Node[]; edges: Edge[] } {
   const hasVlans = t.vlans.length > 0;
   const Y_VM = hasVlans ? Y_SEGMENT + SEG.h + 70 : Y_BRIDGE + BR.h + 80;
 
-  // Segments « réseau interne Proxmox (gestion) » — portés par l'IP de gestion d'un nœud.
-  const mgmt = managementSegments(t);
+  // Segments « réseau interne Proxmox » — ponts sans NIC physique (ex. bridge « nfs »).
+  const mgmt = internalNetworkSegments(t);
 
   const swByGroup = new Map<string, TopologySwitch>();
   for (const s of t.switches) swByGroup.set(`${s.bridgeName}\u0000${s.subnet ?? ''}`, s);
@@ -228,6 +230,23 @@ function layout(t: NetworkTopology): { nodes: Node[]; edges: Edge[] } {
 
   // --- Nœuds React Flow ---------------------------------------------------------
   const nodes: Node[] = [];
+  // Zone « localnetwork » (réseau interne Proxmox) — conteneur en arrière-plan qui
+  // englobe les ponts locaux et leurs VMs (ajouté en 1er → rendu derrière tout le reste).
+  if (lanes.length > 0) {
+    const zoneLeft = Math.min(...lanes.map((l) => l.x));
+    const zoneRight = Math.max(...lanes.map((l) => l.x + l.w));
+    const zoneTop = Y_BRIDGE - ZONE_PAD;
+    const zoneBottom = Y_VM + VM.h + ZONE_PAD;
+    nodes.push({
+      id: 'zone:localnetwork',
+      type: 'zone',
+      position: { x: zoneLeft - ZONE_PAD, y: zoneTop },
+      data: { labelKey: 'topo.zone.localnetwork', width: zoneRight - zoneLeft + 2 * ZONE_PAD, height: zoneBottom - zoneTop },
+      draggable: false,
+      selectable: false,
+      connectable: false,
+    });
+  }
   for (const s of t.switches) {
     const p = switchPos.get(s.id)!;
     nodes.push({ id: `sw:${s.id}`, type: 'switch', position: { x: p.x, y: p.y }, data: { kind: 'switch', switch: s } });
@@ -433,6 +452,27 @@ function FlowHandles() {
   );
 }
 
+/**
+ * Conteneur « localnetwork » (réseau interne Proxmox) : englobe les ponts locaux du
+ * nœud et leurs VMs — l'équivalent de la zone SDN « localnetwork » de la GUI PVE.
+ * Rendu en arrière-plan, non interactif, bordure pointillée distincte.
+ */
+function ZoneNode({ data }: NodeProps) {
+  const { t } = useTranslation();
+  const d = data as { labelKey: string; width: number; height: number };
+  return (
+    <div
+      style={{ width: d.width, height: d.height }}
+      className="pointer-events-none rounded-2xl border-2 border-dashed border-sky-400/40 bg-sky-400/[0.04]"
+    >
+      <div className="flex items-center gap-1.5 px-3 pt-2 text-[11px] font-semibold text-sky-300">
+        <Network className="h-3.5 w-3.5 shrink-0" />
+        {t(d.labelKey)}
+      </div>
+    </div>
+  );
+}
+
 function SwitchNode({ data }: NodeProps) {
   const { t } = useTranslation();
   const s = (data as { switch: TopologySwitch }).switch;
@@ -477,7 +517,7 @@ function BridgeNode({ data }: NodeProps) {
         {d.color && <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: d.color }} />}
         <Waypoints className="h-3 w-3 shrink-0 text-primary" />
         <span className="truncate">{b.name}</span>
-        {d.management && <Shield className="h-3 w-3 shrink-0 text-primary" aria-label="réseau de gestion Proxmox" />}
+        {d.management && <Shield className="h-3 w-3 shrink-0 text-primary" aria-label="réseau interne Proxmox (sans NIC physique)" />}
       </div>
       <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
         {b.ip ?? b.subnet ?? 'sans IP'}
@@ -498,7 +538,7 @@ function SegmentNode({ data }: NodeProps) {
       <FlowHandles />
       {d.color && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: d.color }} />}
       {d.vlan === null ? t('topo.vlan.native') : `${t('topo.vlan.label')} ${d.vlan}`}
-      {d.management && <Shield className="h-3 w-3 shrink-0 text-primary" aria-label="réseau de gestion Proxmox" />}
+      {d.management && <Shield className="h-3 w-3 shrink-0 text-primary" aria-label="réseau interne Proxmox (sans NIC physique)" />}
     </div>
   );
 }
@@ -537,6 +577,7 @@ function VmNode({ data }: NodeProps) {
 }
 
 const nodeTypes = {
+  zone: ZoneNode,
   switch: SwitchNode,
   node: NodeServer,
   bridge: BridgeNode,

@@ -28,6 +28,6 @@ export interface NetworkTopologyResponse {
 
 export type { MetricsResponse, OvercommitRiskResponse };
 
-/** Réponse de GET /api/storage-inventory (tous les endpoints) — re-export depuis shared. */
-export type { StorageInventoryResponse } from '@prox4u/shared';
+/** Réponses de GET /api/storage-inventory et /api/storage-datastore-history — re-export depuis shared. */
+export type { StorageInventoryResponse, DatastoreHistoryResponse, DatastoreHistoryEntry } from '@prox4u/shared';
 export type { VmDetailResponse, VmMetricsResponse } from '@prox4u/shared';
