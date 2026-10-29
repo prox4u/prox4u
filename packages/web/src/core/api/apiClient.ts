@@ -54,7 +54,7 @@ export function fetchStorageDatastoreHistory(endpoint: string, range: 'year' | '
   return getJson<DatastoreHistoryResponse>(`/api/storage-datastore-history?endpoint=${encodeURIComponent(endpoint)}&range=${range}`);
 }
 
-/** Détail d'une VM (live + config + snapshots) — plugin vm-inventory. */
+/** Détail d'une VM (live + config + snapshots) — plugin vm-view. */
 export function fetchVmDetail(endpoint: string, vmid: number): Promise<VmDetailResponse> {
   return getJson<VmDetailResponse>(`/api/vm-config?endpoint=${encodeURIComponent(endpoint)}&vmid=${vmid}`);
 }

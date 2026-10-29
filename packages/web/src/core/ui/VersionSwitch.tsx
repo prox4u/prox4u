@@ -2,7 +2,7 @@ import type { ComponentType } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 export interface VersionRef {
-  /** id du plugin (ex. 'vm-inventory_v2'). */
+  /** id du plugin (ex. 'vm-view_v2'). */
   id: string;
   element: ComponentType;
 }

@@ -148,7 +148,7 @@ export const fr: Record<string, string> = {
 
   'nav.topology': 'Topologie réseau',
   'nav.storage': 'Stockage',
-  'nav.vmInventory': 'Vue VM',
+  'nav.vmView': 'Vue VM',
   'nav.proxmoxInventory': 'Inventaire Proxmox',
 
   'topo.title': 'Topologie réseau — auto-découverte',

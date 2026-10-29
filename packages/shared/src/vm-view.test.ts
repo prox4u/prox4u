@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { VmSummary } from './types';
-import { buildVmTree, DEFAULT_VM_FILTER, filterVmRows, sortVmRows } from './vm-inventory';
+import { buildVmTree, DEFAULT_VM_FILTER, filterVmRows, sortVmRows } from './vm-view';
 
 function vm(partial: Partial<VmSummary> & Pick<VmSummary, 'vmid' | 'name'>): VmSummary {
   return {

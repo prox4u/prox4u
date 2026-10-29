@@ -20,7 +20,7 @@ const VM_LEAF_RE = /^([^/]+)\/([^/]+)\/(\d+)$/;
  * détail plein écran (onglets Résumé / Configuration / Réseau / Snapshots) prend la place du
  * tableau. Les données sont live (snapshot WS 5 s) ; seul le détail d'une VM passe par le REST.
  */
-export function VmInventoryPage() {
+export function VmViewPage() {
   const { t } = useTranslation();
   const multi = useMulti();
   const endpoints = useMemo(() => multi?.endpoints ?? [], [multi]);
@@ -146,7 +146,7 @@ export function VmInventoryPage() {
         <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
           {t('vm.title')}
           {/* Badge de version : permet de distinguer les versions en comparaison A/B. */}
-          <VersionBadge pluginId="vm-inventory_v2" />
+          <VersionBadge pluginId="vm-view_v2" />
         </h1>
         <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">{t('vm.hint')}</p>
       </div>

@@ -38,7 +38,7 @@ describe('AuthStore', () => {
     const { verifyPassword } = await import('./password.js');
     expect(await verifyPassword(admin!.passwordHash!, 'proX4u')).toBe(true);
     // catalogue des familles de plugins, activé globalement par défaut
-    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-inventory', 'proxmox-inventory']);
+    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory']);
     expect(store.listModules().every((m) => m.globallyEnabled)).toBe(true);
   });
 
@@ -69,7 +69,7 @@ describe('AuthStore', () => {
     const store = new AuthStore(file, logger);
     await store.init(hashPassword);
     // les ids inconnus sont retirés, le catalogue Prox4u est restauré
-    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-inventory', 'proxmox-inventory']);
+    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory']);
     // les références aux modules retirés sont nettoyées
     expect(store.data.groupModules.some((gm) => gm.moduleId === 'supervision')).toBe(false);
     expect(store.data.userModules.some((um) => um.moduleId === 'dashboard')).toBe(false);
@@ -147,10 +147,10 @@ describe('AuthStore', () => {
   it('setUserModules : les ids de version (<famille>_vN) sont conservés', async () => {
     const store = await freshStore();
     const u = store.createUser({ username: 'dave', displayName: 'Dave', passwordHash: 'h', role: 'user', groupIds: [] });
-    store.setUserModules(u.id, ['vm-inventory', 'vm-inventory_v2', 'inexistant_v3']);
+    store.setUserModules(u.id, ['vm-view', 'vm-view_v2', 'inexistant_v3']);
     expect(store.data.userModules).toEqual([
-      { userId: u.id, moduleId: 'vm-inventory' },
-      { userId: u.id, moduleId: 'vm-inventory_v2' },
+      { userId: u.id, moduleId: 'vm-view' },
+      { userId: u.id, moduleId: 'vm-view_v2' },
     ]);
   });
 
@@ -164,10 +164,10 @@ describe('AuthStore', () => {
   it('syncModuleCatalog : crée les entrées manquantes en héritant de la famille', async () => {
     const store = await freshStore();
     // v1 OFF, v2 ON avant sync → l'entrée v2 créée hérite de l'état famille (OFF)
-    store.setModuleGlobal('vm-inventory', false);
-    expect(store.syncModuleCatalog(['vm-inventory', 'vm-inventory_v2', 'vm-inventory_v3'])).toBe(2);
-    const entries = store.listModules().filter((m) => m.id.startsWith('vm-inventory'));
-    expect(entries.map((m) => m.id)).toEqual(['vm-inventory', 'vm-inventory_v2', 'vm-inventory_v3']);
+    store.setModuleGlobal('vm-view', false);
+    expect(store.syncModuleCatalog(['vm-view', 'vm-view_v2', 'vm-view_v3'])).toBe(2);
+    const entries = store.listModules().filter((m) => m.id.startsWith('vm-view'));
+    expect(entries.map((m) => m.id)).toEqual(['vm-view', 'vm-view_v2', 'vm-view_v3']);
     for (const m of entries) {
       expect(m.globallyEnabled).toBe(false);
       expect(m.name).toBe('Vue VM');
@@ -176,36 +176,36 @@ describe('AuthStore', () => {
 
   it('syncModuleCatalog : idempotent, tolère les ids invalides et familles inconnues', async () => {
     const store = await freshStore();
-    expect(store.syncModuleCatalog(['vm-inventory_v2'])).toBe(1);
+    expect(store.syncModuleCatalog(['vm-view_v2'])).toBe(1);
     // 2e appel : rien à créer ; ids invalides / famille inconnue ignorés
-    expect(store.syncModuleCatalog(['vm-inventory_v2', 'invalide!', 'unknown-module_v2', 'vm-inventory_v2'])).toBe(0);
+    expect(store.syncModuleCatalog(['vm-view_v2', 'invalide!', 'unknown-module_v2', 'vm-view_v2'])).toBe(0);
     expect(store.listModules().map((m) => m.id).sort()).toEqual([
       'hypervision',
       'network',
       'proxmox-inventory',
       'storage',
-      'vm-inventory',
-      'vm-inventory_v2',
+      'vm-view',
+      'vm-view_v2',
     ]);
   });
 
   it('syncModuleCatalog : les états par version sont indépendants après sync', async () => {
     const store = await freshStore();
-    expect(store.syncModuleCatalog(['vm-inventory_v2'])).toBe(1);
+    expect(store.syncModuleCatalog(['vm-view_v2'])).toBe(1);
     // v1 OFF ne doit PAS toucher v2 (et réciproque)
-    store.setModuleGlobal('vm-inventory', false);
-    expect(store.listModules().find((m) => m.id === 'vm-inventory')!.globallyEnabled).toBe(false);
-    expect(store.listModules().find((m) => m.id === 'vm-inventory_v2')!.globallyEnabled).toBe(true);
-    store.setModuleGlobal('vm-inventory_v2', false);
-    expect(store.listModules().find((m) => m.id === 'vm-inventory')!.globallyEnabled).toBe(false);
-    expect(store.listModules().find((m) => m.id === 'vm-inventory_v2')!.globallyEnabled).toBe(false);
+    store.setModuleGlobal('vm-view', false);
+    expect(store.listModules().find((m) => m.id === 'vm-view')!.globallyEnabled).toBe(false);
+    expect(store.listModules().find((m) => m.id === 'vm-view_v2')!.globallyEnabled).toBe(true);
+    store.setModuleGlobal('vm-view_v2', false);
+    expect(store.listModules().find((m) => m.id === 'vm-view')!.globallyEnabled).toBe(false);
+    expect(store.listModules().find((m) => m.id === 'vm-view_v2')!.globallyEnabled).toBe(false);
   });
 
   it('réconciliation au chargement : conserve les entrées de version et préférences _vN', async () => {
     const store = await freshStore();
-    expect(store.syncModuleCatalog(['vm-inventory_v2'])).toBe(1);
+    expect(store.syncModuleCatalog(['vm-view_v2'])).toBe(1);
     const u = store.createUser({ username: 'erin', displayName: 'Erin', passwordHash: 'h', role: 'user', groupIds: [] });
-    store.setUserModules(u.id, ['vm-inventory', 'vm-inventory_v2']);
+    store.setUserModules(u.id, ['vm-view', 'vm-view_v2']);
     // Redémarrage simulé : la réconciliation ne doit rien retirer
     const store2 = new AuthStore(file, logger);
     await store2.init(hashPassword);
@@ -213,11 +213,11 @@ describe('AuthStore', () => {
       'hypervision',
       'network',
       'storage',
-      'vm-inventory',
+      'vm-view',
       'proxmox-inventory',
-      'vm-inventory_v2',
+      'vm-view_v2',
     ]);
-    expect(store2.data.userModules).toContainEqual({ userId: u.id, moduleId: 'vm-inventory_v2' });
+    expect(store2.data.userModules).toContainEqual({ userId: u.id, moduleId: 'vm-view_v2' });
   });
 
 });

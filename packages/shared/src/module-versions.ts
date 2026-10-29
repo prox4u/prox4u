@@ -2,12 +2,12 @@
  * Versionnement des modules (plugins) — fonctions pures (testées).
  *
  * Convention : toute modification d'un module existant crée un NOUVEAU plugin
- * `<id>_vN+1` (ex. `vm-inventory` → `vm-inventory_v2`). On ne modifie jamais
+ * `<id>_vN+1` (ex. `vm-view` → `vm-view_v2`). On ne modifie jamais
  * une version en place ; la v1 reste disponible en rollback. TOUTES les
  * versions sont exposées (menu, profil, ?v=<id>) ; la plus récente sert de
  * version canonique par défaut sur l'URL partagée de la famille.
  *
- * - famille : id du plugin sans le suffixe `_vN` (`vm-inventory_v2` → `vm-inventory`)
+ * - famille : id du plugin sans le suffixe `_vN` (`vm-view_v2` → `vm-view`)
  * - version : N du suffixe, ou 1 pour l'id de base
  */
 

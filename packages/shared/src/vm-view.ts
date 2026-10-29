@@ -1,23 +1,23 @@
 import type { VmSummary } from './types';
 
 /**
- * Vue des VMs (plugin vm-inventory) — groupement/filtrage/tri purs,
+ * Vue des VMs (plugin vm-view) — groupement/filtrage/tri purs,
  * même pattern que storage-inventory / network-inventory.
  */
 
-export interface VmInventoryFilter {
+export interface VmViewFilter {
   node: string | 'all';
   status: 'all' | 'running' | 'stopped' | 'paused' | 'unknown';
   type: 'all' | 'qemu' | 'lxc';
 }
 
-export const DEFAULT_VM_FILTER: VmInventoryFilter = { node: 'all', status: 'all', type: 'all' };
+export const DEFAULT_VM_FILTER: VmViewFilter = { node: 'all', status: 'all', type: 'all' };
 
 export type VmSortKey = 'name' | 'vmid' | 'node' | 'type' | 'status' | 'cpuPct' | 'memBytes' | 'diskBytes';
 export type VmSortDir = 'asc' | 'desc';
 
 /** Recherche textuelle (nom ou vmid, insensible à la casse) + filtres nœud/statut/type. */
-export function filterVmRows(vms: VmSummary[], query: string, filter: VmInventoryFilter): VmSummary[] {
+export function filterVmRows(vms: VmSummary[], query: string, filter: VmViewFilter): VmSummary[] {
   const q = query.trim().toLowerCase();
   return vms.filter((v) => {
     if (filter.node !== 'all' && v.node !== filter.node) return false;

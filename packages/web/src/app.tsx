@@ -75,7 +75,7 @@ export default function App() {
             )}
             {!FEATURES.USE_PLUGIN_NETWORK && <Route path="/topology" element={<ModuleDisabled module="network" flag="VITE_USE_PLUGIN_NETWORK" />} />}
             {!FEATURES.USE_PLUGIN_STORAGE && <Route path="/storage" element={<ModuleDisabled module="storage" flag="VITE_USE_PLUGIN_STORAGE" />} />}
-            {!FEATURES.USE_PLUGIN_VM_INVENTORY && <Route path="/vms" element={<ModuleDisabled module="vm-inventory" flag="VITE_USE_PLUGIN_VM_INVENTORY" />} />}
+            {!FEATURES.USE_PLUGIN_VM_VIEW && <Route path="/vms" element={<ModuleDisabled module="vm-view" flag="VITE_USE_PLUGIN_VM_VIEW" />} />}
             {!FEATURES.USE_PLUGIN_PROXMOX_INVENTORY && <Route path="/proxmox-inventory" element={<ModuleDisabled module="proxmox-inventory" flag="VITE_USE_PLUGIN_PROXMOX_INVENTORY" />} />}
 
             {/* Routes des plugins, par famille (visibilité par utilisateur). */}

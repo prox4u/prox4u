@@ -10,7 +10,7 @@
  * son propre globallyEnabled. Les groupes autorisent toujours la famille entière.
  *
  * Port de l'ancienne app (Proxmox Manager) — les ids de modules correspondent
- * aux familles de plugins Prox4u (hypervision, network, storage, vm-inventory).
+ * aux familles de plugins Prox4u (hypervision, network, storage, vm-view).
  */
 
 import { parsePluginVersion } from './module-versions';
@@ -236,7 +236,7 @@ export const DEFAULT_MODULES: ModuleDef[] = [
     globallyEnabled: true,
   },
   {
-    id: 'vm-inventory',
+    id: 'vm-view',
     name: 'Vue VM',
     description: 'Parc VMs/LXC multi-endpoints (arborescence type vCenter)',
     globallyEnabled: true,
