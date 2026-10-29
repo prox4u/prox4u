@@ -8,6 +8,7 @@ import {
   type VmAgentNetIf,
   type VmOsInfo,
   osFamilyFromId,
+  osPrettyFromOstype,
   ostypeFamily,
 } from '@prox4u/shared';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
@@ -97,12 +98,14 @@ function buildInvVm(ep: EndpointRuntime, v: PveVmResource, fs: AgentFsUsage[] | 
     host: ep.id,
     vmid: v.vmid,
     name: v.name,
+    hostname: v.hostname ?? null,
     node: v.node,
     type: v.type,
     status: v.status,
     template: !!v.template,
     osType: vmOsFamily(v, osinfo),
-    osPretty: v.type === 'lxc' ? null : (osinfo?.prettyName ?? osinfo?.name ?? null),
+    // QEMU tournant : OS réel (agent) ; LXC / QEMU arrêté : distro depuis ostype.
+    osPretty: osinfo?.prettyName ?? osinfo?.name ?? osPrettyFromOstype(v.ostype),
     osKernel: osinfo?.kernelRelease ?? null,
     cpuCores: v.cpuAlloc ?? null,
     cpuPct: cpuPct(v),
