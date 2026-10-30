@@ -355,6 +355,27 @@ export class MockSource implements DataSource {
     return null;
   }
 
+  /** Mock : bundle agent = les méthodes individuelles (fs déterministe, osinfo null, nets simulés). */
+  async getAgentBundle(
+    node: string,
+    vmid: number,
+    type: 'qemu' | 'lxc',
+    status: string,
+  ): Promise<{ fs: AgentFsUsage[] | null; osinfo: VmOsInfo | null; nets: VmAgentNetIf[] }> {
+    const running = status === 'running';
+    const [fs, osinfo, nets] = await Promise.all([
+      type === 'qemu' && running ? this.getAgentFsUsage(node, vmid) : Promise.resolve(null),
+      this.getOsInfo(node, vmid),
+      type === 'qemu' ? this.getVmAgentNets(node, vmid) : this.getLxcInterfaces(node, vmid),
+    ]);
+    return { fs, osinfo, nets };
+  }
+
+  /** Mock : pas de cache agent — toujours undefined (le poller n'écrit pas Influx en mode mock). */
+  cachedFsUsage(_node: string, _vmid: number): AgentFsUsage[] | undefined {
+    return undefined;
+  }
+
   /** Déterministe : même MAC que la config net0 (mockMac) + IP identique à getResources. */
   private mockLiveNets(node: string, vmid: number, type: 'qemu' | 'lxc'): VmAgentNetIf[] {
     const v = this.vms.find((x) => x.node === node && x.vmid === vmid);

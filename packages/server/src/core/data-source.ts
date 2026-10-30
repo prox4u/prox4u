@@ -76,6 +76,21 @@ export interface DataSource {
    */
   getOsInfo(node: string, vmid: number): Promise<VmOsInfo | null>;
 
+  /**
+   * Bundle des données agent d'une VM, toutes mises en cache dans le client (fsinfo 5 min,
+   * osinfo 5 min, interfaces 60 s) — source unique partagée entre le poller et la route
+   * proxmox-inventory. `fs`/`osinfo` seulement pour QEMU tournant ; `nets` pour QEMU/LXC.
+   */
+  getAgentBundle(
+    node: string,
+    vmid: number,
+    type: 'qemu' | 'lxc',
+    status: string,
+  ): Promise<{ fs: AgentFsUsage[] | null; osinfo: VmOsInfo | null; nets: VmAgentNetIf[] }>;
+
+  /** Lecture seule du cache usage disque (aucun fetch) — undefined si jamais interrogé / périmé. */
+  cachedFsUsage(node: string, vmid: number): AgentFsUsage[] | undefined;
+
   /** réseau des nœuds (NICs + ponts) — topologie auto-découverte */
   getNetwork(): Promise<NodeNetwork[]>;
 
