@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diskStorageOf } from './prox4u-client.js';
+import { diskStorageOf, mapLimit } from './prox4u-client.js';
 
 /**
  * PVE 9 ne renvoie plus le champ `storage` dans /cluster/resources :
@@ -46,5 +46,33 @@ describe('diskStorageOf', () => {
   it('config sans disque → undefined', () => {
     expect(diskStorageOf({ memory: '4096' }, 'qemu')).toBeUndefined();
     expect(diskStorageOf({}, 'lxc')).toBeUndefined();
+  });
+});
+
+describe('mapLimit', () => {
+  it('borne la concurrence à `limit` et traite tous les éléments', async () => {
+    let running = 0;
+    let peak = 0;
+    let done = 0;
+    const items = Array.from({ length: 50 }, (_, i) => i);
+    await mapLimit(items, 5, async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      // laisse le temps aux autres workers de démarrer avant de se libérer
+      await new Promise((r) => setTimeout(r, 5));
+      running -= 1;
+      done += 1;
+    });
+    expect(peak).toBeLessThanOrEqual(5); // jamais plus de `limit` en vol
+    expect(peak).toBeGreaterThan(1); // bien en parallèle (pas séquentiel)
+    expect(done).toBe(50); // tout le monde est traité
+  });
+
+  it('ne fait rien si le tableau est vide', async () => {
+    let n = 0;
+    await mapLimit([], 5, async () => {
+      n += 1;
+    });
+    expect(n).toBe(0);
   });
 });

@@ -36,6 +36,14 @@ const AGENT_DISK_USAGE_TIMEOUT_MS = 8000;
 const AGENT_OSINFO_TTL_MS = 5 * 60 * 1000;
 /** Borne d'attente de l'agent invité pour le OS (get-osinfo). */
 const AGENT_OSINFO_TIMEOUT_MS = 8000;
+/** TTL du cache usage disque (get-fsinfo) : l'usage change lentement — 5 min, comme l'osinfo. */
+const AGENT_FSINFO_TTL_MS = 5 * 60 * 1000;
+/**
+ * Concurrence bornée des appels agent (get-fsinfo / get-osinfo / interfaces) : le pool undici
+ * fait 100 connexions/origine — 20 en vol évite l'épuisement, et un guest lent (timeout 8 s)
+ * retient au plus 20 appels, pas N. Partagée poller (réchauffage) + route (inventaire).
+ */
+export const AGENT_CONCURRENCY = 20;
 
 interface RawVm {
   vmid: number;
@@ -115,6 +123,8 @@ export class Prox4uClient implements DataSource {
   private configCache = new Map<string, { at: number; value: VmConfigInfo | null }>();
   private agentNetsCache = new Map<string, { at: number; value: VmAgentNetIf[] }>();
   private osInfoCache = new Map<string, { at: number; value: VmOsInfo | null }>();
+  /** Usage disque par filesystem (get-fsinfo) — cache 5 min, source unique poller + route. */
+  private fsUsageCache = new Map<string, { at: number; value: AgentFsUsage[] }>();
 
   constructor(private ep: EndpointConfig, tlsRejectUnauthorized: boolean) {
     this.agent = new Agent({ connect: { rejectUnauthorized: tlsRejectUnauthorized } });
@@ -473,11 +483,23 @@ export class Prox4uClient implements DataSource {
    * (NFS/CIFS n'ont pas de champ `disk`). `null` si VM arrêtée, agent absent, ou PVE sans
    * l'endpoint ; `[]` si agent vivant mais aucun fs sur disque VM. C'est la seule source
    * d'usage disque fiable par VM QEMU (le RRD `disk` vaut 0, `maxdisk` n'est que l'allocation).
+   * Mise en cache 5 min — source unique partagée entre le poller et la route (le fetch est
+   * déporté en background, jamais sur le chemin critique).
    */
   async getAgentFsUsage(node: string, vmid: number): Promise<AgentFsUsage[] | null> {
+    const k = key(node, vmid);
+    const cached = this.fsUsageCache.get(k);
+    if (cached && Date.now() - cached.at < AGENT_FSINFO_TTL_MS) return cached.value;
+    const value = await this.fetchAgentFsUsage(node, vmid);
+    // On ne met en cache que les résultats non vides : une VM juste démarrée (agent pas
+    // encore prêt) est réinterrogée à la fenêtre suivante, comme avant l'introduction du cache.
+    if (value && value.length > 0) this.fsUsageCache.set(k, { at: Date.now(), value });
+    return value;
+  }
+
+  private async fetchAgentFsUsage(node: string, vmid: number): Promise<AgentFsUsage[] | null> {
     try {
-      // timeout : l'agent est interrogé sur le chemin du poller — un guest lent doit
-      // faire renoncer l'appel (null), pas bloquer le tick.
+      // timeout : un guest lent doit faire renoncer l'appel (null), pas le bloquer.
       const raw = await this.get<{ result?: RawAgentFs[] } | RawAgentFs[]>(
         `/nodes/${node}/qemu/${vmid}/agent/get-fsinfo`,
         AGENT_DISK_USAGE_TIMEOUT_MS,
@@ -499,6 +521,36 @@ export class Prox4uClient implements DataSource {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Lecture SEULE du cache usage disque (aucun fetch) — le poller l'utilise pour écrire
+   * Influx sans relancer l'agent. `undefined` si jamais interrogé ou cache périmé.
+   */
+  cachedFsUsage(node: string, vmid: number): AgentFsUsage[] | undefined {
+    const c = this.fsUsageCache.get(key(node, vmid));
+    return c && Date.now() - c.at < AGENT_FSINFO_TTL_MS ? c.value : undefined;
+  }
+
+  /**
+   * Bundle des données agent d'une VM, toutes mises en cache dans le client (fsinfo 5 min,
+   * osinfo 5 min, interfaces 60 s) — source unique partagée entre le poller et la route
+   * proxmox-inventory. `fs`/`osinfo` seulement pour QEMU tournant ; `nets` pour QEMU ou LXC.
+   * `null` / `[]` si VM arrêtée, agent absent, ou PVE sans l'endpoint.
+   */
+  async getAgentBundle(
+    node: string,
+    vmid: number,
+    type: 'qemu' | 'lxc',
+    status: string,
+  ): Promise<{ fs: AgentFsUsage[] | null; osinfo: VmOsInfo | null; nets: VmAgentNetIf[] }> {
+    const running = status === 'running';
+    const [fs, osinfo, nets] = await Promise.all([
+      type === 'qemu' && running ? this.getAgentFsUsage(node, vmid) : Promise.resolve(null),
+      type === 'qemu' && running ? this.getOsInfo(node, vmid) : Promise.resolve(null),
+      type === 'qemu' ? this.getVmAgentNets(node, vmid) : this.getLxcInterfaces(node, vmid),
+    ]);
+    return { fs, osinfo, nets };
   }
 
   /**
@@ -738,8 +790,12 @@ function friendlyOs(os?: string): string {
   return 'Autre';
 }
 
-/** map avec concurrence limitée */
-async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+/**
+ * map avec concurrence limitée — exportée pour borner les appels agent (poller + route).
+ * Le callback peut renvoyer n'importe quelle valeur (ex. un bundle agent) ; seul le
+ * parallélisme est borné, le résultat n'est pas retenu.
+ */
+export async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<unknown>): Promise<void> {
   let i = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (i < items.length) {

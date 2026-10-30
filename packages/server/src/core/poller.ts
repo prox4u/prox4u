@@ -19,6 +19,7 @@ import {
 } from '@prox4u/shared';
 import { reloadOvercommitConfig, type AppConfig } from './config.js';
 import type { DataSource } from './data-source.js';
+import { AGENT_CONCURRENCY, mapLimit } from './prox4u-client.js';
 import { buildLine, type InfluxClient } from './influx.js';
 import type { WsHub } from './ws-hub.js';
 import type { AuthContext } from '../modules/auth/runtime.js';
@@ -46,8 +47,6 @@ export interface AppContext {
 }
 
 const DAY_MS = 86_400_000;
-/** Intervalle d'interrogation de l'agent invité pour l'usage disque QEMU (get-fsinfo). */
-const DISK_USAGE_TTL_MS = 5 * 60 * 1000;
 
 interface DailySample {
   time: number;
@@ -85,12 +84,13 @@ export class Poller {
    */
   private ioPrev = new Map<string, Array<{ t: number; in: number; out: number; rd: number; wr: number }>>();
   /**
-   * Usage disque RÉEL des VMs QEMU via l'agent invité (get-fsinfo), en cache throttle.
-   * L'agent est interrogé au plus toutes les DISK_USAGE_TTL_MS par VM (l'usage disque
-   * change lentement — inutile de le relancer à chaque tick de 5 s). Clé : endpoint/nœud/vmid.
-   * `fs` = derniers filesystems connus (un par point de montage) ; null si l'agent n'a jamais répondu.
+   * Guard single-flight du réchauffage des données agent (fsinfo/osinfo/interfaces), par
+   * endpoint : un seul réchauffage en vol à la fois. Les CACHES DU CLIENT (fsinfo/osinfo 5 min,
+   * interfaces 60 s) font le throttle réel — les vrais appels agent ne se font qu'aux fenêtres
+   * de péremption. Le réchauffage tourne en BACKGROUND (hors du tick) et borne sa concurrence
+   * à AGENT_CONCURRENCY : un guest lent n'entraîne pas le tick ni les autres VMs.
    */
-  private diskUsage = new Map<string, { at: number; fs: AgentFsUsage[] }>();
+  private agentRefreshing = new Set<string>();
 
   constructor(
     private ctx: AppContext,
@@ -170,6 +170,11 @@ export class Poller {
         rt.source.getResources(),
         rt.source.getStorage(),
       ]);
+
+      // Réchauffage BACKGROUND des données agent (fsinfo/osinfo/interfaces) — source unique
+      // partagée avec la route proxmox-inventory. `void` (hors du tick) + single-flight : le
+      // tick ne bloque JAMAIS derrière un appel agent, quelle que soit la taille du parc.
+      void this.refreshAgentData(rt, vms);
 
       // Allocations VMs (templates exclus) : par nœud et au total — ratios de surallocation
       const allocVms = vms.filter((v) => !v.template);
@@ -312,6 +317,25 @@ export class Poller {
       st.lastError = (err as Error).message;
       this.ctx.logger.error(`poller endpoint ${rt.id} en échec : ${st.lastError}`);
       return { id: rt.id, name: rt.name, url: rt.url, ok: false, error: st.lastError, snapshot: st.snapshot };
+    }
+  }
+
+  /**
+   * Réchauffe en background les données agent (fsinfo, osinfo, interfaces) de toutes les VMs
+   * de l'endpoint, en les stockant dans les CACHES PARTAGÉS du client (source unique avec la
+   * route proxmox-inventory). Single-flight par endpoint (un réchauffage en vol à la fois) et
+   * concurrence bornée à AGENT_CONCURRENCY : un guest lent (timeout 8 s) retient au plus
+   * AGENT_CONCURRENCY appels, pas N — et le pool undici n'est jamais épuisé. Les caches du
+   * client font le throttle (fsinfo/osinfo 5 min, interfaces 60 s) → les vrais appels agent ne
+   * se font qu'aux fenêtres de péremption, pas à chaque tick.
+   */
+  private async refreshAgentData(rt: EndpointRuntime, vms: PveVmResource[]): Promise<void> {
+    if (this.agentRefreshing.has(rt.id)) return;
+    this.agentRefreshing.add(rt.id);
+    try {
+      await mapLimit(vms, AGENT_CONCURRENCY, (v) => rt.source.getAgentBundle(v.node, v.vmid, v.type, v.status));
+    } finally {
+      this.agentRefreshing.delete(rt.id);
     }
   }
 
@@ -461,17 +485,16 @@ export class Poller {
         ),
       );
     }
-    // Occupation disque (réelle) PAR FILESYSTEM : QEMU via l'agent invité (get-fsinfo, throttle 5 min),
+    // Occupation disque (réelle) PAR FILESYSTEM : QEMU via l'agent invité (get-fsinfo),
     // LXC via /cluster/resources (disk = rootfs utilisé, maxdisk = alloué — déjà réels).
     // Le RRD `disk` vaut 0 pour les QEMU → l'agent est la seule source fiable par VM.
-    // Les appels agent sont lancés EN PARALLÈLE (Promise.all) : le blocage du tick est
-    // borné à un seul timeout agent (8 s), pas à N×timeout — et jamais infini.
-    const nowDu = Date.now();
+    // Lecture SEULE des CACHES PARTAGÉS du client (chauffés en background par
+    // refreshAgentData) : writeInflux ne relance JAMAIS l'agent ici — zéro fetch sur le
+    // chemin d'écriture, et la même source alimente la route proxmox-inventory.
     // filesystems par VM (une entrée par point de montage) → mesure vm_fs.
     const fsByVm = new Map<number, AgentFsUsage[]>();
     // agrégat pour vm_metrics (disk_bytes = somme used, disk_alloc_bytes = somme total).
     const diskByVm = new Map<number, { used: number | null; alloc: number | null }>();
-    const qemuToFetch: PveVmResource[] = [];
     for (const v of vms) {
       if (v.status !== 'running') continue;
       const alloc = v.maxdisk ?? null;
@@ -487,37 +510,16 @@ export class Poller {
         }
         continue;
       }
-      const cached = this.diskUsage.get(`${clusterId}/${v.node}/${v.vmid}`);
-      if (cached && nowDu - cached.at < DISK_USAGE_TTL_MS) {
-        fsByVm.set(v.vmid, cached.fs);
-        const used = cached.fs.reduce((s, f) => s + f.usedBytes, 0);
-        const tot = cached.fs.reduce((s, f) => s + f.totalBytes, 0);
+      // QEMU : lecture seule du cache agent (chauffé en background). Absent au 1er tick →
+      // vm_fs omis pour ce tick (comme l'I/O qui démarre au 2e poll) — aucun fetch ici.
+      const fs = source.cachedFsUsage(v.node, v.vmid);
+      if (fs && fs.length > 0) {
+        fsByVm.set(v.vmid, fs);
+        const used = fs.reduce((s, f) => s + f.usedBytes, 0);
+        const tot = fs.reduce((s, f) => s + f.totalBytes, 0);
         diskByVm.set(v.vmid, { used: used > 0 ? used : null, alloc: tot > 0 ? tot : alloc });
       } else {
-        qemuToFetch.push(v);
-      }
-    }
-    if (qemuToFetch.length > 0) {
-      const results = await Promise.all(qemuToFetch.map((v) => source.getAgentFsUsage(v.node, v.vmid)));
-      for (let i = 0; i < qemuToFetch.length; i++) {
-        const v = qemuToFetch[i];
-        const fs = results[i];
-        const k = `${clusterId}/${v.node}/${v.vmid}`;
-        const alloc = v.maxdisk ?? null;
-        const cached = this.diskUsage.get(k);
-        if (fs && fs.length > 0) {
-          this.diskUsage.set(k, { at: nowDu, fs });
-          fsByVm.set(v.vmid, fs);
-          const used = fs.reduce((s, f) => s + f.usedBytes, 0);
-          const tot = fs.reduce((s, f) => s + f.totalBytes, 0);
-          diskByVm.set(v.vmid, { used: used > 0 ? used : null, alloc: tot > 0 ? tot : alloc });
-        } else if (cached) {
-          fsByVm.set(v.vmid, cached.fs); // agent indispo → dernier usage connu
-          const used = cached.fs.reduce((s, f) => s + f.usedBytes, 0);
-          diskByVm.set(v.vmid, { used: used > 0 ? used : null, alloc });
-        } else {
-          diskByVm.set(v.vmid, { used: null, alloc }); // pas encore de donnée agent
-        }
+        diskByVm.set(v.vmid, { used: null, alloc }); // cache pas encore chaud
       }
     }
     for (const v of vms) {

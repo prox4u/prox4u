@@ -13,6 +13,7 @@ import {
   ostypeFamily,
 } from '@prox4u/shared';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
+import { AGENT_CONCURRENCY, mapLimit } from '../../core/prox4u-client.js';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MB = 1024 * 1024;
@@ -124,28 +125,21 @@ function buildInvVm(ep: EndpointRuntime, v: PveVmResource, fs: AgentFsUsage[] | 
   };
 }
 
-/** Inventaire d'un endpoint : ressources + agent (fs, interfaces) en parallèle. */
+/**
+ * Inventaire d'un endpoint : ressources + données agent via le bundle mis en cache dans le
+ * client (fsinfo/osinfo 5 min, interfaces 60 s — source unique partagée avec le poller).
+ * Concurrence bornée à AGENT_CONCURRENCY : à 1000 VMs, une vague d'appels agent n'épuise pas
+ * le pool undici, et un guest lent (timeout 8 s) retient au plus AGENT_CONCURRENCY appels, pas
+ * N. En régime établi (le poller a chauffé les caches en background), ce sont des lectures de
+ * cache → quasi instantané. Best-effort : une VM arrêtée ou sans agent renvoie null / [].
+ */
 async function computeInventory(ep: EndpointRuntime): Promise<ProxmoxInventoryEndpoint> {
   const vms = await ep.source.getResources();
   const out: InvVm[] = [];
-  await Promise.all(
-    vms.map(async (v) => {
-      // Les appels agent sont mis en cache (60 s / timeout 8 s) et best-effort :
-      // une VM arrêtée ou sans agent renvoie null / [] sans bloquer l'inventaire.
-      const [fs, nets, osinfo] = await Promise.all([
-        v.type === 'qemu' && v.status === 'running'
-          ? ep.source.getAgentFsUsage(v.node, v.vmid)
-          : Promise.resolve(null),
-        v.type === 'qemu'
-          ? ep.source.getVmAgentNets(v.node, v.vmid)
-          : ep.source.getLxcInterfaces(v.node, v.vmid),
-        v.type === 'qemu' && v.status === 'running'
-          ? ep.source.getOsInfo(v.node, v.vmid)
-          : Promise.resolve(null),
-      ]);
-      out.push(buildInvVm(ep, v, fs, nets, osinfo));
-    }),
-  );
+  await mapLimit(vms, AGENT_CONCURRENCY, async (v) => {
+    const { fs, nets, osinfo } = await ep.source.getAgentBundle(v.node, v.vmid, v.type, v.status);
+    out.push(buildInvVm(ep, v, fs, nets, osinfo));
+  });
   out.sort((a, b) => a.vmid - b.vmid);
   return { endpointId: ep.id, endpointName: ep.name, vms: out };
 }
@@ -158,22 +152,43 @@ async function computeInventory(ep: EndpointRuntime): Promise<ProxmoxInventoryEn
  */
 export function registerProxInventory(app: FastifyInstance, ctx: AppContext, _poller: Poller): void {
   const cache = new Map<string, CacheEntry<ProxmoxInventoryEndpoint>>();
+  /** Single-flight : un seul recompute background en vol par endpoint (évite les doublons). */
+  const refreshing = new Set<string>();
+
+  /**
+   * Recompute l'inventaire d'un endpoint en BACKGROUND (fire-and-forget) : met à jour le cache
+   * sans bloquer la requête courante. Single-flight — si un recompute est déjà en vol pour cet
+   * endpoint, on ne le relance pas. L'échec est journalisé (le cache périmé continue d'être servi).
+   */
+  const recompute = (ep: EndpointRuntime): void => {
+    if (refreshing.has(ep.id)) return;
+    refreshing.add(ep.id);
+    void computeInventory(ep)
+      .then((value) => cache.set(ep.id, { at: Date.now(), value }))
+      .catch((err) => ctx.logger.warn(`proxmox-inventory: recompute ${ep.id} en échec : ${(err as Error).message}`))
+      .finally(() => refreshing.delete(ep.id));
+  };
 
   app.get('/api/proxmox-inventory', async () => {
     const endpoints: ProxmoxInventoryEndpoint[] = [];
     for (const ep of ctx.endpoints) {
       const cached = cache.get(ep.id);
-      if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+      if (cached) {
+        // STALE-WHILE-REVALIDATE : on sert immédiatement la dernière valeur connue (même périmée)
+        // — la requête ne bloque jamais derrière un calcul agent. Le recompute part en background
+        // dès que le cache est périmé.
         endpoints.push(cached.value);
+        if (Date.now() - cached.at >= CACHE_TTL_MS) recompute(ep);
         continue;
       }
+      // VRAI COLD START (aucune valeur en cache) : on attend le calcul (borné à
+      // AGENT_CONCURRENCY) avant de répondre — premier chargement uniquement.
       try {
         const value = await computeInventory(ep);
         cache.set(ep.id, { at: Date.now(), value });
         endpoints.push(value);
       } catch (err) {
-        if (cached) endpoints.push(cached.value);
-        else ctx.logger.warn(`proxmox-inventory: endpoint ${ep.id} indisponible : ${(err as Error).message}`);
+        ctx.logger.warn(`proxmox-inventory: endpoint ${ep.id} indisponible : ${(err as Error).message}`);
       }
     }
     return { generatedAt: Date.now(), endpoints };
