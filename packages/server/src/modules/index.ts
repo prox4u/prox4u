@@ -6,6 +6,7 @@ import { registerDashboard } from './dashboard/routes.js';
 import { registerProxInventory } from './proxinventory/routes.js';
 import { registerSupervision } from './supervision/routes.js';
 import { registerVmInventory } from './vmview/routes.js';
+import { registerNodeSensorsModule } from './nodesensors/index.js';
 
 /**
  * Manifeste des modules : chaque module enregistre ses routes REST.
@@ -31,4 +32,5 @@ export const modules: Module[] = [
   { name: 'vmview', register: registerVmInventory },
   { name: 'proxinventory', register: registerProxInventory },
   { name: 'centreonnsca', register: registerAlarmNsca },
+  { name: 'nodesensors', register: registerNodeSensorsModule },
 ];

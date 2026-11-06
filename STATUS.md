@@ -1,6 +1,6 @@
 # Prox4u — État d'avancement
 
-> **Dernière mise à jour : 2026-10-30**
+> **Dernière mise à jour : 2026-11-06**
 > Application de supervision vCenter-like pour Proxmox VE (managers/DSI).
 > Conception de référence : `.opencode/skills/proxmox-web/SKILL.md`
 
@@ -930,16 +930,66 @@ Trois livraisons UI du 2026-10-30, toutes « sans rien casser » (routes, layout
 
 ---
 
+## ✅ Fait — Module « Capteurs nœuds » (node-sensors v1) + déploiement Telegraf (livré, validé cluster réel — **non commité**)
+
+Demande utilisateur : exposer les **métriques locales** que l'API PVE ne donne pas (SMART,
+températures, ZFS ARC, unités systemd) dans un nouveau module du dashboard. **Option A** actée :
+nouvelle famille de plugin `node-sensors` v1, **aucun module existant touché**.
+
+### Périmètre livré
+- **Telegraf bare-metal sur les 3 nœuds Proxmox** (`proxmox` 192.168.1.80, `ProxSite1`,
+  `ProxSite2` — cluster 192.168.1.201) : 9 tables actives dans `raw` (`smart_device`, `sensors`,
+  `zfs`, `systemd_units`, `disk`, `diskio`, `mem`, `cpu`, `system`). ProxSite2 sans capteurs
+  (`sensors` vide — normal, pas de lm-sensors détecté).
+- **Module web `node-sensors` v1** : page `/node-sensors` (menu order 70) avec 4 tableaux
+  (SMART, capteurs, ZFS ARC, unités systemd) + filtre multi-choix des sections + filtres colonnes.
+- **Consolidation Telegraf 15 min** : le consolidateur agrège `smart_device`, `sensors`, `zfs`,
+  `systemd_units` de `raw` (31 j) vers `consolidated` (∞) — historique infini.
+- **Filtres colonnes multi-choix** : dropdown `position:fixed` (pas de coupure par l'overflow du
+  tableau), fond opaque `#0f1117`, option « Tous » en haut (coche = tout sélectionner, décoche =
+  tout libérer). Même traitement pour le dropdown « Sections » (« Toutes »).
+
+### Fichiers
+- `deploiement/60-telegraf-nodes.sh` : script de déploiement Telegraf (bare-metal, `--dry-run`,
+  idempotent). `TELEGRAF_INFLUX_TOKEN` (requis), `insecure_skip_verify`, override systemd
+  `User=root` (accès aux devices raw).
+- `packages/shared/src/node-sensors.ts` : types partagés (`SmartDevice`, `SensorReading`,
+  `ZfsStatus`, `FailedUnit`, `NodeSensorsResponse`).
+- `packages/server/src/modules/nodesensors/` : `routes.ts` (`GET /api/node-sensors`, cache 1 min,
+  try/catch par section), `index.ts`.
+- `packages/web/src/plugins/node-sensors/` : `index.ts` (manifest), `pages/node-sensors.tsx`.
+- `packages/server/src/core/influx-consolidator.ts` : consolidation 15 min des tables Telegraf.
+- Câblage : `features.ts` (`USE_PLUGIN_NODE_SENSORS`), `plugins.ts`, `DEFAULT_MODULES`
+  (shared/auth.ts), i18n fr/en (`nav.nodeSensors`, `nodeSensors.*`).
+
+### Pièges corrigés pendant la livraison
+- **`source: 'empty'` systématique** : les colonnes ZFS s'appellent `arcstats_hits`,
+  `arcstats_misses`, `arcstats_size` (pas `arc_hits`). Une requête sur une colonne inexistante
+  levait une erreur qui faisait échouer la section → **try/catch par section** (pas un seul bloc).
+- **`health_ok` boolean** : InfluxDB 3 renvoie un boolean `true` (pas un nombre) →
+  `(r.health_ok as unknown) === true` + repli sur `1`/`'true'`/`'True'`.
+- **Filtres superposés/illisibles** : le dropdown initial était transparent et coupé par
+  l'overflow du tableau → `position:fixed` calculé depuis `getBoundingClientRect()`, fond opaque,
+  `z-50`.
+
+### À suivre (plan de travail)
+- **Seuils capteurs personnalisés** : abaisser le seuil d'alerte par capteur (perso ≤ firmware,
+  jamais au-dessus). Persistance `data/sensor-thresholds.json`, onglet Administration, intégration
+  dans le tableau capteurs (couleur suit le seuil effectif). → Plan :
+  [`docs/plan-seuils-capteurs.md`](docs/plan-seuils-capteurs.md)
+
+---
+
 ## ⏳ À faire
 
-### Monitoring — référence ProxMenux + Telegraf (nouveau, 2026-11-04)
+### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
 TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète dans la skill
-**`skills/monitoring-proxmenux`**. P0 = Telegraf bare-metal sur les nœuds Proxmox (SMART,
-températures, ZFS, unités systemd, latence) → nouveau plugin **`node-sensors` v1** (Option A,
-aucun module existant touché). Prérequis réseau déjà posé : `INFLUX_LAN_BIND` expose l'API
-InfluxDB (8181) aux nœuds (validé live, write+read via l'IP LAN). P1 quorum (donnée déjà
-pollée) · P2 moteur d'alarmes v2 (hystérésis/suppression/ack) · P3 audit best-practices ·
-P4 PBS + événements · P5 certificats + NTP.
+**`skills/monitoring-proxmenux`**. **P0 livré** : Telegraf bare-metal sur les 3 nœuds Proxmox +
+plugin **`node-sensors` v1** (section « Fait » ci-dessus). Reste en P0 : **seuils capteurs
+personnalisés** (plan `docs/plan-seuils-capteurs.md`) + règles d'alarme (SMART critique,
+température > seuil, unité échouée) dans `centreonnsca`. P1 quorum (donnée déjà pollée) ·
+P2 moteur d'alarmes v2 (hystérésis/suppression/ack) · P3 audit best-practices · P4 PBS +
+événements · P5 certificats + NTP.
 
 ### En attente de décision utilisateur
 - [ ] **Commit** : correction disque (`storage_metrics`) + renommage Prox4u + fix `server.sh` (pipefail/TLS_CERT) + **livraisons 2026-10-30** (colonne/alerte/compteur agent PVE + menu déroulant + titres de page : `shared/types.ts` `shared/vm-view.ts` `shared/proxmox-inventory.ts` `shared/i18n/*` + `server/poller.ts` `server/modules/proxinventory/routes.ts` + `web/plugins/hypervision/*` (index.tsx, proxmox-nav-tree.tsx, kpi-row.tsx, pages) + `web/core/ui/PluginMenu.tsx` `web/core/plugin/types.ts` `web/store/layout.ts` `web/components/layout/sidebar.tsx` + `web/plugins/vm-view_v2/components/vm-table.tsx` + `web/plugins/proxmox-inventory/components/proxmox-inventory-table.tsx`) + **nouvelle skill `proxmox-inventory`** + updates skills (`general`, `hypervision`, `vm-inventory`) + STATUS.md + README.md — consigne utilisateur : « pas encore de GIT » (branche `refactor/plugin-architecture`, 11 commits, main intacte). Les dossiers de référence `ProxMenux/` et `project-pegaprox/` ont été sortis du repo le 2026-10-24 (→ `/home/opencode/projet/`)
@@ -1001,6 +1051,7 @@ packages/server/src/core/     # config (clusters.json + overcommit.json hot-relo
 packages/server/src/modules/dashboard/routes.ts   # /api/* (?endpoint=, InfluxDB d'abord, repli RRD + "source")
 packages/server/src/modules/supervision/routes.ts # /api/network-topology + /api/storage-inventory (cache 5 min)
 packages/server/src/modules/vminventory/routes.ts # /api/vm-config (live + config cache 1 h + snapshots à la demande, cache 5 min) + /api/vm-metrics (historique VM InfluxDB, cache 5 min)
+packages/server/src/modules/nodesensors/routes.ts # /api/node-sensors (métriques locales Telegraf : SMART, capteurs, ZFS ARC, unités systemd — cache 1 min, base raw)
 packages/server/src/modules/auth/     # store (data/auth.json) + routes (login/me/logout/preferences/admin) + guard API & WS
 packages/server/src/index.ts  # entry Fastify HTTPS + SPA + WS (buildEndpoints, fallback default)
 packages/web/src/app.tsx      # router host : routes des plugins actifs + layout shell (ModuleDisabled si flag OFF)
@@ -1018,5 +1069,5 @@ packages/web/src/pages/{login,profile,admin}/ # auth + admin (3 onglets : catalo
 data/auth.json                                # users/groups/modules/préférences (600, gitignored — comptes migrés de l'ancienne app)
 packages/web/src/hooks/use-echart.ts              # wrapper ECharts (init paresseux)
 packages/web/src/index.css                        # Tailwind v4 + tokens Tremor + @source inline
-skills/                                           # base de connaissance (trackée, livrée en prod) : 8 SKILL.md + README.md (inventaire) — .opencode/skills/ = symlinks locaux
+skills/                                           # base de connaissance (trackée, livrée en prod) : 12 SKILL.md + README.md (inventaire) — .opencode/skills/ = symlinks locaux
 ```

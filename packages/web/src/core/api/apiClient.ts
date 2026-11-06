@@ -1,4 +1,4 @@
-import type { DatastoreHistoryResponse, MetricsTimeframe, ProxmoxInventoryResponse, VmFsResponse } from '@prox4u/shared';
+import type { DatastoreHistoryResponse, MetricsTimeframe, NodeSensorsResponse, ProxmoxInventoryResponse, VmFsResponse } from '@prox4u/shared';
 import type {
   CapacityResponse,
   MetricsResponse,
@@ -76,4 +76,9 @@ export function fetchVmFs(endpoint: string, vmid: number, timeframe: MetricsTime
 /** Inventaire Proxmox consolidé de tous les endpoints (cache serveur 5 min) — plugin proxmox-inventory. */
 export function fetchProxmoxInventory(): Promise<ProxmoxInventoryResponse> {
   return getJson<ProxmoxInventoryResponse>('/api/proxmox-inventory');
+}
+
+/** Métriques locales Telegraf (SMART, capteurs, ZFS, unités systemd) — plugin node-sensors. */
+export function fetchNodeSensors(): Promise<NodeSensorsResponse> {
+  return getJson<NodeSensorsResponse>('/api/node-sensors');
 }

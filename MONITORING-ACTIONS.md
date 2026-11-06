@@ -8,34 +8,51 @@ Priorité : **valeur / effort**. P0 = à faire en premier. Statut : `[ ]` à fai
 
 ---
 
-## P0 — Telegraf sur les nœuds Proxmox  `[ ]`
+## P0 — Telegraf sur les nœuds Proxmox  `[~]`
 
 Capturer les métriques locales que l'API PVE ne donne pas : **SMART** (détection prédictive des
-pannes disque), **températures** (CPU/disques), **ZFS** (ARC, santé pools), **unités systemd
-échouées**, **latence ping**. C'est le plus gros gisement d'amélioration.
+pannes disque), **températures** (CPU/disques), **ZFS** (ARC, santé pools), **unités systemd**,
+**disk/diskio/mem/cpu/system**. C'est le plus gros gisement d'amélioration.
 
 - `[x]` **Prérequis réseau** : exposition de l'API InfluxDB aux nœuds — variable `INFLUX_LAN_BIND`
       (binding `${INFLUX_LAN_BIND:-127.0.0.1}:8181:8181` dans `docker-compose.yml`,
       `INFLUX_LAN_BIND=192.168.1.180` dans `.env`). **Validé live** : write+read via l'IP LAN OK.
-- `[ ]` Créer le script **`deploiement/60-telegraf-nodes.sh`** (bare-metal, convention numérotée) :
-  - `apt-get install telegraf smartmontools lm-sensors`
-  - Générer `/etc/telegraf/telegraf.conf` : `[[outputs.influxdb_v2]]` →
-    `https://192.168.1.180:8181`, `bucket="raw"`, `organization="influxdb"`,
-    `token=${TELEGRAF_INFLUX_TOKEN:-<token admin .env>}`, `tls_skip_verify=true`,
-    `global_tags node=<hostname>`
-  - Plugins : `smart`, `sensors`, `zfs`, `systemd_units`, `ping`, `disk`/`diskio`/`mem`/`cpu`/`system`
-  - `systemctl enable --now telegraf`
-- `[ ]` **Nœud pilote** : exécuter sur 1 nœud, vérifier que `smart`/`sensors`/`zfs`/`systemd_units`/
-  `ping` arrivent dans la base `raw`. **S'arrêter ici pour validation.**
-- `[ ]` **Module web `node-sensors` v1** (Option A — nouvelle famille de plugin, aucun module
+- `[x]` Script **`deploiement/60-telegraf-nodes.sh`** (bare-metal, `--dry-run`, idempotent).
+      Prend `TELEGRAF_INFLUX_TOKEN` (requis), `INFLUX_URL`, `INFLUX_BUCKET`, `PING_TARGET`.
+      Contenu :
+  - Clé GPG InfluxData (si le dépôt est déclaré) + `apt-get install telegraf smartmontools lm-sensors`
+  - Auto-détection des devices SMART via `smartctl --scan` (SATA, SAS, NVMe, RAID, LUN, baies)
+  - Générer `/etc/telegraf/telegraf.conf` : `[[outputs.influxdb_v2]]` avec
+    `insecure_skip_verify=true`, `timeout=10s`, `global_tags node=<hostname>`
+  - Plugins : `smart`, `sensors`, `zfs`, `systemd_units`, `disk`/`diskio`/`mem`/`cpu`/`system`
+    (ping ICMP commenté — à réactiver si CAP_NET_RAW disponible)
+  - Override systemd `User=root` (accès aux devices raw pour smartctl)
+  - `systemctl enable --now telegraf` + self-test
+- `[x]` **Nœud pilote (192.168.1.80, hostname « proxmox »)** : **validé** — 9 tables actives dans
+  `raw` : `smart_device`, `sensors`, `zfs`, `systemd_units`, `disk`, `diskio`, `mem`, `cpu`, `system`.
+  3 disques détectés (sda TOSHIBA, nvme0n1 + nvme1n1 CT4000P310SSD8).
+- `[x]` **Nœud cluster ProxSite1** : **validé** — 2 disques détectés (sda, sdb), self-test OK.
+- `[x]` **Nœud cluster ProxSite2** : **validé** — 8/9 tables actives (sensors vide, pas de capteur).
+- `[x]` **Module web `node-sensors` v1** (Option A — nouvelle famille de plugin, aucun module
   existant touché) : `packages/web/src/plugins/node-sensors/` + flag `USE_PLUGIN_NODE_SENSORS`
   dans `core/config/features.ts` + enregistrement dans `core/plugin/plugins.ts` + i18n
-  `nav.nodeSensors` + data-source sur les measurements Telegraf + panneaux températures/SMART/ZFS.
-- `[ ]` **Extension** aux autres nœuds + règles d'alarme (SMART critique, température > seuil,
-  unité échouée) dans le module `centreonnsca`.
+  `nav.nodeSensors` + `DEFAULT_MODULES` (auth) + routeur serveur `/api/node-sensors` (cache 1 min,
+  try/catch par section) + page 4 tableaux (SMART, capteurs, ZFS ARC, unités systemd) + filtre
+  multi-choix des sections.
+- `[x]` **Consolidation Telegraf 15 min** : le consolidateur agrège `smart_device`, `sensors`,
+  `zfs`, `systemd_units` de `raw` vers `consolidated` (buckets 15 min) — historique infini.
+- `[ ]` **Seuils capteurs personnalisés** : abaisser le seuil d'alerte par capteur (perso ≤
+  firmware, jamais au-dessus). Persistance `data/sensor-thresholds.json`, onglet Administration,
+  intégration dans le tableau capteurs (couleur suit le seuil effectif).
+  → Plan détaillé : [`docs/plan-seuils-capteurs.md`](docs/plan-seuils-capteurs.md)
+- `[ ]` **Règles d'alarme** (SMART critique, température > seuil, unité échouée) dans le module
+  `centreonnsca` (dépend des seuils perso ci-dessus).
 
 > Token : par défaut le token admin de `.env`, surchargeable via `TELEGRAF_INFLUX_TOKEN`
-> (token dédié possible). Telegraf tourne en bare-metal sur le nœud (pas virtualisé).
+> (token dédié possible). Telegraf tourne en bare-metal sur le nœud (pas virtualisé), en root
+> (override systemd) pour l'accès aux devices raw.
+>
+> NB : la table Telegraf pour SMART s'appelle `smart_device` (pas `smart`).
 
 ---
 

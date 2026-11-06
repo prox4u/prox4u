@@ -22,6 +22,8 @@ export const FEATURES = {
   USE_PLUGIN_PROXMOX_INVENTORY: env.VITE_USE_PLUGIN_PROXMOX_INVENTORY !== 'false',
   // Alarmes & Checks passifs NSCA (règles → Centreon via send_nsca) : défaut ON, disjoncteur opt-out.
   USE_PLUGIN_CENTREON_NSCA: env.VITE_USE_PLUGIN_CENTREON_NSCA !== 'false',
+  // Métriques locales Telegraf (SMART, capteurs, ZFS, unités systemd) : défaut ON, disjoncteur opt-out.
+  USE_PLUGIN_NODE_SENSORS: env.VITE_USE_PLUGIN_NODE_SENSORS !== 'false',
 } as const;
 
 export type FeatureFlag = keyof typeof FEATURES;

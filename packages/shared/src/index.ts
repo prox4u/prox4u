@@ -105,3 +105,4 @@ export type {
 } from './network.js';
 export { resources, DEFAULT_LANG } from './i18n/index.js';
 export type { Lang } from './i18n/index.js';
+export type { SmartDevice, SensorReading, ZfsStatus, FailedUnit, NodeSensorsResponse } from './node-sensors.js';
