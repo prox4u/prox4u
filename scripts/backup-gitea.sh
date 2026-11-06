@@ -2,7 +2,8 @@
 # Sauvegarde quotidienne du projet prox4u :
 #   1. git  : commit auto + push vers Gitea (git.prox4u.com, repo privé prox4u/prox4u)
 #   2. tar  : copie indépendante dans /home/opencode/backups/prox4u/
-# Exclusions tar : node_modules (réinstallable) et data/influxdb (ré-écrie par les agents).
+# Exclusions tar : node_modules (réinstallable, racine + packages/* de la workspace pnpm)
+# et data/influxdb (ré-écrie par les agents).
 # Rétention : les 7 derniers tars.
 set -euo pipefail
 
@@ -26,6 +27,7 @@ fi
 
 # --- Tar : copie autonome du projet (y compris .git, en secours du remote) ---
 tar --exclude='./node_modules' \
+    --exclude='*/node_modules' \
     --exclude='./data/influxdb' \
     -cf "$TARBALL" -C "$PROJ" .
 
