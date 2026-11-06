@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { rootCertificates } from 'node:tls';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { Agent, setGlobalDispatcher } from 'undici';
+import { Agent } from 'undici';
 import type { Site } from '@prox4u/shared';
 import { loadConfig } from './core/config.js';
 import { ensureInfluxDatabases, InfluxClient } from './core/influx.js';
@@ -77,23 +77,30 @@ function buildEndpoints(): EndpointRuntime[] {
   }));
 }
 
-/** Fait confiance au certificat auto-signé InfluxDB pour les fetch (app → InfluxDB). */
-function trustInfluxCa(caCert: string): void {
+/**
+ * Agent dédié faisant confiance au certificat auto-signé InfluxDB.
+ * Passé à InfluxClient (dispatcher local) : la confiance ne pollue PAS le
+ * dispatcher global — les autres fetch (Proxmox, Centreon REST) restent sur
+ * la chaîne de confiance système.
+ */
+function trustInfluxCa(caCert: string): Agent {
   const ca = [...rootCertificates, readFileSync(caCert, 'utf8')];
-  setGlobalDispatcher(new Agent({ connect: { ca } }));
+  return new Agent({ connect: { ca } });
 }
 
 async function main(): Promise<void> {
   // CA uniquement si InfluxDB est actif : sans INFLUX_TOKEN, l'app tourne en repli RRD
-  // et le fichier de certificat n'est pas requis (serveur frais, data/ absent du tarball)
-  if (config.influx.enabled && config.influx.caCert) trustInfluxCa(config.influx.caCert);
+  // et le fichier de certificat n'est pas requis (serveur frais, data/ absent du tarball).
+  // Le CA est porté par un dispatcher DÉDIÉ (InfluxClient) — pas le dispatcher global.
+  const influxDispatcher =
+    config.influx.enabled && config.influx.caCert ? trustInfluxCa(config.influx.caCert) : undefined;
   const endpoints = buildEndpoints();
   // mode mock : le default de clusters.json peut ne pas exister → 1er endpoint
   if (!endpoints.some((e) => e.id === config.defaultEndpointId)) {
     config.defaultEndpointId = endpoints[0].id;
   }
   const hub = new WsHub();
-  const influx = new InfluxClient(config.influx);
+  const influx = new InfluxClient(config.influx, influxDispatcher);
   // Runtime d'authentification : data/auth.json (seed admin au 1er démarrage),
   // sessions en mémoire, provider local (AD branchable via AuthProvider).
   const authStore = new AuthStore(config.authFile, logger);
@@ -146,6 +153,15 @@ async function main(): Promise<void> {
 
   poller.start();
   consolidator.start();
+
+  // Avertissements de posture (non bloquants — le défaut TLS_REJECT_UNAUTHORIZED=false
+  // est conservé : les déploiements reposent sur les certificats auto-signés Proxmox).
+  if (!config.tls) {
+    logger.warn('HTTP clair : TLS applicatif non configuré (TLS_KEY/TLS_CERT absents) — mots de passe, cookies de session et tokens transitent sans chiffrement sur 0.0.0.0');
+  }
+  if (!config.tlsRejectUnauthorized && !config.mock) {
+    logger.warn('TLS_REJECT_UNAUTHORIZED=false : les certificats des API Proxmox ne sont pas vérifiés (risque MITM sur les tokens PVEAPIToken)');
+  }
 
   const scheme = config.tls ? 'https' : 'http';
   await app.listen({ port: config.port, host: '0.0.0.0' });

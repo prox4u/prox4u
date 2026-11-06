@@ -269,6 +269,8 @@ export interface KpiSummary {
   vmsRunning: number;
   vmsStopped: number;
   vmsTotal: number;
+  /** VMs QEMU en cours dont l'agent invité est inactif (agentActive === false) — alerte critique */
+  vmsAgentDown: number;
 }
 
 // --- PRA N-1 -------------------------------------------------------------------
@@ -412,6 +414,13 @@ export interface VmSummary {
   diskWriteBps: number | null;
   /** Adresses IP détectées live (`ipaddresses` de /cluster/resources) — vide si non rapportées. */
   ipAddresses: string[];
+  // --- Agent invité QEMU (QGA) ---
+  /**
+   * État de l'agent invité : true = QGA répond (get-fsinfo ok, y compris sans fs sur
+   * disque VM) · false = VM QEMU en cours mais agent non démarré / injoignable (CRITIQUE)
+   * · null = n/a (LXC, VM arrêtée) ou inconnu (cache agent pas encore réchauffé au démarrage).
+   */
+  agentActive: boolean | null;
 }
 
 /** Snapshot d'une VM (GET /nodes/{n}/{type}/{vmid}/snapshot). */

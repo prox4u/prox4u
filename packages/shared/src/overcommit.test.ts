@@ -30,6 +30,7 @@ const kpis = (over: Partial<KpiSummary> = {}): KpiSummary => ({
   vmsRunning: 4,
   vmsStopped: 1,
   vmsTotal: 5,
+  vmsAgentDown: 0,
   ...over,
 });
 

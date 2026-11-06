@@ -7,7 +7,7 @@ import { registerProxInventory } from './routes.js';
 
 /** VM de test minimale (QEMU tournant). */
 function vm(vmid: number): PveVmResource {
-  return { vmid, name: `vm-${vmid}`, type: 'qemu', status: 'running', node: 'n1', maxmem: 1024, mem: 512, maxdisk: 4096, disk: 2048 };
+  return { vmid, name: `vm-${vmid}`, type: 'qemu', status: 'running', node: 'n1', cpu: 0, maxmem: 1024, mem: 512, maxdisk: 4096, disk: 2048, netin: 0, netout: 0, diskread: 0, diskwrite: 0, uptime: 0 };
 }
 
 /** Source stub qui compte les appels : getResources (1 par compute) + getAgentBundle (1 par VM). */

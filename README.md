@@ -10,11 +10,11 @@ Dashboard web de supervision pour cluster **Proxmox VE 9** : vue DSI/manager (KP
 
 | Document | Rôle |
 |---|---|
-| [`skills/`](./skills/) | **Base de connaissance** pour la reprise (humain ou IA) : 7 skills par module (architecture, plugins, API, shared, opérations…) + [inventaire et règles de maintenance](./skills/README.md) |
+| [`skills/`](./skills/) | **Base de connaissance** pour la reprise (humain ou IA) : 8 skills par module (architecture, plugins, API, shared, opérations…) + [inventaire et règles de maintenance](./skills/README.md) |
 | [`STATUS.md`](./STATUS.md) | État d'avancement : jalons livrés, pièges corrigés, points en attente |
 | [`deploiement/DEPLOY.md`](./deploiement/DEPLOY.md) | Procédure de déploiement sur un nouveau serveur (FR/EN) |
 
-*Knowledge base for handover (human or AI): 7 per-module skills + [inventory and maintenance rules](./skills/README.md) · Progress status: delivered milestones, fixed pitfalls, pending items · Deployment procedure on a new server (FR/EN).*
+*Knowledge base for handover (human or AI): 8 per-module skills + [inventory and maintenance rules](./skills/README.md) · Progress status: delivered milestones, fixed pitfalls, pending items · Deployment procedure on a new server (FR/EN).*
 
 ## Fonctionnalités / Features
 
@@ -28,6 +28,8 @@ Dashboard web de supervision pour cluster **Proxmox VE 9** : vue DSI/manager (KP
   *Capacity planning: CPU/RAM/disk saturation forecasts (30 d) + 7-day trend.*
 - **Mode démo** (`MOCK=1`) : cluster simulé multi-bâtiments, sans Proxmox.
   *Demo mode (`MOCK=1`): simulated multi-site cluster, no Proxmox required.*
+- **Alarmes & Centreon** : règles de surveillance sur VMs/nœuds (CPU, RAM, disque, statut, IP, uptime, réseau) → alarmes transmises à **Centreon** en checks passifs via `send_nsca`. Provisionnement automatique du service passif (CLAPI SSH/local ou API REST v1) + mapping VM→hôte Centreon (ajout manuel) + pollers avec IP (destination NSCA) + page de config admin.
+  *Alarms & Centreon: monitoring rules on VMs/nodes (CPU, RAM, disk, status, IP, uptime, network) → alarms forwarded to **Centreon** as passive checks via `send_nsca`. Automatic provisioning of the passive service (CLAPI SSH/local or REST v1 API) + VM→Centreon-host mapping (manual add) + pollers with IP (NSCA destination) + admin config page.*
 
 ## Architecture / Architecture
 
@@ -46,6 +48,52 @@ API HTTP : /api/dashboard · /api/endpoints · /api/metrics?timeframe=hour|day|w
 Monorepo pnpm : `packages/shared` (types + calculs + i18n), `packages/server` (Fastify, poller, client PVE, InfluxDB), `packages/web` (React + ECharts).
 
 *pnpm monorepo: `packages/shared` (types + computations + i18n), `packages/server` (Fastify, poller, PVE client, InfluxDB), `packages/web` (React + ECharts).*
+
+## Module « Alarmes & Centreon »
+
+Le module définit des **règles de surveillance** sur les VMs et nœuds Proxmox. Quand une condition (seuil + durée de confirmation) est remplie, l'alarme est envoyée à **Centreon** comme **check passif** via `send_nsca`. Le service passif correspondant est **créé et déployé automatiquement** avant le 1ᵉʳ envoi.
+
+```
+Prox4u (backend)
+   │  1. Provisioning du service passif → CLAPI (SSH) ou API REST v1
+   │     centreon -u <u> -p "$(cat)" -o SERVICE -a add -v "<host>;<service>"
+   │     centreon -o SERVICE -a setparam -v "<host>;<service>;passive_checks_enabled;1"
+   │     centreon -o SERVICE -a setparam -v "<host>;<service>;active_checks_enabled;0"
+   │     (+ is_volatile=1, max_check_attempts=1, check_command=check_dummy!0)
+   │     centreon -o POLLERGENERATE -v "<poller>"   puis   centreon -o CFGMOVE -v "<poller>"
+   │  2. Engine (tick 15 s) : évalue les règles → machine à états ok⇄firing
+   ▼
+send_nsca (runtime)
+   │  printf '<host>\t<service>\t<code>\t<output>\n' | send_nsca -H <nsca_host> -c <send_nsca.cfg>
+   ▼
+Centreon Engine (réception NSCA → statut du service passif)
+```
+
+- **Transport runtime imposé** : `send_nsca` (le fichier `send_nsca.cfg` est **généré automatiquement** par l'app à partir de la config, chmod 600).
+- **Return code** : 0=OK (récupération), 1=WARNING, 2=CRITICAL, 3=UNKNOWN.
+- **Provisionnement** : CLAPI (mode **SSH** — Prox4u n'est pas sur le central — ou local) **ou** API REST v1. Le choix se fait dans l'admin (onglet « Centreon (NSCA) »). Les mots de passe/token ne sont jamais loggués ni renvoyés en clair par l'API.
+
+### Prérequis Centreon / NSCA (pas-à-pas)
+
+1. **Daemon NSCA sur le central Centreon** : `nsca.cfg` avec `server_address` (0.0.0.0), `server_port` (5668), `allow_2des = true`, et un `password` (même mot de passe que dans Prox4u). Redémarrer le service `centengine`/`nsca`.
+2. **Client `send_nsca` sur le serveur Prox4u** : `apt-get install nsca-client` (ou équivalent) — le binaire `send_nsca` doit être dans le `PATH`.
+3. **Utilisateur CLAPI** (si transport CLAPI) : un compte Centreon avec droits de configuration (`SERVICE`, `POLLERGENERATE`, `CFGMOVE`) + une **clé SSH** de Prox4u vers le central (mode `ssh`).
+4. **Token d'API** (si transport REST v1) : un utilisateur API Centreon + son token (Basic auth sur `/api/restapi`).
+5. **Poller** : le poller cible doit exister dans Centreon (Linux, Windows, Infra…). Le service passif est rattaché à l'hôte déjà présent dans Centreon.
+
+### Procédure dans Prox4u
+
+1. **Administration → Centreon (NSCA)** : activer le module, choisir le transport (CLAPI/REST), renseigner le central + identifiants, les pollers (**nom + IP** — l'IP est la destination NSCA des trames de ce poller, repli sur le serveur NSCA du central si vide), le serveur NSCA (hôte/port/mot de passe), et le mapping VM→hôte Centreon (bouton **Ajouter** pour d'autres correspondances).
+2. **Alarmes & Checks NSCA → Créer une surveillance** : définir la règle (cible VM/nœud, métrique, opérateur, seuil, durée de confirmation, sévérité, poller, hôte+service Centreon, message). À la soumission, le service est provisionné + la config déployée, puis la règle est enregistrée (statut provisioning affiché).
+3. **Tableau des règles** : activer/désactiver, **Tester** (trame NSCA immédiate), **Reprovisionner** (relance la création si échec), supprimer.
+
+### Exemples livrés
+
+- **Trame générée** : `vm-web-01\tProx4u-Alarm-CPU\t2\tvm-web-01 CPU 94% (seuil 90%)\n`
+- **Commande CLAPI de création** : `centreon -u clapi -p "$(cat)" -o SERVICE -a add -v "vm-web-01;Prox4u-Alarm-CPU"` (suivi des `setparam` + `POLLERGENERATE`/`CFGMOVE`).
+- **Script de test manuel** : [`scripts/nsca-test.sh`](./scripts/nsca-test.sh) — envoie une trame vers un NSCA de test et vérifie le statut dans Centreon.
+
+> **Zabbix ensuite** : la famille `centreon-nsca` et le namespace `/api/alarms/*` sont conçus pour accueillir un 2ᵉ backend (Zabbix) sans toucher au cœur — le transport runtime et le provisioning seraient spécialisés par backend.
 
 ## Prérequis / Prerequisites
 
@@ -101,6 +149,7 @@ Variables dans `.env` (voir `.env.example`) :
 | `INFLUX_RAW_DB` | `raw` | Base brute (rétention 31 j) |
 | `INFLUX_AGG_DB` | `consolidated` | Base consolidée (rétention infinie) |
 | `INFLUX_CA_CERT` | *(vide)* | Certificat auto-signé InfluxDB à faire confiance (fetch app → InfluxDB) |
+| `INFLUX_LAN_BIND` | `127.0.0.1` | IP interne d'exposition de l'API InfluxDB (8181) pour les agents Telegraf des nœuds — *vide = localhost-only* |
 
 ## Multi-cluster / Multi-cluster
 
@@ -235,7 +284,7 @@ pnpm build        # build production (shared → server → web)
 ├── clusters.json             # endpoints Proxmox multi-cluster (600, gitignored) — template : clusters.example.json
 ├── sites.json                # topologie des sites/bâtiments (PRA), rattachement par endpoint
 ├── overcommit.json           # politique de surallocation + seuils d'usage (hot-reload, source unique du code couleur)
-├── skills/                   # base de connaissance (7 SKILL.md + README.md) — reprise humain ou IA
+├── skills/                   # base de connaissance (8 SKILL.md + README.md) — reprise humain ou IA
 ├── STATUS.md                 # état d'avancement : jalons livrés, pièges corrigés, points en attente
 ├── up.sh                     # démarrage complet : InfluxDB (Docker) + application
 ├── server.sh                 # start/stop/restart/status de l'app seule

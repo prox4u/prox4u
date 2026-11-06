@@ -47,9 +47,12 @@ Si l'échelle augmente nettement au-delà, les points à surveiller en premier :
 | `network` | Plugin network : `/topology` — graphe React Flow, inventaire réseaux→VMs, analyse d'impact incident, simulation PRA N-1 |
 | `storage` | Plugin storage : `/storage` — table vCenter des datastores, drill-down VMs, export CSV |
 | `vm-inventory` | Plugin inventaire VM : `/vms` — tree vCenter (Datacenter→cluster→nœud), tableau multi-endpoints live, détail à onglets (Config/Réseau/Snapshots) via `/api/vm-config` |
+| `proxmox-inventory` | Plugin Inventaire Proxmox : `/proxmox-inventory` — inventaire consolidé multi-endpoints (une machine par ligne QEMU+LXC), OS réel (agent), disques par fs, interfaces/IPs, tags, état agent PVE, filtres par colonne + export TXT/CSV/JSON via `/api/proxmox-inventory` (cache 5 min, stale-while-revalidate) |
 | `operations` | Runbook production : kit de déploiement `deploiement/`, pointage InfluxDB externe, systemd/server.sh, day-2, dépannage (WS, repli RRD, TLS SAN, tokens PVE) |
 | `shared` | Package `@proxmox/shared` : fonctions pures testées par fichier, types partagés, THRESHOLDS, i18n fr/en |
 | `api` | Contrat API REST + WebSocket `/ws` : endpoints, formes de réponse, caches 5 min, repli InfluxDB→RRD |
+| `centreon-nsca` | Plugin alarmes & checks passifs NSCA : `/alarms`, `/alarms/new`, `/alarms/edit/:id` + engine (tick 15 s) + provisioning Centreon (CLAPI SSH/local ou REST v1) + envoi `send_nsca` + mapping VM→hôte + onglet admin « Centreon (NSCA) » |
+| `monitoring-proxmenux` | Référence de reprise sur le monitoring : analyse de ProxMenux (double boucle health/audit, hystérésis, persistance/suppression/ack, multi-canal, 43 checks annotés API vs agent), plan de déploiement Telegraf sur les nœuds Proxmox (bare-metal), audit sécurité ProxMenux + leçons pour prox4u. Lié à `MONITORING-ACTIONS.md` (TODO P0→P5) et au futur plugin `node-sensors` |
 
 ### 4.3 Format d'une skill
 - Frontmatter YAML : `name` (id stable) + `description` (périmètre + trigger « Use when… » pour l'auto-découverte IA).

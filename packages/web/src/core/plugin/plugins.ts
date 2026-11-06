@@ -4,6 +4,7 @@ import { storagePlugin } from '../../plugins/storage';
 import { vmViewPlugin } from '../../plugins/vm-view';
 import { vmViewPluginV2 } from '../../plugins/vm-view_v2';
 import { proxmoxInventoryPlugin } from '../../plugins/proxmox-inventory';
+import { centreonNscaPlugin } from '../../plugins/centreon-nsca';
 import { FEATURES } from '../config/features';
 import type { Plugin } from './types';
 
@@ -24,4 +25,6 @@ export const PLUGINS: Plugin[] = [
   ...(FEATURES.USE_PLUGIN_VM_VIEW ? [vmViewPlugin, vmViewPluginV2] : []),
   // Famille proxmox-inventory : inventaire consolidé (une machine par ligne + export).
   ...(FEATURES.USE_PLUGIN_PROXMOX_INVENTORY ? [proxmoxInventoryPlugin] : []),
+  // Famille centreon-nsca : alarmes & checks passifs NSCA (règles → Centreon).
+  ...(FEATURES.USE_PLUGIN_CENTREON_NSCA ? [centreonNscaPlugin] : []),
 ];

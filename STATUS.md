@@ -1,6 +1,6 @@
 # Prox4u — État d'avancement
 
-> **Dernière mise à jour : 2026-10-25**
+> **Dernière mise à jour : 2026-10-30**
 > Application de supervision vCenter-like pour Proxmox VE (managers/DSI).
 > Conception de référence : `.opencode/skills/proxmox-web/SKILL.md`
 
@@ -14,7 +14,7 @@
 - App en **HTTPS** (cert auto-signé, SAN localhost + IP VM) ; InfluxDB en HTTPS sur 8181 ; **Explorer** (UI InfluxDB 3) en HTTPS sur 8888
 - Logs / pid : `logs/` (à la racine du projet, rien dans /tmp)
 - Cron : `@reboot` + keepalive minute par minute sur `server.sh start` (idempotent) ; le conteneur InfluxDB se relance seul au boot (`restart: unless-stopped`)
-- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (205 tests : 147 shared + 58 server)
+- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (313 tests : 217 shared + 96 server)
 
 ---
 
@@ -846,10 +846,103 @@ Demande utilisateur (2026-10-26) : « il y a des problèmes sur les graphiques d
 
 ---
 
+## ✅ Fait — Module « Alarmes & Centreon » (centreon-nsca) (livré, validé API + Playwright — **non commité**)
+
+Demande utilisateur (2026-10-30) : créer un module complet qui définit des règles de surveillance sur les VMs/nœuds Proxmox, génère des alarmes, et les transmet à **Centreon** via **NSCA (`send_nsca`)** en **checks passifs**, avec activation/désactivation des règles, choix d'un poller cible, et **provisionnement automatique du service Centreon** via **CLAPI** **ou** **API REST v1** (choix sur la page de config). Nom `centreon-nsca` (un backend Zabbix viendra ensuite — namespace `/api/alarms/*` générique).
+
+### Itération 2 (2026-10-30) — pollers avec IP + renommage + ajout de mapping
+Demande utilisateur : « pour la gestion des Pollers, il faut deux entrées — le nom et l'IP ; changer le nom du module **Alarmes & Checks NSCA → Alarmes & Centreon** ; pour le **Mapping VM → Hôte Centreon**, il faut un bouton **Ajouter** pour d'autres correspondances. »
+
+- **Pollers = nom + IP** : `CentreonPoller.ip` (shared) ; la Page 3 affiche une entrée IP par poller + une ligne d'ajout (nom + IP). L'**IP du poller est la destination NSCA** des trames de ses règles (`engine.ts` : `poller?.ip || cfg.nsca.server`), avec repli sur le serveur NSCA du central si vide. `store.setPollers` conserve/nettoie l'IP. Test store dédié.
+- **Renommage « Alarmes & Centreon »** : i18n fr/en (`nav.alarms`, `alarm.title`), manifest du plugin, `DEFAULT_MODULES` (shared/auth.ts), titre README + skill. Le nom du **catalogue** (data/auth.json, seedé avant le renommage) a été mis à jour manuellement — `syncModuleCatalog` ne met à jour que les entrées manquantes, pas les noms existants (point de vigilance pour les futurs renoms de module).
+- **Mapping VM→Hôte : bouton « Ajouter »** : la Page 3 charge les cibles (`GET /api/alarms/targets`), propose un dropdown VM + champ hôte (auto-suggestion `suggestCenteronHost`), et ajoute la correspondance (persistance via `PUT /api/alarms/config`).
+
+**Validation itération 2** : 313 tests (217 shared + 96 server) · typecheck web propre · build OK · Playwright — menu/catalogue « Alarmes & Centreon », onglet admin (IP des pollers pré-remplies, ligne d'ajout nom+IP, bouton Ajouter du mapping avec auto-suggestion et persistance), Page 2 inchangée.
+
+### Périmètre livré
+- **3 pages** : `/alarms` (tableau des règles : filtres, recherche, tri, indicateurs, activer/désactiver, Tester, Reprovisionner, Modifier, Supprimer), `/alarms/new` (formulaire de création → provisionne le service Centreon puis enregistre la règle + récap), et **Page 3 = onglet « Centreon (NSCA) »** de la page Administration (activation du module, transport CLAPI/REST v1, central, pollers, serveur NSCA, mapping VM→hôte Centreon).
+- **Engine d'alarmes** (tick 15 s) : évalue les règles actives sur le snapshot poller (ring-buffer mémoire, pas de dépendance InfluxDB), machine à états ok⇄firing, envoie une trame `send_nsca` à chaque transition (alarme = code sévérité 1/2/3, récupération = 0). Fenêtre de confirmation (la condition doit persister X minutes).
+- **Provisionnement** : CLAPI (mode **SSH** — Prox4u hors central — ou local) **ou** REST v1. Les deux créent le service passif (`passive_checks_enabled=1`, `active_checks_enabled=0`, `is_volatile=1`, `max_check_attempts=1`, `check_command=check_dummy!0`) puis **génèrent + déploient** la config du poller (`POLLERGENERATE`/`CFGMOVE` ou `config/generate`+`config/move`).
+- **Sécurité** : mots de passe CLAPI/NSCA/token REST jamais loggués, jamais renvoyés en clair par l'API (masqués `••••••`, « inchangé » si renvoyés tels quels) ; échappement des `;` et retours à la ligne dans les noms d'hôte/service contre l'injection de trame NSCA.
+- **Robustesse** : échec CLAPI/REST ou `send_nsca` → la règle reste enregistrée, statut provisioning/transmission `erreur` + message, aucun crash. Module désactivé = engine inerte.
+
+### Fichiers
+- `packages/shared/src/centreon-nsca.ts` (+ `.test.ts`, 23 tests) : types + fonctions pures (return code, échappement, trame, rendu template, nom de service, auto-suggestion hôte, évaluation fenêtre, `nscaCfgContent`, `clapiProvisionCommands`).
+- `packages/server/src/modules/centreonnsca/` : `store.ts` (data/centreon-nsca.json), `metrics.ts`, `engine.ts`, `nsca.ts` (spawn send_nsca + détection du support `encrypt`), `provision.ts` (CLAPI ssh/local + REST v1), `routes.ts` (`/api/alarms/*`), `index.ts` (+ 19 tests).
+- `packages/web/src/plugins/centreon-nsca/` : `index.ts` (manifest), `lib/nsca-api.ts`, `pages/{rules,create-rule,edit-rule}.tsx`, `components/rule-form.tsx`.
+- `packages/web/src/components/admin/nsca-config.tsx` (Page 3) + onglet dans `pages/admin/index.tsx`.
+- Câblage : `features.ts` (`VITE_USE_PLUGIN_CENTREON_NSCA`), `plugins.ts`, `app.tsx` (fallback ModuleDisabled), `DEFAULT_MODULES` (shared/auth.ts), i18n fr/en (`alarm.*`, `nav.alarms`, `admin.tab.nsca`).
+- Docs : `skills/centreon-nsca/SKILL.md` (+ symlink + inventaire `skills/README.md`), section README « Module Alarmes & Checks passifs NSCA », `scripts/nsca-test.sh` (test manuel NSCA).
+
+### Pièges corrigés pendant la livraison
+- **Format `send_nsca.cfg`** : le séparateur imposé est ` = ` (pas un espace simple) → `server = hôte`, `port = 5668`… (le format à l'echec rejetait tout le fichier).
+- **Support de `encrypt` variable** : certains builds de `send_nsca` (ex. le fork Debian `nsca-client`, celui de cet environnement) **ne connaissent pas** `encrypt` (ni en cfg, ni en CLI) et rejettent le fichier (`Unknown variable name 'encrypt'`) → **sonde de détection à l'exécution** (`probeEncryptSupport`) qui teste le binaire une fois et n'émet `encrypt` que si le build l'accepte. Portable entre builds.
+- **Chemin du binaire** : `send_nsca` est dans `/usr/sbin` (pas toujours dans le PATH) → détection PATH + emplacements usuels + override `SEND_NSCA_BIN`.
+
+### Validation effectuée
+- **Tests** : 217 shared (dont 23 centreon-nsca) + 95 server (dont 19 centreonnsca) passent · typecheck web 100 % propre · build web OK.
+- **API E2E** (session admin) : `GET /api/alarms` (règles+pollers+stats+config), `PUT /api/alarms/config` (activation+NSCA, mdp masqués à la relecture), `POST /api/alarms/rules` (création + **provisioning échoué proprement** sans central réel → `provisionStatus:error` + message SSH, règle conservée), `POST /api/alarms/rules/:id/test` (trame NSCA : le cfg passe le parsing, échec de connexion attendu sans daemon), `GET /api/alarms/targets` (VMs/nœuds réels + mappings).
+- **Playwright** : les 3 pages validées — menu « Alarmes & Checks NSCA », Page 2 (tableau + indicateurs + filtres + actions), Page 1 (formulaire peuplé + auto-suggestion hôte/service), Page 3 (onglet admin : transport CLAPI/REST, central, NSCA, pollers, mapping).
+- **Note** : le daemon NSCA n'est pas installé sur cet environnement (seul le client `send_nsca` l'est) → la réception côté Centreon est à valider avec un vrai daemon (script `scripts/nsca-test.sh` fourni). Le mot de passe admin a été réinitialisé en local pour la validation (`Prox4u-Test-2026`).
+
+### Roadmap (hors périmètre de cette itération)
+- Backend **Zabbix** (2ᵉ transport d'alarme) sur le même namespace `/api/alarms/*`.
+- Nettoyage CLAPI du service Centreon à la suppression d'une règle (actuellement : le service reste en place, nettoyage manuel).
+- Historique des alarmes / agrégats au-delà des 24 h.
+
+---
+
+## ✅ Fait — Agent PVE (colonne + alerte + compteur), menu déroulant, titres de page (livrés, validés tests/build + Playwright — **non commités**)
+
+Trois livraisons UI du 2026-10-30, toutes « sans rien casser » (routes, layout persisté et données inchangés).
+
+### 1. Colonne « Agent PVE » + alerte critique + compteur (UI seule, zéro métrique NSCA)
+- **Source unique `agentActive: boolean | null`** : `true` = QGA répond (`get-fsinfo` ok, y compris `[]`) · `false` = VM QEMU en cours mais agent non démarré (**critique**) · `null` = n/a (LXC, arrêtée, template) ou inconnu (cache pas réchauffé au démarrage).
+- **Zéro appel API additionnel** : capturée dans le **réchauffage agent déjà existant du poller** (`refreshAgentData`, `EndpointState.agentActive: Map<vmid,boolean>`). La route inventaire dérive le sien de `fs !== null` qu'elle reçoit déjà.
+- Ajoutée à `VmSummary`, `InvVm`, `KpiSummary` (`vmsAgentDown`).
+- **Vue VM v2** : colonne « Agent PVE » (badge vert/rouge/« — »), triable (inactif d'abord en asc, nulls last).
+- **Inventaire Proxmox** : même colonne + **filtre par colonne** (actif/inactif/n-a) + tri ; le compteur « Agent OK » de l'en-tête passe à l'état **exact** (`agentActive === true`) — remplace l'ancienne heuristique interfaces/disques.
+- **Vue générale** : sous-ligne dans la carte « VMs & conteneurs » existante (pas de nouvelle carte, le layout persisté est conservé) — rouge « N VM(s) sans agent PVE » si > 0, sinon « agents PVE OK ».
+- i18n : `vm.col.agent`/`vm.agent.*`, `pxinv.col.agent`/`pxinv.agent.*`, `kpi.vmAgentDown`/`kpi.vmAgentOk`.
+
+### 2. Menu déroulant — section « PROXMOX » supprimée, sous-menu sous « Vue d'ensemble »
+- La section « PROXMOX » (endpoints→nœuds) du sidebar est **supprimée** et transformée en **sous-menu repliable** niché sous l'item « Vue d'ensemble ».
+- Mécanique générique sur `PluginMenuItem` : `submenu` (ReactNode) + `statusDot` (composant) — validées zod. **Chevron dédié** : clic label = navigation, clic chevron = repli/dépliage. **État persisté** `navTreeExpanded` dans `store/layout` (replié par défaut, mémorisé). `EndpointFleetDot` = pastille de santé **agrégée** (crit > warn > ok > neutre), visible même repliée.
+- Liens = les mêmes routes (`/e/:endpointId`, `/e/:endpointId/n/:nodeId`) — zéro changement de route.
+- `plugins/hypervision/index.ts` **renommé `index.tsx`** (JSX dans le manifest).
+
+### 3. Titres de page (cohérence avec tous les modules)
+- **Convention** (consignée dans le skill `general` §5) : **chaque page = `h1` à gauche (`text-lg font-semibold`) + ligne d'aide (`text-xs` muted)** ; bouton retour (←) sur les pages de détail.
+- **Vue d'ensemble** : `h1` « Vue d'ensemble » + aide (`overview.hint`).
+- **Cluster (endpoint)** : bouton retour → Vue d'ensemble + `h1` = nom du cluster + aide (`endpoint.hint`).
+- **Nœud** : titre passé en `h1` (était `div text-xl`) — boutons retour + badges statut/surallocation + IP/version/uptime conservés.
+
+### Vérifications effectuées
+- `pnpm typecheck` (3 packages) + `pnpm test` (**224 shared + 112 server**) + `pnpm build` : OK. **4 tests ajoutés** (tri `agentActive` ×2, filtre agent, `agentOk` exact).
+- **Playwright (cluster réel)** : menu replié/déplié validé (chevron, pastille, liens endpoints/nœuds) ; les 3 pages avec leur titre + aide ; colonne agent (5/5 VMs actives, `vmsAgentDown`=0, LXC/arrêtées = null).
+- **Vérif live du vrai client** (`getAgentBundle`, même chemin que le poller) : proxmox 100/102/104/105/106 = agent actif, 101/103 (LXC) = n/a · clusterproxmox 100/2101 (arrêtées) = n/a → `vmsAgentDown` = 0.
+- i18n : après ajout des clés `overview.hint`/`endpoint.hint`, **rebuild du `dist` shared obligatoire** (sinon la clé brute s'affiche) — voir skill `general` §10.
+
+### Pièges rencontrés (corrigés)
+- **JSX dans le manifest** : `submenu: <ProxmoxNavTree />` dans `index.ts` → `tsc TS1005` → renommé `index.tsx`.
+- **Clé i18n brute affichée** : le web lit le `dist` buildé de `@proxmox/shared` → rebuild shared requis après toute clé i18n.
+- **`vmsAgentDown` construit avant les `vmSummaries`** : le calcul est placé avant la construction de `kpis` (pas après), sinon les `agentActive` ne sont pas encore renseignés.
+
+---
+
 ## ⏳ À faire
 
+### Monitoring — référence ProxMenux + Telegraf (nouveau, 2026-11-04)
+TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète dans la skill
+**`skills/monitoring-proxmenux`**. P0 = Telegraf bare-metal sur les nœuds Proxmox (SMART,
+températures, ZFS, unités systemd, latence) → nouveau plugin **`node-sensors` v1** (Option A,
+aucun module existant touché). Prérequis réseau déjà posé : `INFLUX_LAN_BIND` expose l'API
+InfluxDB (8181) aux nœuds (validé live, write+read via l'IP LAN). P1 quorum (donnée déjà
+pollée) · P2 moteur d'alarmes v2 (hystérésis/suppression/ack) · P3 audit best-practices ·
+P4 PBS + événements · P5 certificats + NTP.
+
 ### En attente de décision utilisateur
-- [ ] **Commit** : correction disque (`storage_metrics`) + renommage Prox4u + fix `server.sh` (pipefail/TLS_CERT) + STATUS.md + `skills/` + README.md — consigne utilisateur : « pas encore de GIT » (branche `refactor/plugin-architecture`, 11 commits, main intacte). Les dossiers de référence `ProxMenux/` et `project-pegaprox/` ont été sortis du repo le 2026-10-24 (→ `/home/opencode/projet/`)
+- [ ] **Commit** : correction disque (`storage_metrics`) + renommage Prox4u + fix `server.sh` (pipefail/TLS_CERT) + **livraisons 2026-10-30** (colonne/alerte/compteur agent PVE + menu déroulant + titres de page : `shared/types.ts` `shared/vm-view.ts` `shared/proxmox-inventory.ts` `shared/i18n/*` + `server/poller.ts` `server/modules/proxinventory/routes.ts` + `web/plugins/hypervision/*` (index.tsx, proxmox-nav-tree.tsx, kpi-row.tsx, pages) + `web/core/ui/PluginMenu.tsx` `web/core/plugin/types.ts` `web/store/layout.ts` `web/components/layout/sidebar.tsx` + `web/plugins/vm-view_v2/components/vm-table.tsx` + `web/plugins/proxmox-inventory/components/proxmox-inventory-table.tsx`) + **nouvelle skill `proxmox-inventory`** + updates skills (`general`, `hypervision`, `vm-inventory`) + STATUS.md + README.md — consigne utilisateur : « pas encore de GIT » (branche `refactor/plugin-architecture`, 11 commits, main intacte). Les dossiers de référence `ProxMenux/` et `project-pegaprox/` ont été sortis du repo le 2026-10-24 (→ `/home/opencode/projet/`)
 - [ ] **`docker-compose.yml`** (influxdb + explorer, tracké) : dev local uniquement vs retrait du repo
 - [ ] **Push GitHub** : en attente du compte GitHub + identité (commits avec placeholder `proxmox-dev <dev@localhost>`, pas de remote)
 - [ ] **Fusion dans main** : en attente de validation utilisateur
@@ -912,17 +1005,18 @@ packages/server/src/modules/auth/     # store (data/auth.json) + routes (login/m
 packages/server/src/index.ts  # entry Fastify HTTPS + SPA + WS (buildEndpoints, fallback default)
 packages/web/src/app.tsx      # router host : routes des plugins actifs + layout shell (ModuleDisabled si flag OFF)
 packages/web/src/core/plugin/ # contrat (types zod, registry, loader, eventBus, logger) + core/config/features.ts (flags VITE_USE_PLUGIN_*)
-packages/web/src/components/layout/           # sidebar (PluginMenu + nav endpoints + statut), topbar (santé globale)
-packages/web/src/plugins/hypervision/         # pages overview/endpoint/node + composants (menu order 10)
+packages/web/src/components/layout/           # sidebar (PluginMenu — l'arbre endpoints/nœuds Proxmox est un sous-menu repliable sous « Vue d'ensemble », plus de section PROXMOX), topbar (santé globale)
+packages/web/src/plugins/hypervision/         # index.tsx (submenu + statusDot) + pages overview/endpoint/node (titres de page) + proxmox-nav-tree.tsx (sous-menu sidebar + pastille agrégée) + composants (menu order 10)
 packages/web/src/plugins/network/             # topology.tsx + topology-flow (React Flow : layout pur, filtre, impact, PRA, drag, IfaceEdge), network-inventory, multi-select (menu order 20)
 packages/web/src/plugins/storage/             # storage.tsx + storage-inventory (table vCenter : barre de capacité colorée, drill-down VMs, recherche, export CSV) (menu order 30)
 packages/web/src/plugins/vm-inventory/        # vm-inventory.tsx + vm-tree (Datacenter→cluster→nœud), vm-table (filtres/tri), vm-detail (onglets Config/Réseau/Snapshots) (menu order 40)
-packages/web/src/plugins/vm-inventory_v2/     # approche vCenter : arbre avec feuilles VM + détail plein écran (onglets, grille Résumé style vSphere) + bouton « Console web (UI PVE) » (version canonique = la plus récente)
+packages/web/src/plugins/vm-inventory_v2/     # approche vCenter : arbre avec feuilles VM + détail plein écran (onglets, grille Résumé style vSphere) + bouton « Console web (UI PVE) » + colonne « Agent PVE » (version canonique = la plus récente)
+packages/web/src/plugins/proxmox-inventory/   # inventaire consolidé multi-endpoints (une machine par ligne QEMU+LXC) : OS réel (agent), disques par fs, interfaces/IPs, tags, état agent PVE, filtres par colonne + export TXT/CSV/JSON (menu order 50)
 packages/web/src/components/auth/             # login-form, protected-route (ProtectedRoute+ModuleRoute), change-password-form, module-selector (une case par version)
 packages/web/src/components/admin/            # module-catalog (une carte par version, sans activation), group-manager, user-manager
 packages/web/src/pages/{login,profile,admin}/ # auth + admin (3 onglets : catalogue / groupes / utilisateurs)
 data/auth.json                                # users/groups/modules/préférences (600, gitignored — comptes migrés de l'ancienne app)
 packages/web/src/hooks/use-echart.ts              # wrapper ECharts (init paresseux)
 packages/web/src/index.css                        # Tailwind v4 + tokens Tremor + @source inline
-skills/                                           # base de connaissance (trackée, livrée en prod) : 7 SKILL.md + README.md (inventaire) — .opencode/skills/ = symlinks locaux
+skills/                                           # base de connaissance (trackée, livrée en prod) : 8 SKILL.md + README.md (inventaire) — .opencode/skills/ = symlinks locaux
 ```

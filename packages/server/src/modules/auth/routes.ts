@@ -163,6 +163,9 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
 
     user.passwordHash = await hashPassword(newPassword);
     auth.store.setMustChangePassword(user.id, false);
+    // Révocation des AUTRES sessions de l'utilisateur (sa session courante est
+    // conservée via exceptToken) — un mdp changé invalide les connexions antérieures.
+    auth.sessions.destroyAllForUser(user.id, parseCookies(req.headers.cookie)[SESSION_COOKIE]);
     return { ok: true };
   });
 
@@ -266,6 +269,8 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
     }
     auth.store.setPasswordHash(id, await hashPassword(temporaryPassword));
     auth.store.setMustChangePassword(id, true); // changement forcé à la prochaine connexion
+    // Un reset admin invalide toutes les sessions de l'utilisateur cible.
+    auth.sessions.destroyAllForUser(id);
     return { temporaryPassword };
   });
 

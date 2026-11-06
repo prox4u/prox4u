@@ -119,6 +119,8 @@ export function KpiStorageCard({ kpis, spark }: KpiProps) {
 
 export function KpiVmsCard({ kpis, spark }: KpiProps) {
   const { t } = useTranslation();
+  // Compteur « agents PVE inactifs » (VMs QEMU en cours sans QGA) — critique si > 0.
+  const agentDown = kpis.vmsAgentDown ?? 0;
   return (
     <Card>
       <CardHeader draggable className="flex-row items-center justify-between">
@@ -131,6 +133,11 @@ export function KpiVmsCard({ kpis, spark }: KpiProps) {
           {kpis.vmsRunning}
           <span className="text-sm font-normal text-muted-foreground"> / {kpis.vmsTotal}</span>
           <span className="ml-1.5 text-xs font-normal text-muted-foreground">{kpis.vmsStopped} {t('kpi.stopped')}</span>
+        </div>
+        <div className={agentDown > 0 ? 'mb-1 truncate text-[11px] font-semibold text-crit' : 'mb-1 truncate text-[11px] text-muted-foreground'}>
+          {agentDown > 0
+            ? t('kpi.vmAgentDown', { n: agentDown })
+            : t('kpi.vmAgentOk')}
         </div>
         <Sparkline values={spark.map((p) => p.vmsRunning)} color={TONE_HEX.default} />
       </CardContent>

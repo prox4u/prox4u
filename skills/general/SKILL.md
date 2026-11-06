@@ -48,7 +48,7 @@ Application web d'**hypervision multi-endpoints** pour Proxmox VE : dashboard vC
 - Usage : `VITE_USE_PLUGIN_STORAGE=false pnpm dev`.
 
 ### 2.4 Ajouter un nouveau plugin (workflow)
-1. Créer `packages/web/src/plugins/<id>/` : `index.ts` (manifest + `init`), `pages/`, `components/`.
+1. Créer `packages/web/src/plugins/<id>/` : `index.ts` (manifest + `init`), `pages/`, `components/`. **Chaque page respecte la convention titre de page** (§5) : `h1` à gauche + ligne d'aide.
 2. Manifest : id stable (`PLUGIN_ID_RE`), version semver, routes, menu (`labelKey` = clé i18n à ajouter dans `@proxmox/shared`).
 3. L'inscrire dans `core/plugin/plugins.ts` + ajouter le flag `VITE_USE_PLUGIN_<ID>` dans `features.ts`.
 4. Données : utiliser `ctx.api` (client REST partagé) et le store WS du host (`core/data`) — ne jamais ouvrir son propre WebSocket.
@@ -149,6 +149,7 @@ proxmox-plugin-arch/
 - Composants style shadcn/ui dans `components/ui/` (Card, Badge, Table, Progress…) ; en-têtes de Card draggables via la classe `.drag-handle`.
 - ECharts : thème `lib/chart-theme.ts`, hook `use-echart` (init/dispose).
 - Formatage : `formatBytes`, `formatUptime`, `cn` (`lib/utils.ts`).
+- **Convention titre de page (obligatoire)** : **chaque page a un titre `h1` aligné à gauche** en tête de contenu — `<h1 className="text-lg font-semibold tracking-tight">{t('…')}</h1>` — **suivi d'une ligne d'aide (commentaire)** `<p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">{t('…hint')}</p>` qui décrit ce que montre la page. Les **pages de détail** (endpoint, nœud…) ajoutent un **bouton retour (←)** à gauche du titre. Toute nouvelle page/plugin doit respecter ce pattern (rappelé dans le workflow « ajouter un plugin » §2.4).
 
 ## 6. i18n
 - Ressources dans `@proxmox/shared` (fr/en), initialisation `web/src/i18n.ts` ; langue persistée localStorage (`lang`), défaut `DEFAULT_LANG`.
@@ -173,6 +174,7 @@ proxmox-plugin-arch/
 - Typecheck : `pnpm exec tsc -b --noEmit` · Build : `pnpm build` · Tests : `pnpm test` (vitest, à la racine).
 
 ## 10. Pièges transverses
+- **Clé i18n absente → la clé brute s'affiche** : le web importe les ressources i18n depuis le **`dist` buildé** de `@proxmox/shared`, pas la source. Après ajouter/modifier une clé dans `packages/shared/src/i18n/`, **il faut rebuild du shared** (`pnpm --filter @proxmox/shared build`) puis rebuild web, sinon l'UI affiche la clé brute (ex. `overview.hint`) au lieu de la traduction. Le typecheck ne détecte pas une clé manquante (les `t('…')` sont des chaînes libres).
 - **Horodatages InfluxDB** : l'API renvoie l'UTC en ISO sans fuseau → forcer le `Z` avant `Date.parse` (`influxTsToUnix`).
 - **Sémantique disque** : `storage_metrics` (stockage VM, pondéré) ≠ `disk_pct` (rootfs nœud, santé nœud). Bucket sans série → `null` (gap ECharts), ne pas mélanger avec le rootfs ; la vue nœud (`?node=`) est exclue de la fusion.
 - **Feature flags opt-out** : défaut ON ; OFF = désactivation propre (pas de code mort).

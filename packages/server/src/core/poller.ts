@@ -62,6 +62,13 @@ interface EndpointState {
   lastError: string | null;
   daily: DailySample[];
   lastDayKey: string | null;
+  /**
+   * Vivacité de l'agent invité (QGA) par vmid, mise à jour par le réchauffage
+   * background (aucun appel API additionnel). true = QGA répond · false = agent non
+   * démarré / injoignable. Absence d'entrée = inconnu (démarrage, cache pas réchauffé)
+   * ou n/a (LXC, VM arrêtée → la clé est purgée).
+   */
+  agentActive: Map<number, boolean>;
 }
 
 /**
@@ -98,7 +105,7 @@ export class Poller {
     private intervalMs = 5_000,
   ) {
     for (const rt of ctx.endpoints) {
-      this.states.set(rt.id, { rt, snapshot: null, lastError: null, daily: [], lastDayKey: null });
+      this.states.set(rt.id, { rt, snapshot: null, lastError: null, daily: [], lastDayKey: null, agentActive: new Map() });
     }
   }
 
@@ -226,6 +233,9 @@ export class Poller {
       // Capacité des pools thin uniquement — dénominateur du ratio de surallocation disk
       const thinTotal = storWithCap.filter((s) => isThinStorage(s.type)).reduce((s, x) => s + (x.total ?? 0), 0);
 
+      // VMs QEMU en cours dont l'agent invité est inactif (alerte critique UI)
+      const vmsAgentDown = vms.filter((v) => v.type === 'qemu' && v.status === 'running' && st.agentActive.get(v.vmid) === false).length;
+
       const kpis: KpiSummary = {
         nodes: { online: online.length, total: nodes.length },
         cpuTotalCores: totalCpus,
@@ -245,6 +255,7 @@ export class Poller {
         vmsRunning: vms.filter((v) => v.status === 'running').length,
         vmsStopped: vms.length - vms.filter((v) => v.status === 'running').length,
         vmsTotal: vms.length,
+        vmsAgentDown,
       };
 
       this.updateDaily(st, kpis);
@@ -287,6 +298,8 @@ export class Poller {
         diskReadBps: v.diskread != null ? Math.round(v.diskread) : null,
         diskWriteBps: v.diskwrite != null ? Math.round(v.diskwrite) : null,
         ipAddresses: v.ipAddresses ?? [],
+        // null = n/a (LXC/arrêtée) ou inconnu (1ers ticks, avant le réchauffage agent)
+        agentActive: v.type === 'qemu' && v.status === 'running' ? st.agentActive.get(v.vmid) ?? null : null,
       }));
 
       const snap: DashboardSnapshot = {
@@ -333,7 +346,13 @@ export class Poller {
     if (this.agentRefreshing.has(rt.id)) return;
     this.agentRefreshing.add(rt.id);
     try {
-      await mapLimit(vms, AGENT_CONCURRENCY, (v) => rt.source.getAgentBundle(v.node, v.vmid, v.type, v.status));
+      const st = this.states.get(rt.id)!;
+      await mapLimit(vms, AGENT_CONCURRENCY, async (v) => {
+        const { fs } = await rt.source.getAgentBundle(v.node, v.vmid, v.type, v.status);
+        // `fs !== null` = le QGA répond (y compris [] : agent vivant, aucun fs sur disque VM).
+        if (v.type === 'qemu' && v.status === 'running') st.agentActive.set(v.vmid, fs !== null);
+        else st.agentActive.delete(v.vmid); // LXC / arrêtée / template : n/a
+      });
     } finally {
       this.agentRefreshing.delete(rt.id);
     }

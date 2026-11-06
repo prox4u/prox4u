@@ -125,6 +125,7 @@ export function VmTable(props: Props) {
               {header(t('vm.col.node'), 'node')}
               {header(t('vm.col.type'), 'type')}
               {header(t('vm.col.status'), 'status')}
+              {header(t('vm.col.agent'), 'agentActive')}
               {header(t('vm.col.cpu'), 'cpuPct', 'text-right')}
               {header(t('vm.col.mem'), 'memBytes', 'text-right')}
               {header(t('vm.col.disk'), 'diskBytes', 'text-right')}
@@ -133,7 +134,7 @@ export function VmTable(props: Props) {
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow className="hover:bg-transparent">
-                <TableCell colSpan={8} className="py-10 text-center text-xs text-muted-foreground">
+                <TableCell colSpan={9} className="py-10 text-center text-xs text-muted-foreground">
                   {t('vm.empty')}
                 </TableCell>
               </TableRow>
@@ -166,6 +167,21 @@ export function VmTable(props: Props) {
                         />
                         {t(`vm.status.${v.status}`)}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {v.agentActive === null ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : v.agentActive ? (
+                        <Badge tone="ok" className="gap-1.5">
+                          <span className="h-1.5 w-1.5 rounded-full bg-ok" />
+                          {t('vm.agent.active')}
+                        </Badge>
+                      ) : (
+                        <Badge tone="crit" className="gap-1.5">
+                          <span className="h-1.5 w-1.5 rounded-full bg-crit" />
+                          {t('vm.agent.down')}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{v.cpuPct.toFixed(1)} %</TableCell>
                     <TableCell className="text-right tabular-nums">

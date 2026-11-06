@@ -19,6 +19,8 @@ function vm(partial: Partial<VmSummary> & Pick<VmSummary, 'vmid' | 'name'>): VmS
     netOutBps: null,
     diskReadBps: null,
     diskWriteBps: null,
+    ipAddresses: [],
+    agentActive: null,
     ...partial,
   };
 }
@@ -71,6 +73,18 @@ describe('sortVmRows', () => {
   it('diskBytes : null toujours en fin de liste', () => {
     expect(sortVmRows(vms, 'diskBytes', 'asc').map((v) => v.vmid)).toEqual([2, 1, 3]);
     expect(sortVmRows(vms, 'diskBytes', 'desc').map((v) => v.vmid)).toEqual([1, 2, 3]);
+  });
+
+  it('agentActive : inactif (critique) d’abord en asc, nulls last dans les deux sens', () => {
+    const rows = [
+      vm({ vmid: 1, name: 'ok', agentActive: true }),
+      vm({ vmid: 2, name: 'down', agentActive: false }),
+      vm({ vmid: 3, name: 'na', agentActive: null }),
+    ];
+    // asc : down (2) avant ok (1), null (3) en fin
+    expect(sortVmRows(rows, 'agentActive', 'asc').map((v) => v.vmid)).toEqual([2, 1, 3]);
+    // desc : ok (1) avant down (2), null (3) toujours en fin
+    expect(sortVmRows(rows, 'agentActive', 'desc').map((v) => v.vmid)).toEqual([1, 2, 3]);
   });
 
   it('statut : running avant stopped (ordre vivant)', () => {

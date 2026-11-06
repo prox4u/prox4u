@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import argon2 from 'argon2';
 import { validatePassword, type PasswordIssue } from '@prox4u/shared';
 
@@ -28,7 +29,8 @@ export function checkPasswordPolicy(password: string): PasswordIssue | null {
 export function generateTemporaryPassword(): string {
   const letters = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ';
   const digits = '23456789';
-  const pick = (set: string) => set[Math.floor(Math.random() * set.length)];
+  // CSPRNG (pas Math.random) : un mdp temporaire prévisible est une porte d'entrée.
+  const pick = (set: string) => set[randomInt(set.length)];
   const chars: string[] = [];
   for (let i = 0; i < 10; i++) chars.push(pick(letters + digits));
   chars.push(pick(letters), pick(digits)); // garantit la présence d'une lettre et d'un chiffre

@@ -39,9 +39,12 @@ interface LayoutState {
   overviewLayout: Record<string, Layout>;
   /** incrémenté au reset → force le remontage des grilles */
   version: number;
+  /** menu latéral : sous-arbre Proxmox (endpoints/nœuds) déplié sous « Vue d'ensemble ». Défaut replié. */
+  navTreeExpanded: boolean;
   setLayouts: (all: Record<string, Layout>) => void;
   setOverviewLayouts: (all: Record<string, Layout>) => void;
   resetLayout: () => void;
+  toggleNavTree: () => void;
 }
 
 export const useLayout = create<LayoutState>()(
@@ -50,13 +53,15 @@ export const useLayout = create<LayoutState>()(
       layout: {},
       overviewLayout: {},
       version: 0,
+      navTreeExpanded: false,
       setLayouts: (all) => set({ layout: all }),
       setOverviewLayouts: (all) => set({ overviewLayout: all }),
       resetLayout: () => set((s) => ({ layout: {}, overviewLayout: {}, version: s.version + 1 })),
+      toggleNavTree: () => set((s) => ({ navTreeExpanded: !s.navTreeExpanded })),
     }),
     {
       name: 'proxmox-dashboard-layout',
-      partialize: (s) => ({ layout: s.layout, overviewLayout: s.overviewLayout, layoutVersion: LAYOUT_VERSION }),
+      partialize: (s) => ({ layout: s.layout, overviewLayout: s.overviewLayout, layoutVersion: LAYOUT_VERSION, navTreeExpanded: s.navTreeExpanded }),
       // Layouts persistés d'une version antérieure → jetés (grille restructurée)
       merge: (persisted, current) => {
         const p = persisted as { layoutVersion?: number } | undefined;

@@ -22,7 +22,7 @@ Page `/vms` : **inventaire des VMs et conteneurs LXC** du parc multi-endpoints, 
 | `components/vm-detail.tsx` | Panneau détail : fetch `/api/vm-config`, onglets Configuration / Réseau / Snapshots, barres d'utilisation |
 
 ## 3. Flux de données (deux sources)
-- **Liste = live WS** : `useMulti()` → `snapshot.vms: VmSummary[]` par endpoint (push 5 s). `VmSummary` a été enrichi pour l'inventaire : `diskBytes`, `maxdiskBytes`, `cpuAllocCores`, `os`, `uptimeSec` (mapping poller depuis `cluster/resources` + jointure config — zéro appel API supplémentaire).
+- **Liste = live WS** : `useMulti()` → `snapshot.vms: VmSummary[]` par endpoint (push 5 s). `VmSummary` a été enrichi pour l'inventaire : `diskBytes`, `maxdiskBytes`, `cpuAllocCores`, `os`, `uptimeSec`, **`agentActive: boolean | null`** (état de l'agent invité QGA — mapping poller depuis le réchauffage agent existant, zéro appel API supplémentaire).
 - **Détail = REST** : `fetchVmDetail(endpointId, vmid)` → `GET /api/vm-config?endpoint=&vmid=` → `VmDetailResponse { vm (live), config (cache 1 h), snapshots (appel PVE à la demande, cache 5 min) }`. La pseudo-entrée PVE `current` est filtrée côté serveur.
 - Périmètre du tableau selon la sélection tree : `'dc'` = tout · `<epId>` = l'endpoint · `<epId>/<node>` = le nœud. Les VMs sont taggées `{ vm, endpointId }` (le détail a besoin de l'endpoint).
 
@@ -37,19 +37,25 @@ Page `/vms` : **inventaire des VMs et conteneurs LXC** du parc multi-endpoints, 
 - **Code couleur statuts** : running = ok (vert) · paused = warn (ambre) · stopped/unknown = default. Barres d'utilisation détail : <80 % primary, ≥80 % warn, ≥90 % crit.
 - **Limite données connue** : PVE 9 renvoie `disk=0` dans `/cluster/resources` selon le stockage → « 0 o / X To » au tableau (pas de crash) ; le détail affiche la même valeur live.
 
-## 6. Console web (v2)
+## 6. Colonne « Agent PVE » (v2)
+- `components/vm-table.tsx` : **colonne « Agent PVE »** (`agentActive`) insérée après l'état, **triable** (clé `agentActive`). Rendu : `null` → « — » · `true` → badge vert « actif » · `false` → **badge rouge « inactif »** (critique). `colSpan` du tableau passé de 8 à 9.
+- **Tri** (fonction pure shared `sortVmRows`, clé `agentActive`) : **inactif (`false`, critique) d'abord en asc** · `null` **toujours en fin de liste** quel que soit le sens (même règle « nulls last » que `diskBytes`).
+- i18n : `vm.col.agent` / `vm.agent.active` / `vm.agent.down`.
+- Sémantique `agentActive` : voir skill `proxmox-inventory` §7 (`true` = QGA répond · `false` = VM en cours sans agent, critique · `null` = n/a ou inconnu).
+
+## 7. Console web (v2)
 - Bouton « Console web » dans l'en-tête du panneau détail : ouvre **la console de la VM dans l'UI PVE** (nouvel onglet, `window.open(..., 'noopener,noreferrer')`).
 - URL : `${endpointUrl}/#next;nodes/<node>/<type>/<vmid>/console` — `endpointUrl` = `EndpointSnapshot.url` (URL API PVE, exposée par le poller + WS), `<type>` = `qemu` | `lxc`, `<node>`/`<vmid>` depuis le détail live.
 - **Désactivé sans URL** (mode démo : mock sans `url`) — tooltip `vm.console.unavailable`. i18n : `vm.console.web` / `vm.console.unavailable`.
 - Décision utilisateur : lien vers l'UI PVE, **pas de noVNC intégré**.
 
-## 7. Onglet Monitor (v2) — historiques par VM
+## 8. Onglet Monitor (v2) — historiques par VM
 - `components/vm-monitor.tsx` : graphiques historiques depuis InfluxDB, timeframes 1 h / 24 h / 7 j / 30 j, auto-refresh 60 s, export CSV du timeframe affiché (général + par graphe).
 - **Deux mesures** : `vm_metrics` (CPU/RAM/I/O/réseau — `/api/vm-metrics`) et `vm_fs` (**occupation disque PAR FILESYSTEM** — `/api/vm-fs`).
 - **Occupation disque par partition** : un **graphe par filesystem** (point de montage + périphérique, ex. `/` sur `sda1`, `/NFS` sur `sda6`) — espace utilisé (courbe ambrée) + taille du fs (ligne pointillée indigo), **légende** `Utilisé`/`Alloué`. Source : agent invité QEMU `get-fsinfo` (fs sur disque VM, `disk` non vide — les vrais montages réseau sont exclus) ; LXC = un seul rootfs (`disk`/`maxdisk` de `/cluster/resources`). Le poller interroge l'agent **au plus toutes les 5 min** par VM (throttle) et écrit `vm_fs` (une série par mountpoint) + l'agrégat `disk_bytes`/`disk_alloc_bytes` dans `vm_metrics`.
 - **Privilège PVE** : `VM.GuestAgent.Audit` suffit (pas `Unrestricted`). Contrainte PVE 9.1.1 : seuls `agent/get-fsinfo` fonctionne (`agent/fs-info` « not implemented », `agent/exec` HTTP 596) — voir skill `operations` + `deploiement/DEPLOY.md` §2.
 - `maxmemBytes`/`maxdiskBytes` (du détail live) alimentent les lignes d'allocation RAM / le pied de page d'allocation totale.
 
-## 8. Hors périmètre
+## 9. Hors périmètre
 - Actions power (start/stop/reboot) — reportées (« plus tard »), token PVE écriture requis.
 - Création/migration/suppression de VM.

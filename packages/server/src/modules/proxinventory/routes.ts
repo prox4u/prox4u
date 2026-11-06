@@ -122,6 +122,9 @@ function buildInvVm(ep: EndpointRuntime, v: PveVmResource, fs: AgentFsUsage[] | 
     disks,
     interfaces,
     ips,
+    // QGA vivant si get-fsinfo a répondu (y compris [] : agent actif, aucun fs sur disque VM).
+    // null = n/a (LXC, VM arrêtée, template) — l'agent invité n'existe pas pour eux.
+    agentActive: v.type === 'qemu' && v.status === 'running' ? fs !== null : null,
   };
 }
 

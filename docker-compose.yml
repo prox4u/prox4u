@@ -5,9 +5,14 @@ services:
     # user non-root propriétaire de ./data/influxdb (configurable via .env)
     user: "${INFLUX_UID:-1500}:${INFLUX_GID:-1500}"
     ports:
-      # localhost-only : l'app se connecte en https://localhost:8181 (même machine) ;
-      # l'API InfluxDB n'est pas exposée au réseau. Explorer passe par le service Docker.
+      # L'app (même machine) se connecte en https://localhost:8181 → binding
+      # 127.0.0.1 toujours requis.
       - "127.0.0.1:8181:8181"
+      # Agents Telegraf des nœuds Proxmox : fixer INFLUX_LAN_BIND sur l'IP du
+      # serveur dans le réseau interne (ex. 192.168.1.10, .env) pour autoriser
+      # l'écriture InfluxDB depuis les nœuds. À vide → mapping identique au
+      # premier (dédupliqué par compose) : rien n'est exposé au réseau.
+      - "${INFLUX_LAN_BIND:-127.0.0.1}:8181:8181"
     # TLS : générer les certificats avant le premier up → ./deploiement/40-tls-init.sh
     command:
       - influxdb3

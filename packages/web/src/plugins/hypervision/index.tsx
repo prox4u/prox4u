@@ -1,5 +1,6 @@
 import { LayoutDashboard } from 'lucide-react';
 import type { Plugin } from '../../core/plugin/types';
+import { EndpointFleetDot, ProxmoxNavTree } from './components/proxmox-nav-tree';
 import { EndpointPage } from './pages/endpoint';
 import { NodePage } from './pages/node';
 import { OverviewPage } from './pages/overview';
@@ -19,7 +20,18 @@ export const hypervisionPlugin: Plugin = {
       { path: '/e/:endpointId/n/:nodeId', element: NodePage },
     ],
     menu: [
-      { id: 'hypervision-overview', to: '/', labelKey: 'nav.overview', icon: LayoutDashboard, order: 10 },
+      // « Vue d'ensemble » porte le sous-menu Proxmox (endpoints/nœuds, replié par
+      // défaut) + la pastille de santé agrégée — remplace l'ancienne section
+      // « PROXMOX » du sidebar.
+      {
+        id: 'hypervision-overview',
+        to: '/',
+        labelKey: 'nav.overview',
+        icon: LayoutDashboard,
+        order: 10,
+        submenu: <ProxmoxNavTree />,
+        statusDot: EndpointFleetDot,
+      },
     ],
   },
   init(ctx) {

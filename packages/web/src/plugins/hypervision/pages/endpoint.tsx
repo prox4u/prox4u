@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ResponsiveGridLayout, useContainerWidth, type Breakpoints, type Layout } from 'react-grid-layout';
-import { AlertTriangle, Loader2 } from 'lucide-react';
-import { Navigate, useParams } from 'react-router-dom';
+import { AlertTriangle, ArrowLeft, Loader2 } from 'lucide-react';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { useDashboard } from '../../../core/data/dashboard';
 import { useEndpoint } from '../../../core/data/use-endpoint';
 import { DEFAULT_LAYOUT, useLayout } from '../../../store/layout';
@@ -74,6 +74,21 @@ export function EndpointPage() {
 
   return (
     <div className="space-y-4">
+      {/* Titre de page à gauche, même style que les autres modules + bouton retour Vue d'ensemble. */}
+      <div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            to="/"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border bg-card text-muted-foreground transition-colors hover:text-foreground"
+            title={t('nav.overview')}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Link>
+          <h1 className="text-lg font-semibold tracking-tight">{ep.name}</h1>
+        </div>
+        <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">{t('endpoint.hint')}</p>
+      </div>
+
       {!ep.ok && (
         <div className="flex items-center gap-2 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
