@@ -280,6 +280,141 @@ export class InfluxConsolidator {
       ),
     );
     if (dsLines.length > 0) await influx.writeLp(influx.aggDb, dsLines);
+
+    // --- Tables Telegraf (buckets 15 min) ---
+    // Ces mesures arrivent toutes les 10 s ; on agrège en 15 min pour conserver
+    // un historique plus long dans consolidated (∞) que les 31 j de raw.
+
+    // SMART : dernier état par (node, device) dans la fenêtre (gauge → MAX/MIN)
+    try {
+      const smartRows = await influx.querySql<SqlRow>(
+        influx.rawDb,
+        `SELECT date_bin(INTERVAL '15 minutes', time) AS t, node, device,
+                min(model) AS model, min(serial_no) AS serial_no,
+                min(health_ok) AS health_ok, max(temp_c) AS temp_c,
+                max(power_on_hours) AS power_on_hours,
+                max(power_cycle_count) AS power_cycle_count,
+                max(reallocated_sectors_count) AS reallocated_sectors_count,
+                max(pending_sector_count) AS pending_sector_count,
+                max(uncorrectable_sector_count) AS uncorrectable_sector_count,
+                max(udma_crc_errors) AS udma_crc_errors,
+                max(percentage_used) AS percentage_used,
+                min(available_spare) AS available_spare,
+                max(critical_warning) AS critical_warning
+         FROM smart_device WHERE time >= '${iso(from)}' AND time < '${iso(to)}'
+         GROUP BY t, node, device ORDER BY t`,
+      );
+      const smartLines = smartRows.map((r) => {
+        const fields: Record<string, number | string> = {
+          health_ok: num(r.health_ok),
+          temp_c: round2(num(r.temp_c)),
+        };
+        if (r.power_on_hours != null) fields.power_on_hours = Math.round(num(r.power_on_hours));
+        if (r.power_cycle_count != null) fields.power_cycle_count = Math.round(num(r.power_cycle_count));
+        if (r.reallocated_sectors_count != null) fields.reallocated_sectors_count = Math.round(num(r.reallocated_sectors_count));
+        if (r.pending_sector_count != null) fields.pending_sector_count = Math.round(num(r.pending_sector_count));
+        if (r.uncorrectable_sector_count != null) fields.uncorrectable_sector_count = Math.round(num(r.uncorrectable_sector_count));
+        if (r.udma_crc_errors != null) fields.udma_crc_errors = Math.round(num(r.udma_crc_errors));
+        if (r.percentage_used != null) fields.percentage_used = round2(num(r.percentage_used));
+        if (r.available_spare != null) fields.available_spare = round2(num(r.available_spare));
+        if (r.critical_warning != null) fields.critical_warning = Math.round(num(r.critical_warning));
+        const tags: Record<string, string> = { node: String(r.node), device: String(r.device) };
+        if (r.model) tags.model = String(r.model);
+        if (r.serial_no) tags.serial_no = String(r.serial_no);
+        return buildLine('smart_device', tags, fields, influxTsToUnix(r.t));
+      });
+      if (smartLines.length > 0) await influx.writeLp(influx.aggDb, smartLines);
+    } catch (err) {
+      if (!/cannot find table|table smart_device|does not exist|No field named/i.test((err as Error).message ?? '')) {
+        throw err;
+      }
+    }
+
+    // Capteurs : dernier point par (node, chip, feature)
+    try {
+      const sensorRows = await influx.querySql<SqlRow>(
+        influx.rawDb,
+        `SELECT date_bin(INTERVAL '15 minutes', time) AS t, node, chip, feature,
+                max(temp_input) AS temp_input, min(temp_crit) AS temp_crit,
+                max(fan_input) AS fan_input, max(in_input) AS in_input
+         FROM sensors WHERE time >= '${iso(from)}' AND time < '${iso(to)}'
+         GROUP BY t, node, chip, feature ORDER BY t`,
+      );
+      const sensorLines = sensorRows
+        .filter((r) => r.temp_input != null || r.temp_crit != null || r.fan_input != null || r.in_input != null)
+        .map((r) => {
+          const fields: Record<string, number> = {};
+          if (r.temp_input != null) fields.temp_input = round2(num(r.temp_input));
+          if (r.temp_crit != null) fields.temp_crit = round2(num(r.temp_crit));
+          if (r.fan_input != null) fields.fan_input = Math.round(num(r.fan_input));
+          if (r.in_input != null) fields.in_input = round2(num(r.in_input));
+          return buildLine(
+            'sensors',
+            { node: String(r.node), chip: String(r.chip), feature: String(r.feature) },
+            fields,
+            influxTsToUnix(r.t),
+          );
+        });
+      if (sensorLines.length > 0) await influx.writeLp(influx.aggDb, sensorLines);
+    } catch (err) {
+      if (!/cannot find table|table sensors|does not exist|No field named/i.test((err as Error).message ?? '')) {
+        throw err;
+      }
+    }
+
+    // ZFS ARC : agrégation 15 min
+    try {
+      const zfsRows = await influx.querySql<SqlRow>(
+        influx.rawDb,
+        `SELECT date_bin(INTERVAL '15 minutes', time) AS t, node,
+                SUM(arcstats_hits) AS hits, SUM(arcstats_misses) AS misses,
+                MAX(arcstats_size) AS size
+         FROM zfs WHERE time >= '${iso(from)}' AND time < '${iso(to)}'
+         GROUP BY t, node ORDER BY t`,
+      );
+      const zfsLines = zfsRows.map((r) =>
+        buildLine(
+          'zfs',
+          { node: String(r.node) },
+          {
+            arcstats_hits: Math.round(num(r.hits)),
+            arcstats_misses: Math.round(num(r.misses)),
+            arcstats_size: Math.round(num(r.size)),
+          },
+          influxTsToUnix(r.t),
+        ),
+      );
+      if (zfsLines.length > 0) await influx.writeLp(influx.aggDb, zfsLines);
+    } catch (err) {
+      if (!/cannot find table|table zfs|does not exist|No field named/i.test((err as Error).message ?? '')) {
+        throw err;
+      }
+    }
+
+    // Unités systemd : dernier état par (node, name) — on garde uniquement les non-normales
+    try {
+      const unitRows = await influx.querySql<SqlRow>(
+        influx.rawDb,
+        `SELECT date_bin(INTERVAL '15 minutes', time) AS t, node, name,
+                min(active) AS active, min(sub) AS sub, min(load) AS load
+         FROM systemd_units WHERE time >= '${iso(from)}' AND time < '${iso(to)}'
+           AND (active = 'failed' OR load = 'error' OR sub = 'dead')
+         GROUP BY t, node, name ORDER BY t`,
+      );
+      const unitLines = unitRows.map((r) =>
+        buildLine(
+          'systemd_units',
+          { node: String(r.node), name: String(r.name) },
+          { active: String(r.active ?? 'unknown'), sub: String(r.sub ?? 'unknown'), load: String(r.load ?? 'unknown') },
+          influxTsToUnix(r.t),
+        ),
+      );
+      if (unitLines.length > 0) await influx.writeLp(influx.aggDb, unitLines);
+    } catch (err) {
+      if (!/cannot find table|table systemd_units|does not exist|No field named/i.test((err as Error).message ?? '')) {
+        throw err;
+      }
+    }
   }
 }
 

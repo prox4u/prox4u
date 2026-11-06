@@ -5,6 +5,7 @@ import { vmViewPlugin } from '../../plugins/vm-view';
 import { vmViewPluginV2 } from '../../plugins/vm-view_v2';
 import { proxmoxInventoryPlugin } from '../../plugins/proxmox-inventory';
 import { centreonNscaPlugin } from '../../plugins/centreon-nsca';
+import { nodeSensorsPlugin } from '../../plugins/node-sensors';
 import { FEATURES } from '../config/features';
 import type { Plugin } from './types';
 
@@ -27,4 +28,6 @@ export const PLUGINS: Plugin[] = [
   ...(FEATURES.USE_PLUGIN_PROXMOX_INVENTORY ? [proxmoxInventoryPlugin] : []),
   // Famille centreon-nsca : alarmes & checks passifs NSCA (règles → Centreon).
   ...(FEATURES.USE_PLUGIN_CENTREON_NSCA ? [centreonNscaPlugin] : []),
+  // Famille node-sensors : métriques locales Telegraf (SMART, capteurs, ZFS, unités).
+  ...(FEATURES.USE_PLUGIN_NODE_SENSORS ? [nodeSensorsPlugin] : []),
 ];

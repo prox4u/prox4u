@@ -10,7 +10,7 @@ Dashboard web de supervision pour cluster **Proxmox VE 9** : vue DSI/manager (KP
 
 | Document | Rôle |
 |---|---|
-| [`skills/`](./skills/) | **Base de connaissance** pour la reprise (humain ou IA) : 8 skills par module (architecture, plugins, API, shared, opérations…) + [inventaire et règles de maintenance](./skills/README.md) |
+| [`skills/`](./skills/) | **Base de connaissance** pour la reprise (humain ou IA) : 12 skills par module (architecture, plugins, API, shared, opérations…) + [inventaire et règles de maintenance](./skills/README.md) |
 | [`STATUS.md`](./STATUS.md) | État d'avancement : jalons livrés, pièges corrigés, points en attente |
 | [`deploiement/DEPLOY.md`](./deploiement/DEPLOY.md) | Procédure de déploiement sur un nouveau serveur (FR/EN) |
 
@@ -42,7 +42,7 @@ Proxmox VE 9 (API) × N endpoints ──► Poller (5 s, parallèle par endpoint
                                                         │
                                                         └─► Repli historique : RRD Proxmox (si InfluxDB absent/indisponible)
 
-API HTTP : /api/dashboard · /api/endpoints · /api/metrics?timeframe=hour|day|week|month&endpoint=<id> · /api/capacity · /api/trends · /api/health
+API HTTP : /api/dashboard · /api/endpoints · /api/metrics?timeframe=hour|day|week|month&endpoint=<id> · /api/capacity · /api/trends · /api/health · /api/node-sensors
 ```
 
 Monorepo pnpm : `packages/shared` (types + calculs + i18n), `packages/server` (Fastify, poller, client PVE, InfluxDB), `packages/web` (React + ECharts).
@@ -225,6 +225,7 @@ Options du script : `TLS_DAYS` (validité, défaut 3650) et `TLS_SAN_EXTRA` (SAN
 | `GET /api/overcommit-risk?endpoint=<id>` | Risque de surallocation dynamique (pire cas p95 7 j par VM) |
 | `GET /api/network-topology` | Topologie réseau auto-découverte par endpoint (switches → nœuds → ponts → segments → VMs) |
 | `GET /api/storage-inventory` | Inventaire stockage → VMs par endpoint (datastores + VMs avec leur datastore) |
+| `GET /api/node-sensors` | Métriques locales Telegraf par nœud (SMART, températures, ZFS ARC, unités systemd) — base `raw`, cache 1 min |
 | `WS /ws` | Push du snapshot multi-endpoints (5 s) |
 
 ## Lancement & développement / Running & development
@@ -284,7 +285,7 @@ pnpm build        # build production (shared → server → web)
 ├── clusters.json             # endpoints Proxmox multi-cluster (600, gitignored) — template : clusters.example.json
 ├── sites.json                # topologie des sites/bâtiments (PRA), rattachement par endpoint
 ├── overcommit.json           # politique de surallocation + seuils d'usage (hot-reload, source unique du code couleur)
-├── skills/                   # base de connaissance (8 SKILL.md + README.md) — reprise humain ou IA
+├── skills/                   # base de connaissance (12 SKILL.md + README.md) — reprise humain ou IA
 ├── STATUS.md                 # état d'avancement : jalons livrés, pièges corrigés, points en attente
 ├── up.sh                     # démarrage complet : InfluxDB (Docker) + application
 ├── server.sh                 # start/stop/restart/status de l'app seule
@@ -311,7 +312,11 @@ packages/web/src/
 ├── plugins/                  # PLUGINS — un dossier par module métier
 │   ├── hypervision/          # routes /, /e/:endpointId, /e/:endpointId/n/:nodeId (menu order 10)
 │   ├── network/              # route /topology (menu order 20)
-│   └── storage/              # route /storage (menu order 30)
+│   ├── storage/              # route /storage (menu order 30)
+│   ├── vm-view/              # route /vms (menu order 40)
+│   ├── proxmox-inventory/    # route /proxmox-inventory (menu order 50)
+│   ├── centreon-nsca/        # routes /alarms, /alarms/new, /alarms/edit/:id (menu order 60)
+│   └── node-sensors/         # route /node-sensors (menu order 70) — métriques locales Telegraf
 ├── components/               # layout (sidebar, topbar) + primitives UI partagées
 ├── store/ · hooks/ · lib/    # état host (layout, thème), hook ECharts, utilitaires
 └── app.tsx · main.tsx        # bootstrap : loadPlugins() avant le premier rendu

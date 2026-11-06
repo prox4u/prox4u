@@ -177,23 +177,30 @@ historique InfluxDB (raw 5 s / consolidated 5 min), alarmes Centreon (moteur ok�
   **Validé live** : écoute 127.0.0.1 **et** 192.168.1.180, write+read via LAN OK.
 - Auto-détection de l'IP LAN dans `deploiement/30-env-setup.sh`.
 
-### 5.3 Script de déploiement `deploiement/60-telegraf-nodes.sh` (à créer, bare-metal)
-- `apt-get install telegraf smartmontools lm-sensors`
+### 5.3 Script de déploiement `deploiement/60-telegraf-nodes.sh` (livré, déployé sur les 3 nœuds)
+- `apt-get install telegraf smartmontools lm-sensors` + auto-détection des devices SMART via
+  `smartctl --scan`
 - Génère `/etc/telegraf/telegraf.conf` :
   - `[[outputs.influxdb_v2]]` → `urls=["https://192.168.1.180:8181"]`, `bucket="raw"`,
-    `organization="influxdb"`, `token=${TELEGRAF_INFLUX_TOKEN:-<admin>}`, `tls_skip_verify=true`
+    `organization="influxdb"`, `token=${TELEGRAF_INFLUX_TOKEN}` (requis), `insecure_skip_verify=true`,
+    `timeout=10s`
   - `global_tags` : `node=<hostname>` (distingue chaque nœud)
-  - Plugins : `smart`, `sensors`, `zfs`, `systemd_units`, `ping`, `disk`/`diskio`/`mem`/`cpu`/`system`
-- `systemctl enable --now telegraf`
-- **Nœud pilote d'abord** : valider que `smart`/`sensors`/`zfs`/`systemd_units`/`ping` arrivent
-  dans `raw`, puis étendre.
+  - Plugins : `smart`, `sensors`, `zfs`, `systemd_units`, `disk`/`diskio`/`mem`/`cpu`/`system`
+    (ping ICMP commenté — à réactiver si CAP_NET_RAW disponible)
+  - Override systemd `User=root` (accès aux devices raw pour smartctl)
+- `systemctl enable --now telegraf` + self-test. Idempotent (`--dry-run`, `.bak.<ts>` du conf).
+- **Déployé** sur `proxmox` (192.168.1.80), `ProxSite1`, `ProxSite2` — 9 tables actives dans
+  `raw` (ProxSite2 sans capteurs, `sensors` vide — normal).
 
-### 5.4 Module web `node-sensors` v1 (Option A, à créer)
-- `packages/web/src/plugins/node-sensors/` — manifest `id:'node-sensors'`, route + menu (order ~60)
+### 5.4 Module web `node-sensors` v1 (Option A, livré)
+- `packages/web/src/plugins/node-sensors/` — manifest `id:'node-sensors'`, route `/node-sensors`
+  + menu (order 70, icône `Thermometer`)
 - Flag `USE_PLUGIN_NODE_SENSORS` dans `core/config/features.ts` (défaut ON, opt-out)
-- Enregistrement dans `core/plugin/plugins.ts`
-- i18n `nav.nodeSensors`
-- Data-source qui lit les measurements Telegraf depuis `raw` + panneaux températures/SMART/ZFS
+- Enregistrement dans `core/plugin/plugins.ts` + `DEFAULT_MODULES` (shared/auth.ts)
+- i18n `nav.nodeSensors` + `nodeSensors.*`
+- Routeur `packages/server/src/modules/nodesensors/` : `GET /api/node-sensors` (cache 1 min,
+  try/catch par section, dernier point par clé) + consolidation 15 min dans `influx-consolidator.ts`
+- Détail complet : skill `node-sensors`
 
 ## 6. Chemins clés (navigation rapide)
 
@@ -212,5 +219,5 @@ historique InfluxDB (raw 5 s / consolidated 5 min), alarmes Centreon (moteur ok�
 - `packages/web/src/core/config/features.ts` — feature flags
 - `packages/server/src/core/influx.ts` — écriture `/api/v3/write_lp?db=raw`
 - `packages/server/src/modules/centreonnsca/` — moteur d'alarmes existant (ok⇄firing)
-- `deploiement/` — scripts numérotés (10 token, 40 TLS, 50 influx, **60 telegraf à créer**)
+- `deploiement/` — scripts numérotés (10 token, 40 TLS, 50 influx, **60 telegraf livré**)
 - `MONITORING-ACTIONS.md` (racine) — TODO priorisée (P0 Telegraf → P5 certificats/NTP)

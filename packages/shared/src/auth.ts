@@ -253,4 +253,10 @@ export const DEFAULT_MODULES: ModuleDef[] = [
     description: 'Règles de surveillance VMs/nœuds → alarmes → Centreon (checks passifs NSCA)',
     globallyEnabled: true,
   },
+  {
+    id: 'node-sensors',
+    name: 'Capteurs nœuds',
+    description: 'Métriques locales Telegraf : SMART disques, températures, ZFS ARC, unités systemd',
+    globallyEnabled: true,
+  },
 ];

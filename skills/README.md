@@ -52,7 +52,8 @@ Si l'échelle augmente nettement au-delà, les points à surveiller en premier :
 | `shared` | Package `@proxmox/shared` : fonctions pures testées par fichier, types partagés, THRESHOLDS, i18n fr/en |
 | `api` | Contrat API REST + WebSocket `/ws` : endpoints, formes de réponse, caches 5 min, repli InfluxDB→RRD |
 | `centreon-nsca` | Plugin alarmes & checks passifs NSCA : `/alarms`, `/alarms/new`, `/alarms/edit/:id` + engine (tick 15 s) + provisioning Centreon (CLAPI SSH/local ou REST v1) + envoi `send_nsca` + mapping VM→hôte + onglet admin « Centreon (NSCA) » |
-| `monitoring-proxmenux` | Référence de reprise sur le monitoring : analyse de ProxMenux (double boucle health/audit, hystérésis, persistance/suppression/ack, multi-canal, 43 checks annotés API vs agent), plan de déploiement Telegraf sur les nœuds Proxmox (bare-metal), audit sécurité ProxMenux + leçons pour prox4u. Lié à `MONITORING-ACTIONS.md` (TODO P0→P5) et au futur plugin `node-sensors` |
+| `node-sensors` | Plugin « Capteurs nœuds » (node-sensors v1) : `/node-sensors` — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) via `GET /api/node-sensors` (cache 1 min, base `raw`, try/catch par section) + filtres colonnes multi-choix + consolidation 15 min |
+| `monitoring-proxmenux` | Référence de reprise sur le monitoring : analyse de ProxMenux (double boucle health/audit, hystérésis, persistance/suppression/ack, multi-canal, 43 checks annotés API vs agent), plan de déploiement Telegraf sur les nœuds Proxmox (bare-metal), audit sécurité ProxMenux + leçons pour prox4u. Lié à `MONITORING-ACTIONS.md` (TODO P0→P5) et au plugin `node-sensors` |
 
 ### 4.3 Format d'une skill
 - Frontmatter YAML : `name` (id stable) + `description` (périmètre + trigger « Use when… » pour l'auto-découverte IA).
