@@ -20,6 +20,8 @@ export const FEATURES = {
   USE_PLUGIN_VM_VIEW: env.VITE_USE_PLUGIN_VM_VIEW !== 'false',
   // Inventaire Proxmox consolidé (une machine par ligne, export) : défaut ON, disjoncteur opt-out.
   USE_PLUGIN_PROXMOX_INVENTORY: env.VITE_USE_PLUGIN_PROXMOX_INVENTORY !== 'false',
+  // Alarmes & Checks passifs NSCA (règles → Centreon via send_nsca) : défaut ON, disjoncteur opt-out.
+  USE_PLUGIN_CENTREON_NSCA: env.VITE_USE_PLUGIN_CENTREON_NSCA !== 'false',
 } as const;
 
 export type FeatureFlag = keyof typeof FEATURES;

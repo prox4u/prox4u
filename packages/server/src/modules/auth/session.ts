@@ -42,6 +42,17 @@ export class SessionStore {
     this.sessions.delete(token);
   }
 
+  /**
+   * Révoque toutes les sessions d'un utilisateur (changement/réinitialisation
+   * de mot de passe) — `exceptToken` permet de conserver la session en cours
+   * (l'utilisateur qui change SON mot de passe reste connecté).
+   */
+  destroyAllForUser(userId: string, exceptToken?: string): void {
+    for (const [token, entry] of this.sessions) {
+      if (entry.userId === userId && token !== exceptToken) this.sessions.delete(token);
+    }
+  }
+
   get size(): number {
     return this.sessions.size;
   }
@@ -64,8 +75,15 @@ export function parseCookies(header: string | undefined): Record<string, string>
     const eq = part.indexOf('=');
     if (eq < 0) continue;
     const key = part.slice(0, eq).trim();
-    const value = part.slice(eq + 1).trim();
-    if (key) out[key] = decodeURIComponent(value);
+    const raw = part.slice(eq + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(raw);
+    } catch {
+      // cookie malformé (% isolé, séquence incomplète) : ignoré — jamais d'exception
+      // vers le guard (un 500 sur toutes les routes serait un DoS trivial).
+      out[key] = raw;
+    }
   }
   return out;
 }

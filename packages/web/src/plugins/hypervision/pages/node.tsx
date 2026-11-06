@@ -111,7 +111,7 @@ export function NodePage() {
         >
           <ArrowLeft className="h-4 w-4" />
         </Link>
-        <div className="text-xl font-semibold tracking-tight">{node.node}</div>
+        <h1 className="text-lg font-semibold tracking-tight">{node.node}</h1>
         {node.online ? (
           <Badge tone={node.severity === 'ok' ? 'ok' : node.severity === 'warn' ? 'warn' : 'crit'}>
             ● {t('nodes.online')}

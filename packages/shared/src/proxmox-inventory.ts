@@ -65,6 +65,11 @@ export interface InvVm {
   interfaces: InvInterface[];
   /** toutes les IPs (v4 + v6), aplaties */
   ips: string[];
+  /**
+   * Agent invité (QGA) : true = actif (get-fsinfo ok) · false = VM QEMU en cours mais
+   * agent non démarré / injoignable (critique) · null = n/a (LXC, VM arrêtée, template).
+   */
+  agentActive: boolean | null;
 }
 
 /** Inventaire d'un endpoint. */
@@ -151,6 +156,8 @@ export interface InvFilter {
   type: string;
   /** '' | 'running' | 'stopped' | 'paused' | 'unknown' */
   status: string;
+  /** '' | 'active' | 'down' | 'na' — état de l'agent invité */
+  agent: string;
   cpuMin: number | null;
   cpuMax: number | null;
   ramMin: number | null;
@@ -161,12 +168,12 @@ export interface InvFilter {
 }
 
 export const DEFAULT_INV_FILTER: InvFilter = {
-  search: '', node: '', type: '', status: '',
+  search: '', node: '', type: '', status: '', agent: '',
   cpuMin: null, cpuMax: null, ramMin: null, ramMax: null, diskMin: null, diskMax: null,
 };
 
 export type InvSortKey =
-  | 'name' | 'vmid' | 'node' | 'type' | 'status'
+  | 'name' | 'vmid' | 'node' | 'type' | 'status' | 'agentActive'
   | 'cpuCores' | 'cpuPct' | 'ramAllocMb' | 'ramUsedMb' | 'ramUsedPct'
   | 'uptimeS' | 'diskMb';
 export type InvSortDir = 'asc' | 'desc';
@@ -197,6 +204,10 @@ export function filterInvRows(vms: InvVm[], f: InvFilter): InvVm[] {
     if (f.node && v.node !== f.node) return false;
     if (f.type && v.type !== f.type) return false;
     if (f.status && v.status !== f.status) return false;
+    if (f.agent) {
+      const state = v.agentActive === null ? 'na' : v.agentActive ? 'active' : 'down';
+      if (state !== f.agent) return false;
+    }
     if (f.cpuMin != null && (v.cpuPct ?? 0) < f.cpuMin) return false;
     if (f.cpuMax != null && (v.cpuPct ?? 0) > f.cpuMax) return false;
     if (f.ramMin != null && (v.ramUsedMb ?? 0) < f.ramMin) return false;
@@ -225,6 +236,7 @@ export function sortInvRows(vms: InvVm[], key: InvSortKey, dir: InvSortDir): Inv
       case 'node': return v.node;
       case 'type': return v.type;
       case 'status': return STATUS_ORDER[v.status] ?? 99;
+      case 'agentActive': return v.agentActive === null ? null : v.agentActive ? 1 : 0;
       case 'cpuCores': return v.cpuCores;
       case 'cpuPct': return v.cpuPct;
       case 'ramAllocMb': return v.ramAllocMb;
@@ -272,7 +284,8 @@ export function invSummary(vms: InvVm[]): InvSummary {
   const cpuAvg = withCpu.length > 0
     ? withCpu.reduce((s, v) => s + (v.cpuPct ?? 0), 0) / withCpu.length
     : 0;
-  const agentOk = vms.filter((v) => v.interfaces.length > 0 || v.disks.length > 0).length;
+  // Agent invité ACTIF (get-fsinfo ok) — les LXC et VMs arrêtées (agentActive null) ne comptent pas.
+  const agentOk = vms.filter((v) => v.agentActive === true).length;
   return {
     total: vms.length,
     running,

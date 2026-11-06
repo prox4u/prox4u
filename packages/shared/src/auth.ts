@@ -247,4 +247,10 @@ export const DEFAULT_MODULES: ModuleDef[] = [
     description: 'Vue consolidée d’une machine par ligne : OS, disques par filesystem, interfaces, IPs, export',
     globallyEnabled: true,
   },
+  {
+    id: 'centreon-nsca',
+    name: 'Alarmes & Centreon',
+    description: 'Règles de surveillance VMs/nœuds → alarmes → Centreon (checks passifs NSCA)',
+    globallyEnabled: true,
+  },
 ];

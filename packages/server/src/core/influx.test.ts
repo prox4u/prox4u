@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fetch as undiciFetch } from 'undici';
 import { buildLine, escapeFieldString, escapeTag, influxTsToUnix, InfluxClient, type SqlRow } from './influx.js';
 import type { InfluxConfig } from './config.js';
+
+// influx.ts importe `fetch` depuis `undici` (comme Prox4uClient) pour pouvoir
+// y passer un Agent dédié (CA InfluxDB). On mocke donc le module `undici`,
+// pas le fetch global.
+vi.mock('undici', () => ({ fetch: vi.fn() }));
 
 const cfg: InfluxConfig = {
   enabled: true,
@@ -13,15 +19,15 @@ const cfg: InfluxConfig = {
 };
 
 function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): MockedFetch {
-  const fn = vi.fn(handler);
-  vi.stubGlobal('fetch', fn);
+  const fn = vi.mocked(undiciFetch);
+  fn.mockImplementation(handler as never);
   return fn as unknown as MockedFetch;
 }
 
 type MockedFetch = ReturnType<typeof vi.fn>;
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  vi.mocked(undiciFetch).mockReset();
 });
 
 describe('buildLine', () => {

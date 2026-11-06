@@ -97,7 +97,7 @@ export function registerVmInventory(app: FastifyInstance, ctx: AppContext, polle
       reply.code(400).send({ error: 'vmid (entier positif) requis' });
       return;
     }
-    if (!q.timeframe || !VM_METRICS_TF[q.timeframe]) {
+    if (!q.timeframe || !VM_METRICS_TF[q.timeframe as MetricsTimeframe]) {
       reply.code(400).send({ error: `timeframe must be one of ${Object.keys(VM_METRICS_TF).join(', ')}` });
       return;
     }
@@ -166,7 +166,7 @@ export function registerVmInventory(app: FastifyInstance, ctx: AppContext, polle
       reply.code(400).send({ error: 'vmid (entier positif) requis' });
       return;
     }
-    if (!q.timeframe || !VM_METRICS_TF[q.timeframe]) {
+    if (!q.timeframe || !VM_METRICS_TF[q.timeframe as MetricsTimeframe]) {
       reply.code(400).send({ error: `timeframe must be one of ${Object.keys(VM_METRICS_TF).join(', ')}` });
       return;
     }
@@ -221,15 +221,16 @@ export const VM_METRICS_TF: Record<MetricsTimeframe, { bucket: string; window: s
 
 /** Ligne SQL du /api/vm-metrics (date_bin + AVG). */
 interface VmMetricsRow {
+  [col: string]: string | number | null;
   t: string | number | null;
-  cpu_pct: unknown;
-  mem_bytes: unknown;
-  disk_read_bps: unknown;
-  disk_write_bps: unknown;
-  net_in_bps: unknown;
-  net_out_bps: unknown;
-  disk_bytes: unknown;
-  disk_alloc_bytes: unknown;
+  cpu_pct: string | number | null;
+  mem_bytes: string | number | null;
+  disk_read_bps: string | number | null;
+  disk_write_bps: string | number | null;
+  net_in_bps: string | number | null;
+  net_out_bps: string | number | null;
+  disk_bytes: string | number | null;
+  disk_alloc_bytes: string | number | null;
 }
 
 /** Lignes SQL (date_bin + AVG) → points triés ; buckets sans horodatage écartés. */
@@ -254,11 +255,12 @@ export function vmMetricsRowsToPoints(rows: VmMetricsRow[]): VmMetricsPoint[] {
 
 /** Ligne SQL du /api/vm-fs (date_bin + MAX, groupée par point de montage + périphérique). */
 interface VmFsRow {
+  [col: string]: string | number | null;
   t: string | number | null;
-  mountpoint: unknown;
-  dev: unknown;
-  used_bytes: unknown;
-  total_bytes: unknown;
+  mountpoint: string | number | null;
+  dev: string | number | null;
+  used_bytes: string | number | null;
+  total_bytes: string | number | null;
 }
 
 /**

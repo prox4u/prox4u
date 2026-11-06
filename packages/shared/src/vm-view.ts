@@ -13,7 +13,7 @@ export interface VmViewFilter {
 
 export const DEFAULT_VM_FILTER: VmViewFilter = { node: 'all', status: 'all', type: 'all' };
 
-export type VmSortKey = 'name' | 'vmid' | 'node' | 'type' | 'status' | 'cpuPct' | 'memBytes' | 'diskBytes';
+export type VmSortKey = 'name' | 'vmid' | 'node' | 'type' | 'status' | 'cpuPct' | 'memBytes' | 'diskBytes' | 'agentActive';
 export type VmSortDir = 'asc' | 'desc';
 
 /** Recherche textuelle (nom ou vmid, insensible à la casse) + filtres nœud/statut/type. */
@@ -42,6 +42,16 @@ export function sortVmRows(vms: VmSummary[], key: VmSortKey, dir: VmSortDir): Vm
       if (an !== bn) return an ? 1 : -1;
       if (an && bn) return a.vmid - b.vmid;
       const cmp = (a.diskBytes! - b.diskBytes!) * sign;
+      return cmp !== 0 ? cmp : a.vmid - b.vmid;
+    }
+    // agentActive : inactif (false, critique) d'abord en asc · nulls last quel que soit le sens.
+    if (key === 'agentActive') {
+      const an = a.agentActive === null;
+      const bn = b.agentActive === null;
+      if (an !== bn) return an ? 1 : -1;
+      if (an && bn) return a.vmid - b.vmid;
+      const rank = (x: boolean) => (x ? 1 : 0); // false (inactif) < true (actif)
+      const cmp = (rank(a.agentActive!) - rank(b.agentActive!)) * sign;
       return cmp !== 0 ? cmp : a.vmid - b.vmid;
     }
     let cmp: number;

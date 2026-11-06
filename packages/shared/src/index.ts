@@ -49,6 +49,47 @@ export type {
 } from './auth.js';
 export { PLUGIN_ID_RE, parsePluginVersion, defaultPluginVersion, groupPluginFamilies } from './module-versions.js';
 export type { PluginVersionRef } from './module-versions.js';
+export {
+  METRIC_IDS,
+  NSCA_OK,
+  NSCA_WARNING,
+  NSCA_CRITICAL,
+  NSCA_UNKNOWN,
+  nscaReturnCode,
+  escapeNscaField,
+  buildNscaFrame,
+  renderOutput,
+  defaultServiceName,
+  suggestCenteronHost,
+  conditionMet,
+  evaluateAlarm,
+  nscaCfgContent,
+  shellQuote,
+  clapiProvisionCommands,
+  clapiDeleteCommand,
+  DEFAULT_POLLERS,
+  defaultCenteronConfig,
+} from './centreon-nsca.js';
+export type {
+  AlarmSeverity,
+  AlarmOperator,
+  TargetKind,
+  AlarmTarget,
+  MetricId,
+  CentreonPoller,
+  NscaConfig,
+  ProvisionTransport,
+  ClapiMode,
+  CentreonConfig,
+  VmMapping,
+  ProvisionStatus,
+  NscaSendState,
+  AlarmRule,
+  CentreonNscaFile,
+  AlarmStats,
+  MetricSample,
+  AlarmEvalResult,
+} from './centreon-nsca.js';
 export type {
   NodeNic,
   NodeBridge,

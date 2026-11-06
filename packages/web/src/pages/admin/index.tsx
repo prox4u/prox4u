@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Boxes, Users, UserCog } from 'lucide-react';
+import { Boxes, Siren, Users, UserCog } from 'lucide-react';
 import { parsePluginVersion } from '@prox4u/shared';
 import { adminApi, type AdminState } from '../../lib/auth-api';
 import { registry } from '../../core/plugin/registry';
 import { ModuleCatalog } from '../../components/admin/module-catalog';
 import { GroupManager } from '../../components/admin/group-manager';
+import { NscaConfig } from '../../components/admin/nsca-config';
 import { UserManager } from '../../components/admin/user-manager';
 
-type Tab = 'catalog' | 'groups' | 'users';
+type Tab = 'catalog' | 'groups' | 'users' | 'nsca';
 
 /**
  * Page d'administration (rôle admin uniquement — protégée par ProtectedRoute).
@@ -44,6 +45,7 @@ export function AdminPage() {
             { id: 'catalog', label: t('admin.tab.catalog'), icon: Boxes },
             { id: 'groups', label: t('admin.tab.groups'), icon: Users },
             { id: 'users', label: t('admin.tab.users'), icon: UserCog },
+            { id: 'nsca', label: t('admin.tab.nsca'), icon: Siren },
           ] as const
         ).map(({ id, label, icon: Icon }) => (
           <button
@@ -74,6 +76,8 @@ export function AdminPage() {
           plugins={registry.list()}
           onDone={() => void load()}
         />
+      ) : tab === 'nsca' ? (
+        <NscaConfig onDone={() => void load()} />
       ) : tab === 'groups' ? (
         // Les groupes autorisent des FAMILLES entières (pas des versions).
         <GroupManager

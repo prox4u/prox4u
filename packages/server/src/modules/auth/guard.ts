@@ -15,14 +15,18 @@ declare module 'fastify' {
  * - /api/auth/login et /api/health sont publics (le health sert de liveness
  *   probe à server.sh — il ne doit PAS exiger de session) ; tout le reste de
  *   /api/* exige une session valide.
- * - /api/admin/* exige en plus le rôle admin.
+ * - /api/admin/* exige en plus le rôle admin. De même PUT /api/alarms/config
+ *   (la config Centreon porte les secrets CLAPI/NSCA et les destinations réseau
+ *   restUrl/clapiHost — sa modification est réservée aux admins ; la lecture
+ *   masquée et les règles restent accessibles aux utilisateurs du module).
+ * - /sample (page de design) exige une session : plus de contenu public.
  * Les routes existantes des modules (dashboard, supervision…) ne sont pas modifiées :
  * la protection est transversale.
  */
 export function registerAuthGuard(app: FastifyInstance, auth: AuthContext): void {
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     const url = req.url.split('?')[0];
-    if (!url.startsWith('/api/')) return; // SPA, statiques, /sample…
+    if (!url.startsWith('/api/') && url !== '/sample') return; // SPA, statiques…
     if (url === '/api/auth/login' || url === '/api/health') return; // publics (login + liveness probe)
 
     const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
@@ -38,7 +42,9 @@ export function registerAuthGuard(app: FastifyInstance, auth: AuthContext): void
     }
     req.authUser = { id: user.id, role: user.role };
 
-    if (url.startsWith('/api/admin/') && user.role !== 'admin') {
+    const needsAdmin =
+      url.startsWith('/api/admin/') || (url === '/api/alarms/config' && req.method === 'PUT');
+    if (needsAdmin && user.role !== 'admin') {
       return reply.code(403).send({ error: 'forbidden', code: 'admin-required' });
     }
   });

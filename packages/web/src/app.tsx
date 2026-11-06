@@ -77,6 +77,13 @@ export default function App() {
             {!FEATURES.USE_PLUGIN_STORAGE && <Route path="/storage" element={<ModuleDisabled module="storage" flag="VITE_USE_PLUGIN_STORAGE" />} />}
             {!FEATURES.USE_PLUGIN_VM_VIEW && <Route path="/vms" element={<ModuleDisabled module="vm-view" flag="VITE_USE_PLUGIN_VM_VIEW" />} />}
             {!FEATURES.USE_PLUGIN_PROXMOX_INVENTORY && <Route path="/proxmox-inventory" element={<ModuleDisabled module="proxmox-inventory" flag="VITE_USE_PLUGIN_PROXMOX_INVENTORY" />} />}
+            {!FEATURES.USE_PLUGIN_CENTREON_NSCA && (
+              <>
+                <Route path="/alarms" element={<ModuleDisabled module="centreon-nsca" flag="VITE_USE_PLUGIN_CENTREON_NSCA" />} />
+                <Route path="/alarms/new" element={<ModuleDisabled module="centreon-nsca" flag="VITE_USE_PLUGIN_CENTREON_NSCA" />} />
+                <Route path="/alarms/edit/:id" element={<ModuleDisabled module="centreon-nsca" flag="VITE_USE_PLUGIN_CENTREON_NSCA" />} />
+              </>
+            )}
 
             {/* Routes des plugins, par famille (visibilité par utilisateur). */}
             {[...families.entries()].map(([family, routes]) => {

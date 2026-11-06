@@ -61,6 +61,22 @@ for VAR in INFLUX_UID INFLUX_GID; do
   fi
 done
 
+# INFLUX_LAN_BIND : expose l'API InfluxDB (8181) aux agents Telegraf des
+# nœuds Proxmox. Auto-rempli avec la première IP globale si vide ; à vide
+# définitif → InfluxDB reste localhost-only (pas d'accès Telegraf).
+CUR_BIND="$(env_get INFLUX_LAN_BIND)"
+if [[ -z "$CUR_BIND" ]]; then
+  LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if [[ -n "$LAN_IP" ]]; then
+    set_env INFLUX_LAN_BIND "$LAN_IP"
+    warn "INFLUX_LAN_BIND = $LAN_IP (auto-détectée — confirmez que c'est l'IP joignable depuis les nœuds Proxmox)"
+  else
+    ok "INFLUX_LAN_BIND vide — InfluxDB localhost-only (pas d'accès Telegraf distant)"
+  fi
+else
+  ok "INFLUX_LAN_BIND = $CUR_BIND (déjà configuré)"
+fi
+
 # EXPLORER_SESSION_KEY : générée si vide ou CHANGE_ME, jamais écrasée ensuite
 SESSION_KEY="$(env_get EXPLORER_SESSION_KEY)"
 if [[ -z "$SESSION_KEY" || "$SESSION_KEY" == "CHANGE_ME" ]]; then

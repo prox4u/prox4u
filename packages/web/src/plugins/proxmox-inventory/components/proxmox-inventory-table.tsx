@@ -22,8 +22,8 @@ interface Col {
   labelKey: string;
   kind: ColKind;
   sortKey?: InvSortKey;
-  /** champ du filtre (node/type/status/cpu/ram/disk) */
-  filter?: 'node' | 'type' | 'status' | 'cpu' | 'ram' | 'disk';
+  /** champ du filtre (node/type/status/agent/cpu/ram/disk) */
+  filter?: 'node' | 'type' | 'status' | 'agent' | 'cpu' | 'ram' | 'disk';
 }
 
 const COLS: Col[] = [
@@ -34,6 +34,7 @@ const COLS: Col[] = [
   { key: 'node', labelKey: 'pxinv.col.node', kind: 'enum', sortKey: 'node', filter: 'node' },
   { key: 'type', labelKey: 'pxinv.col.type', kind: 'enum', sortKey: 'type', filter: 'type' },
   { key: 'status', labelKey: 'pxinv.col.status', kind: 'enum', sortKey: 'status', filter: 'status' },
+  { key: 'agentActive', labelKey: 'pxinv.col.agent', kind: 'enum', sortKey: 'agentActive', filter: 'agent' },
   { key: 'osType', labelKey: 'pxinv.col.osType', kind: 'text', sortKey: undefined },
   { key: 'cpuCores', labelKey: 'pxinv.col.cpuCores', kind: 'num', sortKey: 'cpuCores' },
   { key: 'cpuPct', labelKey: 'pxinv.col.cpuPct', kind: 'num', sortKey: 'cpuPct', filter: 'cpu' },
@@ -104,6 +105,11 @@ export function ProxmoxInventoryTable({ vms, filter, onFilterChange, sortKey, so
       case 'type': return v.type;
       case 'status':
         return <Badge tone={v.status === 'running' ? 'ok' : v.status === 'stopped' ? 'default' : 'warn'}>{v.status}</Badge>;
+      case 'agentActive':
+        if (v.agentActive === null) return na(t);
+        return v.agentActive
+          ? <Badge tone="ok">{t('pxinv.agent.active')}</Badge>
+          : <Badge tone="crit">{t('pxinv.agent.down')}</Badge>;
       case 'osType':
         return (
           <div className="leading-tight">
@@ -156,6 +162,21 @@ export function ProxmoxInventoryTable({ vms, filter, onFilterChange, sortKey, so
   };
 
   const headFilter = (c: Col): React.ReactNode => {
+    // État agent : valeurs fixes (actif / inactif / n-a), pas de « distinct ».
+    if (c.filter === 'agent') {
+      return (
+        <Select
+          value={filter.agent}
+          onChange={(e) => onFilterChange({ ...filter, agent: e.target.value })}
+          className="mt-1 h-7"
+        >
+          <option value="">{t('pxinv.filter.all')}</option>
+          <option value="active">{t('pxinv.agent.active')}</option>
+          <option value="down">{t('pxinv.agent.down')}</option>
+          <option value="na">{t('pxinv.na')}</option>
+        </Select>
+      );
+    }
     if (c.kind === 'enum' && c.filter) {
       const options = c.filter === 'node' ? distinct.nodes : c.filter === 'type' ? distinct.types : distinct.statuses;
       const current = c.filter === 'node' ? filter.node : c.filter === 'type' ? filter.type : filter.status;

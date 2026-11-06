@@ -38,6 +38,7 @@ const okKpis = (over: Partial<KpiSummary> = {}): KpiSummary => ({
   vmsRunning: 3,
   vmsStopped: 1,
   vmsTotal: 4,
+  vmsAgentDown: 0,
   ...over,
 });
 

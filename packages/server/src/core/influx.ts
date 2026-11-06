@@ -1,3 +1,4 @@
+import { fetch, type Agent } from 'undici';
 import type { InfluxConfig } from './config.js';
 
 export interface SqlRow {
@@ -74,7 +75,13 @@ export class InfluxClient {
   private flushTimer: NodeJS.Timeout | null = null;
   private lastDropLog = 0;
 
-  constructor(private cfg: InfluxConfig) {}
+  /**
+   * Dispatcher dédié (CA InfluxDB auto-signé) : la confiance est limitée aux
+   * appels InfluxDB, au lieu de modifier le dispatcher global du processus
+   * (qui ferait alors confiance au CA Influx pour TOUTES les requêtes,
+   * Proxmox et Centreon compris).
+   */
+  constructor(private cfg: InfluxConfig, private dispatcher?: Agent) {}
 
   get enabled(): boolean {
     return this.cfg.enabled;
@@ -152,6 +159,7 @@ export class InfluxClient {
       headers: { Authorization: `Bearer ${this.cfg.token}`, 'Content-Type': 'text/plain' },
       body: lines.join('\n'),
       signal: AbortSignal.timeout(10_000),
+      dispatcher: this.dispatcher,
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -166,6 +174,7 @@ export class InfluxClient {
       headers: { Authorization: `Bearer ${this.cfg.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ db, q: sql }),
       signal: AbortSignal.timeout(10_000),
+      dispatcher: this.dispatcher,
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -196,6 +205,7 @@ export class InfluxClient {
       headers: { Authorization: `Bearer ${this.cfg.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
+      dispatcher: this.dispatcher,
     });
     if (!res.ok && res.status !== 409) {
       const body = await res.text().catch(() => '');
@@ -209,6 +219,7 @@ export class InfluxClient {
       const res = await fetch(`${this.cfg.url}/health`, {
         headers: { Authorization: `Bearer ${this.cfg.token}` },
         signal: AbortSignal.timeout(3_000),
+        dispatcher: this.dispatcher,
       });
       return res.ok;
     } catch {

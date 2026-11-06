@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { InvVm } from './types';
+import type { InvVm } from './proxmox-inventory';
 import {
   DEFAULT_INV_FILTER,
   filterInvRows,
@@ -40,6 +40,7 @@ function inv(partial: Partial<InvVm> & Pick<InvVm, 'vmid' | 'name'>): InvVm {
     disks: [],
     interfaces: [],
     ips: [],
+    agentActive: null,
     ...partial,
   };
 }
@@ -125,6 +126,16 @@ describe('filterInvRows', () => {
   it('plage CPU', () => {
     expect(filterInvRows(vms, { ...DEFAULT_INV_FILTER, cpuMin: 50 }).map((v) => v.vmid)).toEqual([200]);
   });
+  it('filtre par état de l’agent (actif / inactif / n-a)', () => {
+    const rows = [
+      inv({ vmid: 1, name: 'ok', agentActive: true }),
+      inv({ vmid: 2, name: 'down', agentActive: false }),
+      inv({ vmid: 3, name: 'na', type: 'lxc', agentActive: null }),
+    ];
+    expect(filterInvRows(rows, { ...DEFAULT_INV_FILTER, agent: 'active' }).map((v) => v.vmid)).toEqual([1]);
+    expect(filterInvRows(rows, { ...DEFAULT_INV_FILTER, agent: 'down' }).map((v) => v.vmid)).toEqual([2]);
+    expect(filterInvRows(rows, { ...DEFAULT_INV_FILTER, agent: 'na' }).map((v) => v.vmid)).toEqual([3]);
+  });
 });
 
 describe('sortInvRows', () => {
@@ -143,6 +154,15 @@ describe('sortInvRows', () => {
     const withNull = [...vms, inv({ vmid: 9, name: 'null', cpuPct: null })];
     expect(sortInvRows(withNull, 'cpuPct', 'asc').map((v) => v.vmid)).toEqual([2, 1, 3, 9]);
   });
+  it('agentActive : inactif (critique) d’abord en asc, nulls last dans les deux sens', () => {
+    const rows = [
+      inv({ vmid: 1, name: 'ok', agentActive: true }),
+      inv({ vmid: 2, name: 'down', agentActive: false }),
+      inv({ vmid: 3, name: 'na', agentActive: null }),
+    ];
+    expect(sortInvRows(rows, 'agentActive', 'asc').map((v) => v.vmid)).toEqual([2, 1, 3]);
+    expect(sortInvRows(rows, 'agentActive', 'desc').map((v) => v.vmid)).toEqual([1, 2, 3]);
+  });
 });
 
 describe('invSummary', () => {
@@ -156,6 +176,14 @@ describe('invSummary', () => {
     expect(s.stopped).toBe(1);
     expect(s.ramUsedMb).toBe(3000);
     expect(s.cpuPctAvg).toBe(10); // moyenne sur les VMs avec cpu défini
+  });
+  it('agentOk = nombre de VMs dont l’agent invité est actif (null exclu)', () => {
+    const s = invSummary([
+      inv({ vmid: 1, name: 'a', agentActive: true }),
+      inv({ vmid: 2, name: 'b', agentActive: false }),
+      inv({ vmid: 3, name: 'c', type: 'lxc', agentActive: null }),
+    ]);
+    expect(s.agentOk).toBe(1);
   });
 });
 

@@ -365,7 +365,7 @@ export function enrichVmAgentIps(
   return {
     nets: nets.map((n) => {
       const ips = agentIps[n.iface];
-      return !n.ip && ips?.length ? { ...n, ip: primaryAgentIp(ips) } : n;
+      return !n.ip && ips?.length ? { ...n, ip: primaryAgentIp(ips) ?? null } : n;
     }),
     agentIps,
   };

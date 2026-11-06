@@ -217,9 +217,9 @@ Vérifications attendues :
 - navigateur sur `https://<ip-du-serveur>:8080` (certificat auto-signé : accepter l'exception) → badge **LIVE**, endpoints listés dans la sidebar, Health Score calculé ;
 - `logs/server.log` : un tick par endpoint sans erreur d'authentification PVE.
 
-> Le port API InfluxDB 8181 est lié **localhost uniquement** (l'app se connecte en local) — l'API n'est pas exposée au réseau. Explorer (8888) reste accessible.
+> Le port API InfluxDB 8181 est lié **localhost + `INFLUX_LAN_BIND`** (l'app se connecte en local via 127.0.0.1). `INFLUX_LAN_BIND` est auto-rempli par `30-env-setup.sh` avec l'IP du serveur : cela expose l'API au réseau interne **uniquement pour les agents Telegraf des nœuds Proxmox** (écriture des métriques locales : SMART, températures, ZFS…). Mettre `INFLUX_LAN_BIND=` à vide pour revenir à localhost-only. Explorer (8888) reste accessible.
 >
-> *The InfluxDB API port 8181 is bound to **localhost only** (the app connects locally) — the API is not exposed to the network. Explorer (8888) stays reachable.*
+> *The InfluxDB API port 8181 is bound to **localhost + `INFLUX_LAN_BIND`** (the app connects locally via 127.0.0.1). `INFLUX_LAN_BIND` is auto-filled by `30-env-setup.sh` with the server's IP: it exposes the API on the internal network **for the Proxmox nodes' Telegraf agents only** (local metrics writes: SMART, temperatures, ZFS…). Set `INFLUX_LAN_BIND=` empty to go back to localhost-only. Explorer (8888) stays reachable.*
 
 ## 8. Persistance au boot / Boot persistence
 

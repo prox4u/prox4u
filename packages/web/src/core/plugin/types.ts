@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { z } from 'zod';
 import { PLUGIN_ID_RE } from '@prox4u/shared';
@@ -23,6 +23,13 @@ export interface PluginMenuItem {
   labelKey: string;
   icon?: LucideIcon;
   order?: number;
+  /**
+   * Sous-menu repliable rendu sous l'entrée (chevron dédié, état persisté
+   * `navTreeExpanded`) — ex. l'arbre endpoints/nœuds Proxmox sous « Vue d'ensemble ».
+   */
+  submenu?: ReactNode;
+  /** Pastille de statut agrégée (composant : peut s'abonner aux stores) — rendue à gauche de l'icône. */
+  statusDot?: ComponentType;
 }
 
 export interface PluginManifest {
@@ -71,6 +78,17 @@ const iconSchema = z.custom<LucideIcon | undefined>(
   { message: 'doit être une icône Lucide' },
 );
 
+/** Node React (élément, chaîne, nombre…) — le sous-menu d'une entrée de menu. */
+const reactNodeSchema = z.custom<ReactNode | undefined>(
+  (v) =>
+    v === undefined ||
+    typeof v === 'string' ||
+    typeof v === 'number' ||
+    (typeof v === 'object' && v !== null) ||
+    Array.isArray(v),
+  { message: 'doit être un node React' },
+);
+
 export const pluginRouteSchema = z.object({
   path: z.string().min(1),
   element: componentSchema,
@@ -82,6 +100,8 @@ export const pluginMenuItemSchema = z.object({
   labelKey: z.string().min(1),
   icon: iconSchema.optional(),
   order: z.number().int().default(100),
+  submenu: reactNodeSchema.optional(),
+  statusDot: componentSchema.optional(),
 });
 
 export const pluginManifestSchema = z.object({

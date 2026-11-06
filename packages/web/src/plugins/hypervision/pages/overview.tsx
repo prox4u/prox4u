@@ -89,6 +89,7 @@ function aggregateKpis(eps: EndpointSnapshot[]): KpiSummary {
     vmsRunning: sum((k) => k.vmsRunning),
     vmsStopped: sum((k) => k.vmsStopped),
     vmsTotal: sum((k) => k.vmsTotal),
+    vmsAgentDown: sum((k) => k.vmsAgentDown ?? 0),
   };
 }
 
@@ -325,56 +326,64 @@ export function OverviewPage() {
   const kpis = aggregateKpis(multi.endpoints);
 
   return (
-    <ResponsiveGridLayout
-      key={gridVersion}
-      className="layout"
-      innerRef={containerRef as React.RefObject<HTMLDivElement>}
-      width={width}
-      breakpoints={BREAKPOINTS}
-      cols={BREAKPOINT_COLS}
-      layouts={layouts}
-      rowHeight={90}
-      margin={[16, 16]}
-      dragConfig={{ handle: '.drag-handle', cancel: 'button, a, input, select, textarea' }}
-      resizeConfig={{ handles: ['se'] }}
-      onLayoutChange={(_current, all) => setOverviewLayouts(all as Record<string, Layout>)}
-    >
-      {/* graphes ressources en tête (agrégat de tous les endpoints) */}
-      <div key="res-cpu" className="h-full">
-        <ResourceChart metric="cpu" kpis={kpis} />
-      </div>
-      <div key="res-ram" className="h-full">
-        <ResourceChart metric="ram" kpis={kpis} />
-      </div>
-      <div key="res-storage" className="h-full">
-        <ResourceChart metric="storage" kpis={kpis} />
+    <div className="space-y-4">
+      {/* Titre de page à gauche, même style que les autres modules (topo/storage/pxinv…). */}
+      <div>
+        <h1 className="text-lg font-semibold tracking-tight">{t('nav.overview')}</h1>
+        <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">{t('overview.hint')}</p>
       </div>
 
-      <div key="kpi-nodes" className="h-full">
-        <KpiNodesCard kpis={kpis} spark={[]} />
-      </div>
-      <div key="kpi-cpu" className="h-full">
-        <KpiCpuRamCard kpis={kpis} spark={[]} />
-      </div>
-      <div key="kpi-storage" className="h-full">
-        <KpiStorageCard kpis={kpis} spark={[]} />
-      </div>
-      <div key="kpi-vms" className="h-full">
-        <KpiVmsCard kpis={kpis} spark={[]} />
-      </div>
-
-      {multi.endpoints.map((ep) => (
-        <div key={`ep-${ep.id}`} className="h-full">
-          <EndpointHealthCard ep={ep} />
+      <ResponsiveGridLayout
+        key={gridVersion}
+        className="layout"
+        innerRef={containerRef as React.RefObject<HTMLDivElement>}
+        width={width}
+        breakpoints={BREAKPOINTS}
+        cols={BREAKPOINT_COLS}
+        layouts={layouts}
+        rowHeight={90}
+        margin={[16, 16]}
+        dragConfig={{ handle: '.drag-handle', cancel: 'button, a, input, select, textarea' }}
+        resizeConfig={{ handles: ['se'] }}
+        onLayoutChange={(_current, all) => setOverviewLayouts(all as Record<string, Layout>)}
+      >
+        {/* graphes ressources en tête (agrégat de tous les endpoints) */}
+        <div key="res-cpu" className="h-full">
+          <ResourceChart metric="cpu" kpis={kpis} />
         </div>
-      ))}
+        <div key="res-ram" className="h-full">
+          <ResourceChart metric="ram" kpis={kpis} />
+        </div>
+        <div key="res-storage" className="h-full">
+          <ResourceChart metric="storage" kpis={kpis} />
+        </div>
 
-      <div key="alerts" className="h-full">
-        <OverviewAlerts eps={multi.endpoints} />
-      </div>
-      <div key="table" className="h-full">
-        <EndpointsTable eps={multi.endpoints} />
-      </div>
-    </ResponsiveGridLayout>
+        <div key="kpi-nodes" className="h-full">
+          <KpiNodesCard kpis={kpis} spark={[]} />
+        </div>
+        <div key="kpi-cpu" className="h-full">
+          <KpiCpuRamCard kpis={kpis} spark={[]} />
+        </div>
+        <div key="kpi-storage" className="h-full">
+          <KpiStorageCard kpis={kpis} spark={[]} />
+        </div>
+        <div key="kpi-vms" className="h-full">
+          <KpiVmsCard kpis={kpis} spark={[]} />
+        </div>
+
+        {multi.endpoints.map((ep) => (
+          <div key={`ep-${ep.id}`} className="h-full">
+            <EndpointHealthCard ep={ep} />
+          </div>
+        ))}
+
+        <div key="alerts" className="h-full">
+          <OverviewAlerts eps={multi.endpoints} />
+        </div>
+        <div key="table" className="h-full">
+          <EndpointsTable eps={multi.endpoints} />
+        </div>
+      </ResponsiveGridLayout>
+    </div>
   );
 }
