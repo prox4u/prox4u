@@ -476,7 +476,7 @@ Refonte **Strangler Fig** : les 3 modules métier du frontend sont des **plugins
 
 ---
 
-## ✅ Fait — Stockage VM comme série de référence des graphiques « Disque » (`storage_metrics`) (livré, testé — **non commité**)
+## ✅ Fait — Stockage VM comme série de référence des graphiques « Disque » (`storage_metrics`) (livré, testé — **commité**)
 
 ### Problème
 La courbe « Disque » utilisait `disk_pct` = **rootfs** du nœud (disque système), qui ne reflète pas l'usage réel du stockage VM.
@@ -503,7 +503,7 @@ La courbe « Disque » utilisait `disk_pct` = **rootfs** du nœud (disque systè
 
 ---
 
-## ✅ Fait — Base de connaissance `skills/` (livrée, trackée — **non commitée**)
+## ✅ Fait — Base de connaissance `skills/` (livrée, trackée — **commitée**)
 
 Base de connaissance pour la **reprise du travail** (humain ou IA) : source unique de vérité à la racine du repo (trackée, livrée en production) — **pas** dans `.opencode/` (gitignoré, symlinks locaux uniquement).
 
@@ -523,7 +523,7 @@ Base de connaissance pour la **reprise du travail** (humain ou IA) : source uniq
 
 ---
 
-## ✅ Fait — Audit de reprise : README racine aligné (livré — **non commité**)
+## ✅ Fait — Audit de reprise : README racine aligné (livré — **commité**)
 
 Audit « prêt pour la reprise » du 2026-10-24 : le README racine ne pointait ni vers `skills/` ni vers `STATUS.md`, et deux tableaux étaient périmés. Corrections :
 - Nouvelle section **Documentation** en tête (pointeurs `skills/` + `STATUS.md` + `deploiement/DEPLOY.md`)
@@ -535,7 +535,7 @@ Parcours de reprise validé : **README → `skills/README.md` (inventaire) → s
 
 ---
 
-## ✅ Fait — Renommage du projet : Proxmox Manager → **Prox4u** (livré — **non commité**)
+## ✅ Fait — Renommage du projet : Proxmox Manager → **Prox4u** (livré — **commité**)
 
 Décision utilisateur (2026-10-24) : le projet s'appelle **Prox4u**. Renommé avant tout déploiement public (aucune instance installée, rien de publié → zéro migration).
 
@@ -574,7 +574,7 @@ Décision utilisateur : **Prox4u prend le port 8080** (l'ancienne app `/home/ope
 - **README** : section « Développement » remplacée par **« Lancement & développement »** (2026-10-25) — mode standard (8080 = API + frontend pré-buildé, `server.sh`, `pnpm build` après changement), mode dev (Vite 5173 + proxy `VITE_API_PROXY`/`VITE_WS_PROXY`), tableau auto-start (systemd prod / cron watchdog dev), commandes utilitaires. Quickstart corrigé (`cd Prox4u`).
 - **État de marche** : backend Prox4u sur `https://localhost:8080` (`./server.sh start`, mode réel → PVE 192.168.1.80 + clusterproxmox), Vite dev sur `http://0.0.0.0:5173` avec proxy `VITE_API_PROXY=https://localhost:8080` / `VITE_WS_PROXY=wss://localhost:8080`. Mock 9088 inutile (`clusters.json` pointe sur les PVE réels).
 
-## ✅ Fait — Module « Inventaire des VM » (style vCenter) (livré, validé cluster réel + Playwright — **non commité**)
+## ✅ Fait — Module « Inventaire des VM » (style vCenter) (livré, validé cluster réel + Playwright — **commité**)
 
 Décisions utilisateur (2026-10-25) : v1 = **inventaire en consultation pure** (pas d'actions power — les tokens PVE actuels sont lecture seule `ManagerReader`) + **vue détail complète** à onglets.
 
@@ -604,7 +604,7 @@ Décisions utilisateur (2026-10-25) : v1 = **inventaire en consultation pure** (
 
 ---
 
-## ✅ Fait — Authentification multi-utilisateurs (port complet de l'ancienne app) (livrée, validée E2E — **non commitée**)
+## ✅ Fait — Authentification multi-utilisateurs (port complet de l'ancienne app) (livrée, validée E2E — **commitée**)
 
 Décision utilisateur : **restaurer l'authentification** en portant l'implémentation de l'ancienne app (`/home/opencode/projet/proxmox/`, lecture seule). Comptes migrés tels quels (hashes argon2id compatibles, verify OK).
 
@@ -628,7 +628,7 @@ Décision utilisateur : **restaurer l'authentification** en portant l'implément
 
 ---
 
-## ✅ Fait — Versionnement des modules `_vN` + `vm-inventory_v2` « Console web » (livrés, validés E2E navigateur — **non commités**)
+## ✅ Fait — Versionnement des modules `_vN` + `vm-inventory_v2` « Console web » (livrés, validés E2E navigateur — **commités**)
 
 Convention utilisateur : **toute modification d'un module existant crée un nouveau plugin `<id>_vN+1`** — jamais de modification en place ; la v1 reste intacte = rollback. **Toutes les versions sont disponibles sans activation admin** (décision 2026-10-25) : la plus récente est canonique par défaut sur l'URL partagée.
 
@@ -688,7 +688,7 @@ Bug signalé : après ajout/suppression d'un module dans le catalogue, la rubriq
 
 ---
 
-## ✅ Fait — `vm-inventory_v2` approche vCenter : VMs dans l'arbre + détail plein écran (livré, validé tests/build — **non commité**)
+## ✅ Fait — `vm-inventory_v2` approche vCenter : VMs dans l'arbre + détail plein écran (livré, validé tests/build — **commité**)
 
 Demande utilisateur (2026-10-26) : « v2, je souhaite une approche vcenter » + capture vSphere Client en référence → les VMs sont des **feuilles cliquables de l'arborescence** et leur détail **remplace le tableau** (plein écran), avec onglets + grille de panneaux Résumé (style vSphere).
 
@@ -711,7 +711,7 @@ Demande utilisateur (2026-10-26) : « v2, je souhaite une approche vcenter » + 
 
 ---
 
-## ✅ Fait — Onglet Monitor VM (InfluxDB) + export CSV des graphiques (livré, validé tests/build/typecheck — **non commité**)
+## ✅ Fait — Onglet Monitor VM (InfluxDB) + export CSV des graphiques (livré, validé tests/build/typecheck — **commité**)
 
 Demande utilisateur (2026-10-26) : « il manque monitoring pour les VM. on utilise les informations d'influxdb. il faut prévoir un export des data sur les graphiques de monitor. » puis « la vue d'ensemble a la connexion à influxdb. il faut dans monitor: CPU, RAM, Disques, réseaux » → onglet **Monitor** dans le détail VM (v2), positionné comme vSphere (Résumé | **Monitor** | Configuration | Réseau | Snapshots), 4 graphes + bouton **Exporter CSV**.
 
@@ -743,7 +743,7 @@ Pendant les tests, le conteneur `proxmox-influxdb` était en **boucle de crash**
 
 ---
 
-## ✅ Fait — Nœuds Proxmox dans l'inventaire v2 « comme des VMs » (livré, validé tests/build/typecheck — **non commité**)
+## ✅ Fait — Nœuds Proxmox dans l'inventaire v2 « comme des VMs » (livré, validé tests/build/typecheck — **commité**)
 
 Demande utilisateur (2026-10-26) : « oui de plus dans inventaireV2, il manque les noeuds proxmox. Il faut ajouter les noeuds proxmox, comme des VM. » → un nœud PVE est **sélectionnable dans l'arborescence comme une VM** et sa page détail plein écran (onglets Résumé / Monitor / VMs) remplace le tableau. **Zéro changement serveur** : tout existait déjà (`NodeHealth` dans le snapshot WS, `GET /api/metrics?node=` + `fetchMetrics(tf, epId, node)` pour l'historique InfluxDB, `VmTable` v2, clés i18n `node.*`).
 
@@ -767,7 +767,7 @@ Vérifié **sur le cluster réel** (token de l'app) : `/nodes/{n}/status` et `/c
 
 ---
 
-## ✅ Fait — IP & MAC par interface dans le détail VM (Résumé + Réseau), via le guest agent (livré, validé tests/build/typecheck + E2E cluster réel — **non commité**)
+## ✅ Fait — IP & MAC par interface dans le détail VM (Résumé + Réseau), via le guest agent (livré, validé tests/build/typecheck + E2E cluster réel — **commité**)
 
 Demande utilisateur (2026-10-26) : « dans l'inventaire, il manque des informations comme adresse IP et MAC par interface. dans réseaux et résumé. »
 
@@ -794,7 +794,7 @@ Demande utilisateur (2026-10-26) : « dans l'inventaire, il manque des informati
 
 ---
 
-## ✅ Fait — Topologie réseau alimentée par les IPs du guest agent (livré, validé tests/build/typecheck + E2E cluster réel — **non commité**)
+## ✅ Fait — Topologie réseau alimentée par les IPs du guest agent (livré, validé tests/build/typecheck + E2E cluster réel — **commité**)
 
 Demande utilisateur (2026-10-26) : « il faut mettre à jour topologie reseau » → maintenant que les IPs par interface existent via le guest agent (section précédente), la page `/topology` les consomme **partout** : panneau de détail VM (table des interfaces), détail d'interface, inventaire réseaux→VMs (colonne IP), recherche unifiée et export CSV.
 
@@ -819,7 +819,7 @@ Constat utilisateur : la LXC 103 (AMD-IA) n'avait pas d'IP affichée. Vérifié 
 
 ---
 
-## ✅ Fait — Correction des graphiques Monitor des nœuds Proxmox (réseau à zéro + trous de données) (livré, validé E2E cluster réel — **non commité**)
+## ✅ Fait — Correction des graphiques Monitor des nœuds Proxmox (réseau à zéro + trous de données) (livré, validé E2E cluster réel — **commité**)
 
 Demande utilisateur (2026-10-26) : « il y a des problèmes sur les graphiques de monitor des noeuds proxmox. Il faut corriger le bug. »
 
@@ -846,7 +846,7 @@ Demande utilisateur (2026-10-26) : « il y a des problèmes sur les graphiques d
 
 ---
 
-## ✅ Fait — Module « Alarmes & Centreon » (centreon-nsca) (livré, validé API + Playwright — **non commité**)
+## ✅ Fait — Module « Alarmes & Centreon » (centreon-nsca) (livré, validé API + Playwright — **commité**)
 
 Demande utilisateur (2026-10-30) : créer un module complet qui définit des règles de surveillance sur les VMs/nœuds Proxmox, génère des alarmes, et les transmet à **Centreon** via **NSCA (`send_nsca`)** en **checks passifs**, avec activation/désactivation des règles, choix d'un poller cible, et **provisionnement automatique du service Centreon** via **CLAPI** **ou** **API REST v1** (choix sur la page de config). Nom `centreon-nsca` (un backend Zabbix viendra ensuite — namespace `/api/alarms/*` générique).
 
@@ -892,7 +892,7 @@ Demande utilisateur : « pour la gestion des Pollers, il faut deux entrées — 
 
 ---
 
-## ✅ Fait — Agent PVE (colonne + alerte + compteur), menu déroulant, titres de page (livrés, validés tests/build + Playwright — **non commités**)
+## ✅ Fait — Agent PVE (colonne + alerte + compteur), menu déroulant, titres de page (livrés, validés tests/build + Playwright — **commités**)
 
 Trois livraisons UI du 2026-10-30, toutes « sans rien casser » (routes, layout persisté et données inchangés).
 
@@ -930,7 +930,7 @@ Trois livraisons UI du 2026-10-30, toutes « sans rien casser » (routes, layout
 
 ---
 
-## ✅ Fait — Module « Capteurs nœuds » (node-sensors v1) + déploiement Telegraf (livré, validé cluster réel — **non commité**)
+## ✅ Fait — Module « Capteurs nœuds » (node-sensors v1) + déploiement Telegraf (livré, validé cluster réel — **commité**)
 
 Demande utilisateur : exposer les **métriques locales** que l'API PVE ne donne pas (SMART,
 températures, ZFS ARC, unités systemd) dans un nouveau module du dashboard. **Option A** actée :
@@ -981,7 +981,7 @@ nouvelle famille de plugin `node-sensors` v1, **aucun module existant touché**.
   « Fait » ci-dessous.
 ---
 
-## ✅ Fait — Seuils capteurs personnalisés + correctif tri-state SMART (livré, **non commité**)
+## ✅ Fait — Seuils capteurs personnalisés + correctif tri-state SMART (livré, **commité**)
 
 Demande utilisateur : **abaisser le seuil d'alerte par capteur** (perso ≤ firmware, jamais
 au-dessus), persisté et éditable. Puis, sur un constat de terrain — les disques virtuels
@@ -1034,7 +1034,7 @@ anticiper du **vrai matériel** (RAID, disques sans SMART), pas un maquillage co
 
 ---
 
-## ✅ Fait — Bug 1 : dédoublonnage du stockage iSCSI / VG LVM (livré, **non commité**)
+## ✅ Fait — Bug 1 : dédoublonnage du stockage iSCSI / VG LVM (livré, **commité**)
 
 Bug signalé par l'utilisateur : le graphe « Disque — 7 jours » affichait une allocation à **916 %**,
 et le cluster `clusterproxmox` montrait **655 GB** de stockage au lieu de ~333 GB. Diagnostic :
@@ -1072,7 +1072,7 @@ remonte le **même volume de 322 GB deux fois** (datastore `iscsi` + datastore `
 
 ---
 
-## ✅ Fait — Cartographie stockage : volumes physiques + ratio disk correct (livré, **non commité**)
+## ✅ Fait — Cartographie stockage : volumes physiques + ratio disk correct (livré, **commité**)
 
 Suite du Bug 1/Bug 2. Demande utilisateur : « il faut un plan pour avoir une cartographie précise
 du stockage » + « si un volume iSCSI de 300 Go porte un autre volume comme un LVM de 300 Go, on ne
@@ -1123,7 +1123,7 @@ Arbitrages : sémantique **thin = sur-allocation / thick = usage**, périmètre 
 
 ---
 
-## ✅ Fait — Hiérarchie iSCSI → LVM (livré, **non commité**)
+## ✅ Fait — Hiérarchie iSCSI → LVM (livré, **commité**)
 
 Suite de la cartographie. Demande utilisateur : penser **vrai matériel** — un LUN iSCSI peut porter
 **plusieurs VG LVM**, et la capacité du cluster doit refléter la **taille physique du LUN** (pas le
@@ -1151,11 +1151,12 @@ des VG enfants (engagé)**, pas les données du VG (cas 600 Go LUN / 100 Go VG �
 - **Poller** : **inversion du dédoublonnage** — `childVgNames` = ensemble des valeurs `duplicateOf`
   (les VG enfants) ; `storWithCap` **compte le LUN, exclut les VG** (avant : comptait le VG, écartait
   le LUN). Applique `lunSizes` aux totaux iSCSI. Dérive les KPI thin en **aplatissant l'arbre**.
-- **Web** : panneau volumes en **arbre** (carte LUN parent + VG enfants indentés, note borne basse,
+- **Web** : panneau volumes en **arbre** (carte LUN parent **+ repliable** — chevron « Replier/Déplier
+  le LUN », déplié par défaut — + VG enfants indentés, connecteur « └ » + « · sous {LUN} », note borne basse,
   **lu du snapshot WS** `storageVolumes` — source unique avec la config LUN, plus de recalcul
-  client). Table iSCSI → LVM : **LUN parent dépliable**, VG enfants **indentés** (« · sous {LUN} »),
-  drill-down VMs conservé. i18n `storage.volumes.*` (capacityLower, vgCapacity, committed, lunNote,
-  vgChildren…) + `storage.childOf`.
+  client). Table iSCSI → LVM : **LUN parent dépliable**, VG enfants **indentés** (« · sous {LUN} », **cellule Serveur vide** — le serveur est déjà montré par le parent),
+  drill-down VMs conservé. **Règle `expandable`** : une ligne est dépliable si VG enfants OU VMs OU **capacité connue** (`hasCapacity`) — un datastore « local » sans VM (dir ISOs/backups) s'ouvre sur son graphe Occupation. i18n `storage.volumes.*` (capacityLower, vgCapacity, committed, lunNote,
+  vgChildren, collapse, expand…) + `storage.childOf`.
 
 ### Vérifications effectuées
 - `pnpm --filter @proxmox/shared build` → `pnpm typecheck` → `pnpm -r test` (**259 shared** dont
@@ -1203,10 +1204,10 @@ P2 moteur d'alarmes v2 (hystérésis/suppression/ack) · P3 audit best-practices
 événements · P5 certificats + NTP.
 
 ### En attente de décision utilisateur
-- [ ] **Commit** : correction disque (`storage_metrics`) + renommage Prox4u + fix `server.sh` (pipefail/TLS_CERT) + **livraisons 2026-10-30** (colonne/alerte/compteur agent PVE + menu déroulant + titres de page : `shared/types.ts` `shared/vm-view.ts` `shared/proxmox-inventory.ts` `shared/i18n/*` + `server/poller.ts` `server/modules/proxinventory/routes.ts` + `web/plugins/hypervision/*` (index.tsx, proxmox-nav-tree.tsx, kpi-row.tsx, pages) + `web/core/ui/PluginMenu.tsx` `web/core/plugin/types.ts` `web/store/layout.ts` `web/components/layout/sidebar.tsx` + `web/plugins/vm-view_v2/components/vm-table.tsx` + `web/plugins/proxmox-inventory/components/proxmox-inventory-table.tsx`) + **nouvelle skill `proxmox-inventory`** + updates skills (`general`, `hypervision`, `vm-inventory`) + STATUS.md + README.md — consigne utilisateur : « pas encore de GIT » (branche `refactor/plugin-architecture`, 11 commits, main intacte). Les dossiers de référence `ProxMenux/` et `project-pegaprox/` ont été sortis du repo le 2026-10-24 (→ `/home/opencode/projet/`)
+- [x] **Commit** : **fait le 2026-11-10** — commit `a492724` sur `master` (tout le travail accumulé : livraisons 2026-10-30, capteurs, seuils tri-state SMART, dédoublonnage iSCSI/LVM, cartographie, hiérarchie iSCSI → LVM, graphiques VG + `local`). L'ancienne consigne « pas encore de GIT » (branche `refactor/plugin-architecture`) est caduque : le repo vit désormais sur `master` (auto-backups + commits explicites). Les dossiers de référence `ProxMenux/` et `project-pegaprox/` ont été sortis du repo le 2026-10-24 (→ `/home/opencode/projet/`).
 - [ ] **`docker-compose.yml`** (influxdb + explorer, tracké) : dev local uniquement vs retrait du repo
-- [ ] **Push GitHub** : en attente du compte GitHub + identité (commits avec placeholder `proxmox-dev <dev@localhost>`, pas de remote)
-- [ ] **Fusion dans main** : en attente de validation utilisateur
+- [x] **Push** : **fait le 2026-11-10** — `master` poussé sur **`https://gitea.priv/prox4u/prox4u.git`** (remote `origin`, token intégré à l'URL ; l'ancien « Push GitHub » est remplacé par ce remote Gitea privé). Local et remote synchrones à `a492724`.
+- [x] **Fusion dans main** : caduque — le travail est **directement sur `master`** (branche de travail = branche remote), plus de branche `refactor/plugin-architecture` à fusionner.
 
 ### Prochain jalon — Suite de la Phase 1B (stockage, backups PBS, alarmes)
 La topologie réseau **et la vue stockage** sont **livrées** (sections « Fait » ci-dessus). Il reste en 1B :
@@ -1257,10 +1258,10 @@ data/                         # tls/, influxdb/ + explorer/ (chown 1500:1500), c
 .env / sites.json             # config cluster (repli mono-endpoint) + topologie sites (champ endpoint)
 clusters.json                 # endpoints Proxmox multi-cluster (600, gitignored) — template : clusters.example.json
 overcommit.json               # politique de surallocation + seuils d'usage (hot-reload, source unique du code couleur)
-packages/shared/src/          # types (MultiDashboardSnapshot…), health.ts, pra.ts, capacity.ts, overcommit.ts, network.ts (builder topologie pur, 22 tests), storage-inventory.ts (vue stockage vCenter, 18 tests), vm-inventory.ts (filtre/tri/tree inventaire VM, 15 tests), i18n/ (+ 8 suites de tests)
+packages/shared/src/          # types (MultiDashboardSnapshot…), health.ts, pra.ts, capacity.ts, overcommit.ts, network.ts (builder topologie pur, 22 tests), storage-inventory.ts (vue stockage vCenter, 18 tests), storage-volumes.ts (cartographie iSCSI → LVM en arbre, 15 tests), vm-inventory.ts (filtre/tri/tree inventaire VM, 15 tests), i18n/ (+ 8 suites de tests)
 packages/server/src/core/     # config (clusters.json + overcommit.json hot-reload), proxmox-client (getNetwork, getStorage, diskStorageOf — parse du datastore du disque VM), mock-source, poller multi-endpoints, influx, influx-consolidator, ws-hub
 packages/server/src/modules/dashboard/routes.ts   # /api/* (?endpoint=, InfluxDB d'abord, repli RRD + "source")
-packages/server/src/modules/supervision/routes.ts # /api/network-topology + /api/storage-inventory (cache 5 min)
+packages/server/src/modules/supervision/routes.ts # /api/network-topology + /api/storage-inventory (cache 5 min) + /api/storage-datastore-history (séries d'occupation par datastore + prévision, datastore_metrics InfluxDB / repli RRD)
 packages/server/src/modules/vminventory/routes.ts # /api/vm-config (live + config cache 1 h + snapshots à la demande, cache 5 min) + /api/vm-metrics (historique VM InfluxDB, cache 5 min)
 packages/server/src/modules/nodesensors/routes.ts # /api/node-sensors (métriques locales Telegraf : SMART, capteurs, ZFS ARC, unités systemd — cache 1 min, base raw)
 packages/server/src/modules/auth/     # store (data/auth.json) + routes (login/me/logout/preferences/admin) + guard API & WS
@@ -1270,7 +1271,7 @@ packages/web/src/core/plugin/ # contrat (types zod, registry, loader, eventBus, 
 packages/web/src/components/layout/           # sidebar (PluginMenu — l'arbre endpoints/nœuds Proxmox est un sous-menu repliable sous « Vue d'ensemble », plus de section PROXMOX), topbar (santé globale)
 packages/web/src/plugins/hypervision/         # index.tsx (submenu + statusDot) + pages overview/endpoint/node (titres de page) + proxmox-nav-tree.tsx (sous-menu sidebar + pastille agrégée) + composants (menu order 10)
 packages/web/src/plugins/network/             # topology.tsx + topology-flow (React Flow : layout pur, filtre, impact, PRA, drag, IfaceEdge), network-inventory, multi-select (menu order 20)
-packages/web/src/plugins/storage/             # storage.tsx + storage-inventory (table vCenter : barre de capacité colorée, drill-down VMs, recherche, export CSV) (menu order 30)
+packages/web/src/plugins/storage/             # storage.tsx + storage-inventory (table vCenter : barre de capacité colorée, hiérarchie iSCSI → LVM, drill-down graphe Occupation + VMs, recherche, export CSV) + storage-volumes (panneau « Volumes physiques » en arbre repliable) (menu order 30)
 packages/web/src/plugins/vm-inventory/        # vm-inventory.tsx + vm-tree (Datacenter→cluster→nœud), vm-table (filtres/tri), vm-detail (onglets Config/Réseau/Snapshots) (menu order 40)
 packages/web/src/plugins/vm-inventory_v2/     # approche vCenter : arbre avec feuilles VM + détail plein écran (onglets, grille Résumé style vSphere) + bouton « Console web (UI PVE) » + colonne « Agent PVE » (version canonique = la plus récente)
 packages/web/src/plugins/proxmox-inventory/   # inventaire consolidé multi-endpoints (une machine par ligne QEMU+LXC) : OS réel (agent), disques par fs, interfaces/IPs, tags, état agent PVE, filtres par colonne + export TXT/CSV/JSON (menu order 50)
