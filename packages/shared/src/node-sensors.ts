@@ -9,7 +9,13 @@ export interface SmartDevice {
   device: string;
   model: string | null;
   serialNo: string | null;
-  healthOk: boolean;
+  /**
+   * Santé SMART — tri-state. `true` = PASSED, `false` = FAILED, `null` = INCONNUE :
+   * le disque n'expose pas SMART (disque virtuel QEMU, volume logique RAID, état
+   * illisible). NULL n'est PAS un échec — afficher « CRITIQUE » pour une santé
+   * inconnue serait un faux positif sur du vrai matériel.
+   */
+  healthOk: boolean | null;
   tempC: number | null;
   powerOnHours: number | null;
   powerCycleCount: number | null;
@@ -73,4 +79,97 @@ export interface NodeSensorsResponse {
   failedUnits: FailedUnit[];
   /** 'influx' si les données viennent d'InfluxDB, 'empty' si aucun nœud Telegraf. */
   source: 'influx' | 'empty';
+  /**
+   * Seuils capteurs personnalisés (perso ≤ firmware), clé = `node/chip/feature`.
+   * Merge serveur dans la réponse : le tableau « Capteurs » suit le seuil
+   * EFFECTIF (perso si défini, sinon firmware `tempCrit`). Vide = firmware partout.
+   */
+  sensorThresholds: SensorThresholds;
+}
+
+/** Seuil personnalisé d'un capteur en °C, clé = `node/chip/feature`. */
+export type SensorThresholds = Record<string, number>;
+
+/** Vue d'un capteur pour la page admin (onglet « Seuils capteurs »). */
+export interface SensorThresholdEntry {
+  node: string;
+  chip: string;
+  feature: string;
+  /** Température courante (lecture seule — contexte, pas un seuil). */
+  temp: number | null;
+  /** Seuil critique firmware (lecture seule — valeur matériel, jamais dépassée). */
+  firmware: number | null;
+  /** Seuil personnalisé (perso ≤ firmware). `null` si non défini (fallback firmware). */
+  custom: number | null;
+}
+
+/** Réponse GET /api/admin/sensor-thresholds. */
+export interface SensorThresholdsResponse {
+  /** Seuils personnalisés courants (clé = `node/chip/feature`). */
+  thresholds: SensorThresholds;
+  /** Liste des capteurs connus (avec leur seuil firmware + perso éventuel). */
+  sensors: SensorThresholdEntry[];
+}
+
+/** Clé d'identification d'un capteur : `node/chip/feature` (aucun `/` à l'intérieur). */
+export function sensorKey(r: { node: string; chip: string; feature: string }): string {
+  return `${r.node}/${r.chip}/${r.feature}`;
+}
+
+/**
+ * Seuil effectif d'un capteur : le seuil personnalisé si défini, sinon le seuil
+ * firmware (`tempCrit`). `null` si les deux sont absents (le front replie sur
+ * la coloration historique 80/60 °C).
+ */
+export function effectiveSensorThreshold(
+  reading: { node: string; chip: string; feature: string; tempCrit: number | null },
+  thresholds: SensorThresholds,
+): number | null {
+  const custom = thresholds[sensorKey(reading)];
+  if (custom !== undefined) return custom;
+  return reading.tempCrit;
+}
+
+/**
+ * Ton d'une température selon le seuil effectif.
+ * - `crit` : temp ≥ seuil effectif (le capteur a atteint son seuil d'alerte).
+ * - `warn` : temp dans la marge de 20 °C sous le seuil effectif.
+ * - `ok`   : en dessous.
+ * - `na`   : pas de température.
+ * Sans seuil effectif (ni perso ni firmware) : repli historique 80 °C / 60 °C.
+ */
+export function tempTone(tempC: number | null, effective: number | null): 'ok' | 'warn' | 'crit' | 'na' {
+  if (tempC === null) return 'na';
+  if (effective === null) {
+    if (tempC >= 80) return 'crit';
+    if (tempC >= 60) return 'warn';
+    return 'ok';
+  }
+  if (tempC >= effective) return 'crit';
+  if (tempC >= effective - 20) return 'warn';
+  return 'ok';
+}
+
+/**
+ * Ton de la santé SMART (tri-state).
+ * - `ok`      : health_ok = true  (SMART PASSED).
+ * - `crit`    : health_ok = false (SMART FAILED — un disque qui échoue vraiment).
+ * - `unknown` : health_ok = null  (pas de SMART : disque virtuel, RAID, état
+ *               illisible). Distinct de `crit` : une santé inconnue n'est pas une
+ *               panne — sinon tout volume logique RAID serait « CRITIQUE ».
+ */
+export function smartHealthTone(healthOk: boolean | null): 'ok' | 'crit' | 'unknown' {
+  if (healthOk === null) return 'unknown';
+  return healthOk ? 'ok' : 'crit';
+}
+
+/**
+ * Température d'un disque SMART à afficher.
+ * Telegraf écrit `0` quand le disque n'expose pas de capteur de température
+ * (disque virtuel, RAID) — aucun disque réel ne tourne à 0 °C, donc 0 =
+ * « pas de lecture ». `na` → le front affiche « — ».
+ */
+export function smartTempDisplay(tempC: number | null): { value: number | null } {
+  if (tempC === null || tempC === 0) return { value: null };
+  return { value: tempC };
 }

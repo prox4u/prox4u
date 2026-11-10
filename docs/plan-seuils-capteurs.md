@@ -25,40 +25,40 @@ Absence de clé = fallback firmware.
 ## Tâches
 
 ### 1. Backend — endpoint API
-- [ ] `GET /api/admin/sensor-thresholds` → renvoie les seuils personnalisés + firmware
-- [ ] `PUT /api/admin/sensor-thresholds` → enregistre/modifie (validation : perso ≤ firmware)
-- [ ] `DELETE /api/admin/sensor-thresholds/:node/:chip/:feature` → reset (repasse au firmware)
-- [ ] Stockage `data/sensor-thresholds.json` (tmp+rename, pattern consolidation-state)
-- [ ] Routeur dans `packages/server/src/modules/nodesensors/routes.ts` (ou nouveau fichier)
-- [ ] Guard : lecture = tout utilisateur du module, écriture = admin uniquement
+- [x] `GET /api/admin/sensor-thresholds` → renvoie les seuils personnalisés + firmware
+- [x] `PUT /api/admin/sensor-thresholds` → enregistre/modifie (validation : perso ≤ firmware)
+- [x] `DELETE /api/admin/sensor-thresholds/:node/:chip/:feature` → reset (repasse au firmware)
+- [x] Stockage `data/sensor-thresholds.json` (tmp+rename, pattern consolidation-state)
+- [x] Routeur dans `packages/server/src/modules/nodesensors/routes.ts` (ou nouveau fichier)
+- [x] Guard : lecture = tout utilisateur du module, écriture = admin uniquement
 
 ### 2. Page Administration — onglet « Seuils capteurs »
-- [ ] Nouveau composant `packages/web/src/components/admin/sensor-thresholds.tsx`
-- [ ] Tableau : nœud / puce / capteur / temp actuelle / seuil firmware (RO) / seuil perso (input)
-- [ ] Input avec `max={firmware}` (impossible de dépasser)
-- [ ] Bouton reset par ligne (revenir au firmware)
-- [ ] Bouton « Tout réinitialiser »
-- [ ] Sauvegarde explicite (bouton « Enregistrer ») ou auto-save sur blur
-- [ ] Intégration dans la page Administration (onglet à côté de Centreon NSCA)
+- [x] Nouveau composant `packages/web/src/components/admin/sensor-thresholds.tsx`
+- [x] Tableau : nœud / puce / capteur / temp actuelle / seuil firmware (RO) / seuil perso (input)
+- [x] Input avec `max={firmware}` (impossible de dépasser)
+- [x] Bouton reset par ligne (revenir au firmware)
+- [x] Bouton « Tout réinitialiser »
+- [x] Sauvegarde explicite (bouton « Enregistrer ») ou auto-save sur blur
+- [x] Intégration dans la page Administration (onglet à côté de Centreon NSCA)
 
 ### 3. Intégration dans le tableau capteurs (node-sensors)
-- [ ] Le tableau « Capteurs » utilise le seuil perso si présent, sinon le firmware
-- [ ] Affichage : seuil perso en couleur + firmware en petit/gris à côté
-- [ ] La couleur de la température (vert/orange/rouge) suit le seuil EFFECTIF (perso ou firmware)
-- [ ] Type partagé : ajouter `sensorThresholds: Record<string, number>` à `NodeSensorsResponse`
-- [ ] Le routeur `/api/node-sensors` merge les seuils perso dans la réponse
+- [x] Le tableau « Capteurs » utilise le seuil perso si présent, sinon le firmware
+- [x] Affichage : seuil perso en couleur + firmware en petit/gris à côté
+- [x] La couleur de la température (vert/orange/rouge) suit le seuil EFFECTIF (perso ou firmware)
+- [x] Type partagé : ajouter `sensorThresholds: Record<string, number>` à `NodeSensorsResponse`
+- [x] Le routeur `/api/node-sensors` merge les seuils perso dans la réponse
 
 ### 4. Types partagés + i18n
-- [ ] `packages/shared/src/node-sensors.ts` : ajouter `SensorThreshold` interface
-- [ ] i18n FR/EN : libellés onglet admin, boutons, validation
-- [ ] Rebuild shared → web → server
+- [x] `packages/shared/src/node-sensors.ts` : ajouter `SensorThreshold` interface
+- [x] i18n FR/EN : libellés onglet admin, boutons, validation
+- [x] Rebuild shared → web → server
 
 ### 5. Tests + validation
-- [ ] Test manuel : modifier un seuil, vérifier que le tableau capteurs change de couleur
-- [ ] Test : essayer de mettre un seuil > firmware → clampé
-- [ ] Test : reset → retour au firmware
-- [ ] Test : restart serveur → seuils persistés
-- [ ] Test : utilisateur non-admin → lecture OK, écriture 403
+- [x] Test manuel : modifier un seuil, vérifier que le tableau capteurs change de couleur
+- [x] Test : essayer de mettre un seuil > firmware → clampé
+- [x] Test : reset → retour au firmware
+- [x] Test : restart serveur → seuils persistés
+- [x] Test : utilisateur non-admin → lecture OK, écriture 403
 
 ## Fichiers à créer/modifier
 | Fichier | Action |

@@ -1,7 +1,17 @@
 import type { FastifyInstance } from 'fastify';
-import type { NodeSensorsResponse, SmartDevice, SensorReading, ZfsStatus, FailedUnit } from '@prox4u/shared';
+import type {
+  NodeSensorsResponse,
+  SmartDevice,
+  SensorReading,
+  ZfsStatus,
+  FailedUnit,
+  SensorThresholds,
+  SensorThresholdEntry,
+} from '@prox4u/shared';
+import { sensorKey } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
 import type { AppContext } from '../../core/poller.js';
+import type { SensorThresholdStore } from './thresholds.js';
 
 const CACHE_TTL_MS = 60_000; // 1 min — les données Telegraf arrivent toutes les 10 s
 
@@ -15,23 +25,39 @@ function influxReady(ctx: AppContext): boolean {
 }
 
 /**
+ * Santé SMART — tri-state. `null` (champ absent / NULL) = INCONNUE, pas un
+ * échec : sur du vrai matériel, un volume logique RAID ou un disque sans SMART
+ * renvoie aussi NULL — le mapper en `false` afficherait « CRITIQUE » à tort
+ * (faux positif). InfluxDB 3 renvoie un boolean `true`/`false`, avec repli sur
+ * `1`/`0`/`'true'`/`'false'` (représentations possibles selon la source).
+ */
+function parseHealthOk(v: string | number | boolean | null | undefined): boolean | null {
+  if (v === true || v === 1 || v === 'true' || v === 'True') return true;
+  if (v === false || v === 0 || v === 'false' || v === 'False') return false;
+  return null; // NULL / absent / valeur inattendue → inconnu
+}
+
+/**
  * GET /api/node-sensors — métriques locales Telegraf (SMART, capteurs, ZFS, unités systemd).
  * Cache 1 min. Source : base `raw` (les mesures Telegraf arrivent directement dans raw).
  * Chaque query est isolée dans son propre try/catch : une table absente ou une
  * colonne inconnue ne fait pas perdre les autres sections.
  */
-export function registerNodeSensors(app: FastifyInstance, ctx: AppContext): void {
+export function registerNodeSensors(app: FastifyInstance, ctx: AppContext, store: SensorThresholdStore): void {
   const cache = new Map<string, CacheEntry>();
 
   app.get('/api/node-sensors', async (_req, reply) => {
+    // Les seuils personnalisés changent rarement : on les relit à chaque build
+    // (pas de cache dédié), mais ils ne forcent pas un re-query InfluxDB.
+    const thresholds = store.getThresholds();
     const cached = cache.get('all');
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-      reply.send(cached.value);
+      reply.send({ ...cached.value, sensorThresholds: thresholds });
       return;
     }
 
     if (!influxReady(ctx)) {
-      const empty: NodeSensorsResponse = { timeframe: '1h', nodes: [], smart: [], sensors: [], zfs: [], failedUnits: [], source: 'empty' };
+      const empty: NodeSensorsResponse = { timeframe: '1h', nodes: [], smart: [], sensors: [], zfs: [], failedUnits: [], source: 'empty', sensorThresholds: thresholds };
       cache.set('all', { at: Date.now(), value: empty });
       reply.send(empty);
       return;
@@ -59,7 +85,7 @@ export function registerNodeSensors(app: FastifyInstance, ctx: AppContext): void
             device: String(r.device ?? ''),
             model: (r.model as string) ?? null,
             serialNo: (r.serial_no as string) ?? null,
-            healthOk: (r.health_ok as unknown) === true || r.health_ok === 1 || r.health_ok === 'true' || r.health_ok === 'True',
+            healthOk: parseHealthOk(r.health_ok),
             tempC: (r.temp_c as number) ?? null,
             powerOnHours: (r.power_on_hours as number) ?? null,
             powerCycleCount: (r.power_cycle_count as number) ?? null,
@@ -180,8 +206,125 @@ export function registerNodeSensors(app: FastifyInstance, ctx: AppContext): void
       zfs,
       failedUnits,
       source: nodes.length > 0 ? 'influx' : 'empty',
+      sensorThresholds: thresholds,
     };
     cache.set('all', { at: Date.now(), value: body });
     reply.send(body);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Seuils capteurs personnalisés — onglet Administration
+// ---------------------------------------------------------------------------
+//
+// GET    /api/admin/sensor-thresholds                    → seuils perso + liste des capteurs (firmware)
+// PUT    /api/admin/sensor-thresholds                    → remplace le jeu de seuils (clamp perso ≤ firmware)
+// DELETE /api/admin/sensor-thresholds                    → tout réinitialiser (retour firmware)
+// DELETE /api/admin/sensor-thresholds/:node/:chip/:feat  → réinitialiser un capteur
+//
+// Toutes les routes sont sous /api/admin/* → guard rôle admin (voir skill general §auth).
+
+interface FirmwareSensor {
+  node: string;
+  chip: string;
+  feature: string;
+  temp: number | null;
+  firmware: number | null;
+}
+
+/** Dernier point (température + seuil firmware) par capteur, sur la fenêtre 1 h. */
+async function fetchFirmwareSensors(ctx: AppContext): Promise<Map<string, FirmwareSensor>> {
+  const out = new Map<string, FirmwareSensor>();
+  if (!influxReady(ctx)) return out;
+  try {
+    const rows = await ctx.influx!.querySql<Record<string, string | number | null>>(
+      ctx.influx.rawDb,
+      `SELECT node, chip, feature, temp_input, temp_crit, time
+       FROM sensors WHERE time >= now() - INTERVAL '1h'
+       ORDER BY time DESC`,
+    );
+    for (const r of rows) {
+      const key = `${r.node}/${r.chip}/${r.feature}`;
+      if (!out.has(key)) {
+        out.set(key, {
+          node: String(r.node ?? ''),
+          chip: String(r.chip ?? ''),
+          feature: String(r.feature ?? ''),
+          temp: (r.temp_input as number) ?? null,
+          firmware: (r.temp_crit as number) ?? null,
+        });
+      }
+    }
+  } catch (err) {
+    ctx.logger.warn(`sensor-thresholds : lecture des capteurs indisponible (${(err as Error).message})`);
+  }
+  return out;
+}
+
+/** Construit la réponse admin : seuils perso + capteurs (temp + firmware + perso éventuel). */
+async function buildThresholdsResponse(ctx: AppContext, store: SensorThresholdStore): Promise<{ thresholds: SensorThresholds; sensors: SensorThresholdEntry[] }> {
+  const thresholds = store.getThresholds();
+  const firmware = await fetchFirmwareSensors(ctx);
+  const sensors: SensorThresholdEntry[] = [...firmware.values()].map((s) => ({
+    node: s.node,
+    chip: s.chip,
+    feature: s.feature,
+    temp: s.temp,
+    firmware: s.firmware,
+    custom: thresholds[sensorKey(s)] ?? null,
+  }));
+  // Capteurs ayant un seuil perso mais pas (plus) de lecture firmware récente :
+  // on les expose quand même (le seuil perso doit rester éditable/supprimable).
+  for (const key of Object.keys(thresholds)) {
+    if (!firmware.has(key)) {
+      const [node, chip, feature] = key.split('/');
+      sensors.push({ node, chip, feature, temp: null, firmware: null, custom: thresholds[key] });
+    }
+  }
+  sensors.sort((a, b) => sensorKey(a).localeCompare(sensorKey(b)));
+  return { thresholds, sensors };
+}
+
+/** Valide + clamp un jeu de seuils : valeurs finies > 0, et perso ≤ firmware. */
+function clampThresholds(
+  desired: Record<string, unknown>,
+  firmware: Map<string, { firmware: number | null }>,
+): SensorThresholds {
+  const out: SensorThresholds = {};
+  for (const [key, raw] of Object.entries(desired)) {
+    const v = typeof raw === 'string' ? Number(raw) : (raw as number);
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) continue; // valeur invalide → ignorée
+    const fw = firmware.get(key)?.firmware;
+    out[key] = fw !== null && fw !== undefined && v > fw ? fw : v; // clamp : jamais au-dessus du firmware
+  }
+  return out;
+}
+
+export function registerSensorThresholdRoutes(app: FastifyInstance, ctx: AppContext, store: SensorThresholdStore): void {
+  app.get('/api/admin/sensor-thresholds', async (_req, reply) => {
+    reply.send(await buildThresholdsResponse(ctx, store));
+  });
+
+  app.put('/api/admin/sensor-thresholds', async (req, reply) => {
+    const body = (req.body ?? {}) as { thresholds?: Record<string, unknown> };
+    if (!body.thresholds || typeof body.thresholds !== 'object' || Array.isArray(body.thresholds)) {
+      reply.code(400).send({ error: 'invalid', code: 'bad-thresholds', message: '`thresholds` doit être un objet « clé → °C »' });
+      return;
+    }
+    const firmware = await fetchFirmwareSensors(ctx);
+    const clamped = clampThresholds(body.thresholds, firmware);
+    store.setThresholds(clamped);
+    reply.send(await buildThresholdsResponse(ctx, store));
+  });
+
+  app.delete('/api/admin/sensor-thresholds', async (_req, reply) => {
+    store.clearAll();
+    reply.send(await buildThresholdsResponse(ctx, store));
+  });
+
+  app.delete('/api/admin/sensor-thresholds/:node/:chip/:feature', async (req, reply) => {
+    const { node, chip, feature } = req.params as { node: string; chip: string; feature: string };
+    store.deleteThreshold(sensorKey({ node, chip, feature }));
+    reply.send(await buildThresholdsResponse(ctx, store));
   });
 }

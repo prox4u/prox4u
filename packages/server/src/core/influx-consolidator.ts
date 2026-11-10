@@ -306,9 +306,17 @@ export class InfluxConsolidator {
       );
       const smartLines = smartRows.map((r) => {
         const fields: Record<string, number | string> = {
-          health_ok: num(r.health_ok),
           temp_c: round2(num(r.temp_c)),
         };
+        // Santé SMART tri-state : on ne write `health_ok` que si la fenêtre en
+        // contient au moins une valeur (min() ignore les NULL). NULL partout =
+        // champ absent dans le bucket (disque virtuel / RAID), jamais `false` —
+        // `num()` rendrait 0 même pour `true`, et 0 = FAILED, pas inconnu.
+        if (r.health_ok != null) {
+          // InfluxDB 3 renvoie un boolean `true`/`false` (pas un nombre) → cast en unknown.
+          const v = r.health_ok as unknown;
+          fields.health_ok = v === true || v === 1 || v === 'true' || v === 'True' ? 1 : 0;
+        }
         if (r.power_on_hours != null) fields.power_on_hours = Math.round(num(r.power_on_hours));
         if (r.power_cycle_count != null) fields.power_cycle_count = Math.round(num(r.power_cycle_count));
         if (r.reallocated_sectors_count != null) fields.reallocated_sectors_count = Math.round(num(r.reallocated_sectors_count));

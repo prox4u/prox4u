@@ -296,6 +296,11 @@ export class Prox4uClient implements DataSource {
     return storages.map((s) => {
       let used: number | null = num(s.used);
       let total: number | null = num(s.total);
+      // Hiérarchie iSCSI → LVM : une cible iSCSI (le LUN, volume physique de référence) sur
+      // laquelle reposent des VG LVM est remontée deux fois (datastore `iscsi` + datastore `lvm`).
+      // On pose `duplicateOf` sur le LUN = la liste de ses VG enfants (vues redondantes). Le LUN
+      // est le volume compté ; ses VG enfants sont exclus des agrégations (comptés via le LUN).
+      let duplicateOf: string[] | undefined;
       if (s.type === 'lvmthin' && s.vgname && s.thinpool) {
         const cap = thinCaps.get(`${s.vgname}/${s.thinpool}`);
         if (cap) {
@@ -309,13 +314,21 @@ export class Prox4uClient implements DataSource {
           total = cap.total;
         }
       } else if (s.type === 'iscsi') {
-        // Pas d'endpoint de capacité iSCSI (/disks/iscsi = 501 sur PVE 9.2) :
-        // la taille du LUN est déduite du VG lvm qui repose dessus (son `base` = « {iscsi}:… »)
-        const hostVg = storages.find((o) => o.type === 'lvm' && o.base?.startsWith(`${s.storage}:`));
-        const cap = hostVg?.vgname ? vgCaps.get(hostVg.vgname) : undefined;
-        if (cap) {
-          used = cap.used;
-          total = cap.total;
+        // Pas d'endpoint de capacité iSCSI (/disks/iscsi = 501 sur PVE 9.2) : la capacité du LUN
+        // est déduite des VG lvm qui reposent dessus (leur `base` = « {iscsi}:… »). Un LUN peut
+        // porter plusieurs VG (vrai matériel) → on les liste tous.
+        const hostVgs = iscsiHostVgs(storages, s.storage);
+        if (hostVgs.length > 0) duplicateOf = hostVgs.map((vg) => vg.storage); // VG enfants du LUN
+        // Le LUN n'a pas de « données » de son point de vue : son espace occupé = la somme des
+        // TAILLES des VG enfants (espace engagé/réservé), PAS les données de ces VG. La taille du
+        // LUN elle-même reste inconnue de PVE → `total` = somme des VG = borne basse (la config
+        // storage-volumes.json / lunSizes donnera la vraie taille, appliquée par le poller).
+        const caps = hostVgs
+          .map((vg) => (vg.vgname ? vgCaps.get(vg.vgname) : undefined))
+          .filter((c): c is { used: number; total: number } => c !== undefined);
+        if (caps.length > 0) {
+          used = caps.reduce((sum, c) => sum + c.total, 0); // engagé = Σ tailles VG
+          total = caps.reduce((sum, c) => sum + c.total, 0); // borne basse (LUN peut être plus grand)
         }
       } else if (s.type === 'dir' && firstNode && rootfsByNode.has(firstNode)) {
         // approximation : stockage dir sur le filesystem racine du nœud
@@ -331,6 +344,7 @@ export class Prox4uClient implements DataSource {
         total,
         shared: s.shared === 1 || s.shared === true,
         nodes: s.nodes ? s.nodes.split(' ').filter(Boolean) : undefined,
+        duplicateOf,
       };
     });
   }
@@ -737,6 +751,30 @@ export function diskStorageOf(c: Record<string, unknown>, type: 'qemu' | 'lxc'):
   if (!m) return undefined;
   if (head.includes('/iso/') || /\.iso$/i.test(head)) return undefined;
   return m[1];
+}
+
+/**
+ * VG LVM qui reposent sur une cible iSCSI. PVE remonte un LUN iSCSI deux fois : en datastore
+ * `iscsi` (la cible brute) et en datastore(s) `lvm` dont le champ `base` référence la cible
+ * (« {iscsi}:… »). Un LUN peut porter **plusieurs** VG (vrai matériel) → on renvoie tous les VG
+ * hôtes (vides si la cible iSCSI n'a aucun VG dessus). Le signal robuste est le champ `base`,
+ * pas une heuristique de taille (deux baies identiques ≠ même volume).
+ */
+export function iscsiHostVgs(
+  storages: Array<{ storage: string; type: string; base?: string | null; vgname?: string | null }>,
+  iscsiName: string,
+): Array<{ storage: string; vgname?: string }> {
+  return storages
+    .filter((o) => o.type === 'lvm' && o.base?.startsWith(`${iscsiName}:`))
+    .map((o) => ({ storage: o.storage, vgname: o.vgname ?? undefined }));
+}
+
+/** Premier VG LVM reposant sur une cible iSCSI (rétro-compat — `iscsiHostVgs[0]`). */
+export function iscsiHostVg(
+  storages: Array<{ storage: string; type: string; base?: string | null; vgname?: string | null }>,
+  iscsiName: string,
+): { storage: string; vgname?: string } | undefined {
+  return iscsiHostVgs(storages, iscsiName)[0];
 }
 
 /** Premier disque qemu non-ISO, dans l'ordre de priorité du disque de boot. */

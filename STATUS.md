@@ -973,10 +973,222 @@ nouvelle famille de plugin `node-sensors` v1, **aucun module existant touché**.
   `z-50`.
 
 ### À suivre (plan de travail)
-- **Seuils capteurs personnalisés** : abaisser le seuil d'alerte par capteur (perso ≤ firmware,
-  jamais au-dessus). Persistance `data/sensor-thresholds.json`, onglet Administration, intégration
-  dans le tableau capteurs (couleur suit le seuil effectif). → Plan :
-  [`docs/plan-seuils-capteurs.md`](docs/plan-seuils-capteurs.md)
+- **Règles d'alarme** (SMART critique, température > seuil effectif, unité échouée) dans
+  `centreonnsca` (skill `centreon-nsca`) — peut maintenant s'appuyer sur les **seuils perso**
+  (livrés, section « Fait » ci-dessous) : le moteur lira `sensorThresholds` +
+  `effectiveSensorThreshold`. → [`docs/plan-seuils-capteurs.md`](docs/plan-seuils-capteurs.md)
+- **Seuils capteurs personnalisés** + **correctif tri-state SMART** : livrés, voir section
+  « Fait » ci-dessous.
+---
+
+## ✅ Fait — Seuils capteurs personnalisés + correctif tri-state SMART (livré, **non commité**)
+
+Demande utilisateur : **abaisser le seuil d'alerte par capteur** (perso ≤ firmware, jamais
+au-dessus), persisté et éditable. Puis, sur un constat de terrain — les disques virtuels
+QEMU (`ProxSite1/2 sda`) affichaient « CRITIQUE 0°C » — un **correctif tri-state SMART** pour
+anticiper du **vrai matériel** (RAID, disques sans SMART), pas un maquillage cosmétique.
+
+### Périmètre livré
+- **Seuils capteurs personnalisés** : seuil perso **≤ firmware** (clamp input `max` + clamp
+  serveur au PUT, valeurs invalides ≤ 0 ignorées), persistance `data/sensor-thresholds.json`
+  (écriture atomique tmp+rename, chmod 600, fail-fast). Onglet Administration « Seuils
+  capteurs » (nœud/puce/capteur/temp/seuil firmware RO/seuil perso input + reset par ligne +
+  tout). **Le tableau capteurs suit le seuil EFFECTIF** (perso sinon firmware) via
+  `tempTone`/`effectiveSensorThreshold` ; sans seuil → repli historique 80/60 °C.
+- **Routes** : `GET/PUT/DELETE /api/admin/sensor-thresholds` (+ `DELETE .../:node/:chip/:feature`)
+  — guard rôle admin (préfixe `/api/admin/*`). Merge des seuils perso dans `GET /api/node-sensors`
+  (`sensorThresholds`) — lecture accessible aux users du module.
+- **Correctif tri-state SMART** : `healthOk` devient `boolean | null` — `true`=PASSED,
+  `false`=FAILED, `null`=**inconnu** (disque virtuel / volume RAID / état illisible). NULL n'est
+  **pas** un échec : mapper NULL → `false` affichait « CRITIQUE » sur des disques sans SMART
+  (faux positif qui polluerait le monitoring sur du vrai matériel). Badge gris « Inconnu », la
+  valeur est proposée dans le filtre santé. `parseHealthOk` (routes.ts) + consolidateur 15 min
+  préservent le NULL. `0 °C` = pas de lecture (`smartTempDisplay`) → affiché « — ».
+- **Fonctions pures shared testées** : `sensorKey`, `effectiveSensorThreshold`, `tempTone`,
+  `smartHealthTone`, `smartTempDisplay`.
+
+### Fichiers
+- `packages/shared/src/node-sensors.ts` : types seuils + `healthOk` tri-state + fonctions pures.
+- `packages/server/src/modules/nodesensors/thresholds.ts` : `SensorThresholdStore` (NOUVEAU).
+- `packages/server/src/modules/nodesensors/routes.ts` : routes admin + merge + `parseHealthOk`.
+- `packages/server/src/core/influx-consolidator.ts` : agrégat 15 min SMART préserve le NULL.
+- `packages/web/src/components/admin/sensor-thresholds.tsx` : onglet admin (NOUVEAU).
+- `packages/web/src/plugins/node-sensors/lib/sensor-thresholds-api.ts` : client API (NOUVEAU).
+- `packages/web/src/plugins/node-sensors/pages/node-sensors.tsx` : seuil effectif + tri-state.
+- `packages/web/src/pages/admin/index.tsx` : onglet ajouté.
+- i18n fr/en : `sensorThresholds.*`, `nodeSensors.unknown`, `nodeSensors.threshold*`.
+
+### Tests
+- **236 shared + 127 server, tous verts** — dont 12 tests fonctions pures (seuils + tri-state),
+  7 tests store, 8 tests routes admin (clamp, validation, merge), 5 tests parsing SMART tri-state
+  (QEMU/RAID → `null`, PASSED/FAILED, représentations 1/0/'true'/'false', `0 °C` conservé).
+- Correctif incident pré-existant : `auth/store.test.ts` (3 assertions liste modules) ne
+  contenait pas `node-sensors` (ajouté à `DEFAULT_MODULES` lors de la livraison v1 antérieure).
+
+### Pièges corrigés
+- **Faux positif « CRITIQUE » sur disques sans SMART** : `health_ok = NULL` (QEMU, RAID) était
+  mappé en `false` → « CRITIQUE ». Tri-state `boolean | null` + `smartHealthTone` → « Inconnu ».
+- **Consolidateur `num(true)` → 0** : `num()` rendait 0 même pour un boolean `true` → le bucket
+  15 min avait toujours `health_ok=0` (= FAILED). Maintenant `health_ok` n'est écrit que si la
+  fenêtre en contient une valeur, avec le bon mapping true→1/false→0.
+
+---
+
+## ✅ Fait — Bug 1 : dédoublonnage du stockage iSCSI / VG LVM (livré, **non commité**)
+
+Bug signalé par l'utilisateur : le graphe « Disque — 7 jours » affichait une allocation à **916 %**,
+et le cluster `clusterproxmox` montrait **655 GB** de stockage au lieu de ~333 GB. Diagnostic :
+une cible iSCSI (`baie-iscsi`, type `iscsi`) porte un VG LVM (`Lun-iscsi`, type `lvm`) — PVE
+remonte le **même volume de 322 GB deux fois** (datastore `iscsi` + datastore `lvm` dont le champ
+`base` = « baie-iscsi:… »), et le poller sommait les deux → double-comptage.
+
+### Correction
+- **`PveStorage.duplicateOf?: string`** (shared/types.ts) : posé quand la capacité du datastore est
+  déjà représentée par le datastore nommé (même volume physique vu deux fois).
+- **Helper pur `iscsiHostVg(storages, iscsiName)`** (prox4u-client.ts, exporté, **4 tests**) :
+  renvoie le VG LVM dont le champ `base` référence la cible iSCSI (`« {iscsi}:… »`). C'est le
+  **signal robuste** — pas une heuristique de taille (total/used identiques). Le VG pointe vers une
+  autre cible → `undefined` ; préfixe exact (`baie` ne matche pas `baie-iscsi`).
+- **`getStorage()`** : pour chaque datastore `iscsi` qui a un VG dessus, `duplicateOf` = nom du VG
+  lvm. La vue iSCSI est **écartée** (redondante) ; la vue **`lvm` est conservée** (c'est là que sont
+  les disques VM, `scsi0: Lun-iscsi:vm-2101-disk-0`).
+- **Poller** : `storWithCap` exclut tout datastore `duplicateOf` des sommes
+  `storageTotalBytes`/`storageUsedBytes` (l.230). L'inventaire stockage (`/api/storage-inventory`)
+  liste chaque datastore sans total agrégé → pas de double-comptage là (inchangé).
+
+### Vérifications effectuées
+- `pnpm --filter @proxmox/shared build` → `pnpm typecheck` → `pnpm -r test` (**242 shared + 136
+  server verts**, +4 `iscsiHostVg`) → `pnpm build` → `./server.sh restart` : OK.
+- **Vérifié live** (clusterproxmox) : `storageTotalBytes` 655,50 → **333,41 GB** ·
+  `storageUsedBytes` 91,78 → **48,83 GB** · `storagePct` 14,6 % · `diskThinTotal` inchangé
+  (4,69 GB → **Bug 2 intact**, à traiter ensuite).
+
+### Piège retenu
+- Ne **pas** dédoubonner par heuristique « même total + même used = doublon » : c'est fragile et
+  **faux** sur du vrai matériel (deux baies identiques ≠ même volume). Le champ `base` du VG lvm
+  est le seul signal fiable qu'il s'agit du même volume physique.
+
+> **Bug 2 (ratio thin 916 %)** — résolu par la cartographie ci-dessous (ratio disk corrigé + n/a).
+
+---
+
+## ✅ Fait — Cartographie stockage : volumes physiques + ratio disk correct (livré, **non commité**)
+
+Suite du Bug 1/Bug 2. Demande utilisateur : « il faut un plan pour avoir une cartographie précise
+du stockage » + « si un volume iSCSI de 300 Go porte un autre volume comme un LVM de 300 Go, on ne
+peut pas dire qu'on a 600 Go, mais seulement 300 Go — il faut une analyse intelligente ».
+Arbitrages : sémantique **thin = sur-allocation / thick = usage**, périmètre **A + B**, Phase B en
+**section du `/storage` existant**, livraison **A puis B (A validée d'abord)**.
+
+### Phase A — KPI disque correct (corrige le 916 %, 0 nouvel appel API)
+- **`buildStorageVolumes(storages, alloc, config)`** (fonction pure shared, **11 tests**) : regroupe
+  les datastores en **volumes physiques** (une cible iSCSI + son VG LVM = UN volume, capacité
+  comptée **une fois** via `duplicateOf`/`iscsiHostVg`), classe **thin** (lvmthin/zfs/rbd →
+  sur-allocation, peut >1) / **thick** (dir/lvm/nfs/iscsi/cifs → usage, ≤1), produit le ratio par
+  volume + le **ratio global disk** = Σ disques sur thin / Σ capacité thin, **n/a si aucun disque
+  sur un thin**.
+- **Types partagés** : `StorageDiskAlloc`, `StorageVolume` ; `KpiSummary.diskThinAllocatedBytes`
+  (nouveau) + `diskThinTotalBytes` redéfini (thin **qui hébergent des disques**) ;
+  `DashboardSnapshot.storageVolumes`.
+- **Poller** : agrège `diskAllocByStorage` depuis `VmSummary.disks[]` (Σ `size=`, templates
+  exclus — la donnée était déjà collectée, simplement non agrégée), appelle `buildStorageVolumes`,
+  dérive les KPI thin, pousse `storageVolumes`. **Mock** : `disks` synthétisés (démo).
+- **`computeOvercommit`** : numérateur disk = `diskThinAllocatedBytes` (pas `diskAllocatedBytes`)
+  → plus de mélange thick/thin. **UI** : carte surallocation + graphe disque corrigés, libellé n/a
+  affiné.
+- **Résultat clusterproxmox** : ratio disk **916 % → n/a** (les disques sont sur du thick) ;
+  `Lun-iscsi`/`baie-iscsi` = **un volume de 322 GB** (pas 644), usage **13 %**.
+
+### Phase B — Panneau « Volumes physiques » dans /storage
+- **`components/storage-volumes.tsx`** : une carte par volume (nom + badge Thin/Thick + endpoint,
+  capacité réelle comptée une fois avec barre utilisé/total, disques VM alloués + badge
+  Sur-allocation ×N / Usage P% / n/a, nb VMs, **vues regroupées**). Calculé côté client depuis les
+  données inventaire via `buildStorageVolumes` — **zéro nouvel appel API**. Respecte la vue
+  (agrégée / endpoint). i18n `storage.volumes.*` (fr/en).
+
+### Vérifications effectuées
+- `pnpm --filter @prox4u/shared build` → `pnpm typecheck` → `pnpm -r test` (**255 shared** dont
+  11 `storage-volumes` + 2 overcommit, **136 server** verts) → `pnpm build` → `./server.sh restart` : OK.
+- **Cluster réel (8080)** : `/storage` → panneau volumes : `Lun-iscsi` = un volume **300 GB** (pas
+  600), usage 13 %, « vues : baie-iscsi » ; vue `?view=clusterproxmox` n'affiche que ses volumes.
+  Zéro erreur console.
+- **Mock (8095)** : `ceph` (Thin) = sur-allocation **×0.05** (928 Go/20 To), `local-pve*` (Thick) =
+  usage (64 %, 52 %…) ; `demo-b` (sans thin avec disques) → ratio n/a. Zéro erreur console.
+
+### Pièges corrigés
+- **Faux 916 %** : le ratio disk mélangeait tous les disques (numérateur) avec un dénominateur thin
+  → corrigé : numérateur = disques **sur thin** uniquement, n/a si aucun.
+- **Double-comptage 300/600 Go** : capacité du volume = celle de la vue de référence, **jamais la
+  somme des vues** (regroupement via `duplicateOf`, pas d'heuristique de taille).
+
+---
+
+## ✅ Fait — Hiérarchie iSCSI → LVM (livré, **non commité**)
+
+Suite de la cartographie. Demande utilisateur : penser **vrai matériel** — un LUN iSCSI peut porter
+**plusieurs VG LVM**, et la capacité du cluster doit refléter la **taille physique du LUN** (pas le
+VG). Arbitrages user (3) : (1) taille LUN = **si connue, sinon Σ tailles VG** (borne basse + note
+« LUN peut être plus grand ») ; (2) total stockage cluster = **taille LUN physique** ; (3)
+hiérarchie affichée en **table + panneau volumes**. Sémantique : « utilisé » d'un LUN = **Σ tailles
+des VG enfants (engagé)**, pas les données du VG (cas 600 Go LUN / 100 Go VG → 500 Go libres).
+
+### Correction
+- **`PveStorage.duplicateOf?: string[]`** (shared/types.ts) : posé **sur le LUN iSCSI** = la liste
+  de ses VG enfants (un LUN peut porter plusieurs VG). Le LUN est le volume de référence.
+- **`StorageVolume`** en **arbre** : `children: StorageVolume[]` remplace `duplicateViews` ;
+  `totalSource?: 'lun' | 'vg-sum'` (borne basse quand la taille LUN est inconnue). `StorageRow`
+  gagne `parentStorage?` (LUN dont le datastore est un VG enfant) pour la table.
+- **`buildStorageVolumes(storages, alloc, config, lunSizes?)`** (fonction pure shared, **15 tests**) :
+  construit l'**arbre iSCSI → LVM** (LUN parent, VG enfants, iSCSI brut autonome conservé). Capacité
+  du LUN = `lunSizes[nom]` (valeur d'autorité) sinon **Σ tailles VG** (borne basse) ; utilisé du LUN
+  = **Σ tailles VG (engagé)** ; ratio/tonalité par nœud ; ratio global disk recalculé sur l'arbre
+  aplati (thin uniquement).
+- **`storage-volumes.json`** (racine, optionnel) → `AppConfig.lunSizes` : `{ "lunSizes": { "<iscsi>": octets } }`,
+  chargé au démarrage (pas de hot-reload — donnée de parc stable).
+- **`iscsiHostVgs`** (prox4u-client.ts, exporté) : renvoie **tous** les VG dont `base` référence la
+  cible iSCSI (`iscsiHostVg` = `[0]`, rétro-compat). `getStorage()` iSCSI : `duplicateOf` = liste des
+  VG, used/total = **Σ tailles VG** (engagé / borne basse).
+- **Poller** : **inversion du dédoublonnage** — `childVgNames` = ensemble des valeurs `duplicateOf`
+  (les VG enfants) ; `storWithCap` **compte le LUN, exclut les VG** (avant : comptait le VG, écartait
+  le LUN). Applique `lunSizes` aux totaux iSCSI. Dérive les KPI thin en **aplatissant l'arbre**.
+- **Web** : panneau volumes en **arbre** (carte LUN parent + VG enfants indentés, note borne basse,
+  **lu du snapshot WS** `storageVolumes` — source unique avec la config LUN, plus de recalcul
+  client). Table iSCSI → LVM : **LUN parent dépliable**, VG enfants **indentés** (« · sous {LUN} »),
+  drill-down VMs conservé. i18n `storage.volumes.*` (capacityLower, vgCapacity, committed, lunNote,
+  vgChildren…) + `storage.childOf`.
+
+### Vérifications effectuées
+- `pnpm --filter @proxmox/shared build` → `pnpm typecheck` → `pnpm -r test` (**259 shared** dont
+  15 `storage-volumes` + 16 `prox4u-client`, **136 server** verts) → `pnpm build` → `./server.sh restart` : OK.
+- **Cluster réel (8080)** : `/storage?view=clusterproxmox` → panneau : LUN `baie-iscsi` (Thick,
+  « Capacité (borne basse) » 300/300 Go, note « LUN peut être plus grand », Usage 100 %, « 1 VG :
+  Lun-iscsi ») + VG enfant `Lun-iscsi` (Capacité du VG 40/300 Go, Usage 13 %). Table : LUN
+  `baie-iscsi` (100 % 300/300 Go) dépliable → VG `Lun-iscsi · sous baie-iscsi` (13,3 % 40/300 Go)
+  indenté. **Zéro erreur console.**
+- **KPIs clusterproxmox** : `storageTotalBytes` = **310,5 GB** (LUN 300 + local 6,2 + local-lvm 4,4 —
+  le VG **n'est plus compté en double**) · `storageUsedBytes` = 304,6 GB · `diskThin` = 0 → ratio
+  disk **n/a** (pas de faux 916 %).
+- **Mock (8095)** : volumes autonomes (ceph rbd sur-allocation, local dir usage/na), aucun iSCSI →
+  aucune régression. **Zéro erreur console.**
+
+### Pièges corrigés
+- **Double-comptage inversé** : l'ancienne version comptait le VG et écartait le LUN. La bonne
+  référence physique est le **LUN** : on le compte, on écarte ses VG enfants (valeur de `duplicateOf`).
+  Ne pas réintroduire ni le dédoublonnage à l'envers, ni une heuristique de taille.
+- **VG privés de graphique** : l'inversion excluait aussi les VG des séries `datastore_metrics`
+  (écrites depuis la liste dédoublonnée) → « Aucun historique » sur le VG, alors que c'est la vue
+  où sont les disques. Corrigé : `writeInflux` reçoit **toutes les vues à capacité connue** (VG
+  compris) ; le dédoublonnage ne s'applique qu'aux **sommes** KPI. Vérifié : `Lun-iscsi` a de
+  nouveau sa série (40/300 Go = 13 %, tendance stable), 0 erreur console.
+- **`local` sans VM sans graphe** : la condition `expandable` de la table ne tenait compte que des
+  VMs et des VG enfants — un datastore « local » (dir ISOs/backups, **0 VM**) n'était pas
+  dépliable, donc son graphe Occupation était inaccessible alors que l'API a 365 points. Corrigé :
+  `expandable` inclut désormais la **capacité connue** (`hasCapacity`) — même règle sur les lignes
+  enfants (VG sans VM). Vérifié : les 2 `local` (endpoints clusterproxmox + proxmox) s'ouvrent sur
+  leur graphe (75 % et 15 %) + Capacity planning, « Aucune VM stockée sur ce datastore », 0 erreur console.
+- **LUN « 100 % » trompeur** : sans taille connue, engagé = Σ VG = capacité affichée → ratio 100 %
+  (crit). C'est la **borne basse honnête** — le panneau le signale (« LUN peut être plus grand ») ;
+  renseigner `lunSizes` donne le vrai ratio.
 
 ---
 
@@ -985,9 +1197,8 @@ nouvelle famille de plugin `node-sensors` v1, **aucun module existant touché**.
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
 TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète dans la skill
 **`skills/monitoring-proxmenux`**. **P0 livré** : Telegraf bare-metal sur les 3 nœuds Proxmox +
-plugin **`node-sensors` v1** (section « Fait » ci-dessus). Reste en P0 : **seuils capteurs
-personnalisés** (plan `docs/plan-seuils-capteurs.md`) + règles d'alarme (SMART critique,
-température > seuil, unité échouée) dans `centreonnsca`. P1 quorum (donnée déjà pollée) ·
+plugin **`node-sensors` v1** (section « Fait » ci-dessus). Reste en P0 : **règles d'alarme**
+(SMART critique, température > seuil effectif, unité échouée) dans `centreonnsca`. P1 quorum (donnée déjà pollée) ·
 P2 moteur d'alarmes v2 (hystérésis/suppression/ack) · P3 audit best-practices · P4 PBS +
 événements · P5 certificats + NTP.
 

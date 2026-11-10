@@ -30,6 +30,7 @@ const okKpis = (over: Partial<KpiSummary> = {}): KpiSummary => ({
   ramPct: 30,
   ramAllocatedBytes: 0,
   diskAllocatedBytes: 0,
+  diskThinAllocatedBytes: 0,
   diskThinTotalBytes: 0,
   storageUsedBytes: 1,
   storageTotalBytes: 2,

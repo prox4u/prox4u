@@ -93,6 +93,14 @@ export interface AppConfig {
   overcommit: OvercommitConfig;
   /** mtime du dernier overcommit.json appliqué (détection de changement) */
   overcommitMtime: number;
+  /**
+   * Taille d'autorité des LUN iSCSI par nom de datastore (storage-volumes.json, optionnel) :
+   * `{ "lunSizes": { "baie-iscsi": 644245094400 } }`. Quand la taille d'un LUN est inconnue de
+   * PVE (pas d'endpoint iSCSI sur PVE 9), sa capacité est déduite de la somme des tailles des
+   * VG qui reposent dessus — une **borne basse**. Cette config donne la vraie taille du LUN
+   * (valeur d'autorité, `totalSource='lun'`). Vide = aucune taille connue.
+   */
+  lunSizes: Record<string, number>;
   /** fichier des données d'authentification (data/auth.json, gitignored, chmod 600) */
   authFile: string;
   /** durée de vie des sessions (ms) */
@@ -226,10 +234,33 @@ export function reloadOvercommitConfig(cfg: AppConfig, logger: Pick<Console, 'in
   }
 }
 
+const storageVolumesSchema = z.object({
+  /** Taille d'autorité d'un LUN iSCSI (octets), par nom de datastore iSCSI. */
+  lunSizes: z.record(z.string(), z.number().int().positive()).default({}),
+});
+
+/**
+ * Charge storage-volumes.json (racine du repo, optionnel) : `{ "lunSizes": { "<iscsi>": octets } }`.
+ * Absent → aucun LUN de taille connue (les capacités iSCSI restent des bornes basses Σ VG).
+ * Invalide → fail-fast au démarrage (pas de hot-reload : c'est une donnée de parc stable).
+ */
+function loadStorageVolumesConfig(): Record<string, number> {
+  for (const file of [path.resolve(process.cwd(), 'storage-volumes.json'), path.resolve(here, '../../../../storage-volumes.json')]) {
+    if (!existsSync(file)) continue;
+    try {
+      return storageVolumesSchema.parse(JSON.parse(readFileSync(file, 'utf8'))).lunSizes;
+    } catch (err) {
+      throw new Error(`storage-volumes.json invalide (${file}) : ${(err as Error).message}`);
+    }
+  }
+  return {};
+}
+
 export function loadConfig(): AppConfig {
   const env = envSchema.parse(process.env);
   const { endpoints, defaultEndpointId } = loadEndpoints(env);
   const { config: overcommit, mtime: overcommitMtime } = loadOvercommitConfig();
+  const lunSizes = loadStorageVolumesConfig();
   const cfg: AppConfig = {
     endpoints,
     defaultEndpointId,
@@ -239,6 +270,7 @@ export function loadConfig(): AppConfig {
     port: env.PORT,
     overcommit,
     overcommitMtime,
+    lunSizes,
     influx: {
       enabled: env.INFLUX_TOKEN.length > 0,
       url: env.INFLUX_URL.replace(/\/$/, ''),

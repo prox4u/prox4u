@@ -5,6 +5,7 @@ import { RefreshCw } from 'lucide-react';
 import { fetchStorageInventory } from '../../../core/api/apiClient';
 import type { StorageInventoryResponse } from '../../../core/api/types';
 import { StorageInventory } from '../components/storage-inventory';
+import { StorageVolumes } from '../components/storage-volumes';
 import { useMulti } from '../../../core/data/use-endpoint';
 import { cn } from '../../../lib/utils';
 
@@ -87,9 +88,11 @@ export function StoragePage() {
           {t('storage.error', { error })}
         </div>
       ) : (
-        <div className="flex items-stretch gap-2">
-          <div className="min-w-0 flex-1">
-            <StorageInventory
+        <div className="space-y-4">
+          <StorageVolumes endpoints={endpoints} multi={multi} view={view} endpointNames={endpointNames} />
+          <div className="flex items-stretch gap-2">
+            <div className="min-w-0 flex-1">
+              <StorageInventory
               endpoints={endpoints}
               endpointNames={endpointNames}
               view={view}
@@ -106,9 +109,10 @@ export function StoragePage() {
             onClick={() => void load()}
             className="flex shrink-0 items-center gap-1.5 self-start rounded-md border bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
-            <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
-            {t('storage.refresh')}
-          </button>
+              <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+              {t('storage.refresh')}
+            </button>
+          </div>
         </div>
       )}
     </div>

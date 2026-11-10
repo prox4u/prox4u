@@ -92,7 +92,7 @@ export function OvercommitCard({ kpis, endpointId }: { kpis: KpiSummary; endpoin
           detail={
             report.disk.ratio === null
               ? t('overcommit.diskNa')
-              : t('overcommit.allocDisk', { alloc: formatBytes(kpis.diskAllocatedBytes), cap: formatBytes(kpis.diskThinTotalBytes) })
+              : t('overcommit.allocDisk', { alloc: formatBytes(kpis.diskThinAllocatedBytes), cap: formatBytes(kpis.diskThinTotalBytes) })
           }
           risk={risk?.storage}
         />

@@ -47,6 +47,13 @@ export interface StorageRow {
   /** octets utilisés / totaux (0 si inconnu). */
   used: number;
   total: number;
+  /**
+   * LUN iSCSI parent (nom du datastore iSCSI dont ce VG LVM est un enfant) — posé quand ce
+   * datastore figure dans la liste `duplicateOf` d'une cible iSCSI. Absent pour les LUN et les
+   * datastores autonomes. Sert à la hiérarchie iSCSI → VG de la table (le VG est indented sous
+   * son LUN).
+   */
+  parentStorage?: string;
   /** % d'usage (0 si pas de capacité). */
   pct: number;
   /** true si une capacité fiable (total > 0) est disponible. */
@@ -95,6 +102,10 @@ export function storageSeverity(row: { pct: number; hasCapacity: boolean }, conf
  * VMs de chaque ligne sont triées par nom.
  */
 export function buildStorageInventory(storages: PveStorage[], vms: StorageVmRef[]): StorageRow[] {
+  // Inversion de `duplicateOf` : le LUN iSCSI liste ses VG enfants → chaque VG connaît son LUN.
+  const parentOf = new Map<string, string>();
+  for (const s of storages) for (const vg of s.duplicateOf ?? []) parentOf.set(vg, s.storage);
+
   const rows: StorageRow[] = storages.map((s) => {
     const used = s.used ?? 0;
     const total = s.total ?? 0;
@@ -108,6 +119,7 @@ export function buildStorageInventory(storages: PveStorage[], vms: StorageVmRef[
       content: s.content ?? [],
       used,
       total,
+      parentStorage: parentOf.get(s.storage),
       pct,
       hasCapacity: total > 0,
       vms: [],
