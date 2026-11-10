@@ -1,8 +1,8 @@
 import {
   buildForecast,
+  buildStorageVolumes,
   computeHealthScore,
   computePra,
-  isThinStorage,
   usageSeverity,
   type AgentFsUsage,
   type Alert,
@@ -15,6 +15,8 @@ import {
   type PveNodeStatus,
   type PveVmResource,
   type Site,
+  type StorageDiskAlloc,
+  type StorageVolume,
   type TopConsumer,
 } from '@prox4u/shared';
 import { reloadOvercommitConfig, type AppConfig } from './config.js';
@@ -194,6 +196,11 @@ export class Poller {
       const totalCpuAlloc = allocVms.reduce((s, v) => s + (v.cpuAlloc ?? 0), 0);
       const totalRamAlloc = allocVms.reduce((s, v) => s + (v.maxmem ?? 0), 0);
       const totalDiskAlloc = allocVms.reduce((s, v) => s + (v.maxdisk ?? 0), 0);
+      // Allocation de disques VM par datastore (Σ `size=` de la config, jointe en cache 1 h) —
+      // base de la cartographie et du ratio thin. Une VM multi-disques compte sur chacun.
+      const diskAllocMap = new Map<string, number>();
+      for (const v of allocVms) for (const d of v.disks ?? []) diskAllocMap.set(d.storage, (diskAllocMap.get(d.storage) ?? 0) + d.sizeBytes);
+      const diskAllocByStorage: StorageDiskAlloc[] = [...diskAllocMap.entries()].map(([storage, allocatedBytes]) => ({ storage, allocatedBytes }));
 
       const nodeHealth = nodes.map((n) => {
         // Le champ `cpu` du status nœud est déjà une fraction 0–1 du CPU total
@@ -227,11 +234,34 @@ export class Poller {
       const usedCpus = online.reduce((s, n) => s + (n.cpu ?? 0) * (n.cpus ?? 0), 0);
       const totalRam = online.reduce((s, n) => s + (n.memTotal ?? 0), 0);
       const usedRam = online.reduce((s, n) => s + (n.memUsed ?? 0), 0);
-      const storWithCap = storages.filter((s) => s.total && s.total > 0);
+      // Hiérarchie iSCSI → LVM : le LUN iSCSI est le volume physique compté ; ses VG enfants
+      // (listés dans `duplicateOf` du LUN) sont exclus des sommes — sinon le volume est compté
+      // deux fois (LUN + VG). C'est l'inverse de l'ancien dédoublonnage (on comptait le VG et
+      // on écartait le LUN) : on compte désormais le LUN, on écarte les VG enfants.
+      const childVgNames = new Set(storages.flatMap((s) => s.duplicateOf ?? []));
+      // Taille d'autorité des LUN (config storage-volumes.json) : appliquée aux totaux iSCSI
+      // avant les sommes — un LUN sans taille connue reste une borne basse (Σ VG).
+      const lunSizes = this.ctx.config.lunSizes;
+      const storagesWithLun = storages.map((s) => (s.type === 'iscsi' && lunSizes[s.storage] ? { ...s, total: lunSizes[s.storage] } : s));
+      const storWithCap = storagesWithLun.filter((s) => s.total && s.total > 0 && !childVgNames.has(s.storage));
       const totalDisk = storWithCap.reduce((s, x) => s + (x.total ?? 0), 0);
       const usedDisk = storWithCap.reduce((s, x) => s + (x.used ?? 0), 0);
-      // Capacité des pools thin uniquement — dénominateur du ratio de surallocation disk
-      const thinTotal = storWithCap.filter((s) => isThinStorage(s.type)).reduce((s, x) => s + (x.total ?? 0), 0);
+      // Cartographie des volumes physiques (arbre iSCSI → LVM, classe thin/thick). Source unique
+      // du ratio disk : les KPI thin en sont dérivés — les disques sur du thick (lvm/dir/iscsi)
+      // ne gonflent plus un dénominateur thin → plus de faux 916 %.
+      const { volumes: storageVolumes } = buildStorageVolumes(storagesWithLun, diskAllocByStorage, this.ctx.config.overcommit, lunSizes);
+      // KPI thin : on aplatit l'arbre (un VG thin enfant compte ; son LUN parent est thick).
+      const volumeNodes: StorageVolume[] = [];
+      const collectVolumes = (vs: StorageVolume[]): void => {
+        for (const v of vs) {
+          volumeNodes.push(v);
+          collectVolumes(v.children);
+        }
+      };
+      collectVolumes(storageVolumes);
+      const thinWithDisks = volumeNodes.filter((v) => v.thinCapable && v.hasDisks);
+      const diskThinAllocatedBytes = thinWithDisks.reduce((s, v) => s + v.allocatedBytes, 0);
+      const diskThinTotalBytes = thinWithDisks.reduce((s, v) => s + (v.totalBytes ?? 0), 0);
 
       // VMs QEMU en cours dont l'agent invité est inactif (alerte critique UI)
       const vmsAgentDown = vms.filter((v) => v.type === 'qemu' && v.status === 'running' && st.agentActive.get(v.vmid) === false).length;
@@ -247,7 +277,8 @@ export class Poller {
         ramPct: round1(totalRam ? (usedRam / totalRam) * 100 : 0),
         ramAllocatedBytes: totalRamAlloc,
         diskAllocatedBytes: totalDiskAlloc,
-        diskThinTotalBytes: thinTotal,
+        diskThinAllocatedBytes,
+        diskThinTotalBytes,
         storageUsedBytes: usedDisk,
         storageTotalBytes: totalDisk,
         storagePct: round1(totalDisk ? (usedDisk / totalDisk) * 100 : 0),
@@ -272,6 +303,20 @@ export class Poller {
         totalBytes: s.total ?? 0,
         pct: round1(((s.used ?? 0) / (s.total ?? 1)) * 100),
       }));
+      // Séries d'occupation par datastore (`datastore_metrics`) : TOUTES les vues à capacité
+      // connue — y compris les VG enfants du LUN. Le dédoublonnage ne s'applique qu'aux SOMMES
+      // KPI (pas de LUN + VG deux fois dans storageTotalBytes) ; chaque vue a sa propre courbe
+      // indépendante (le VG est la vue où sont les disques VM — son graphique est le plus utile).
+      // Sans ceci, l'inversion du dédoublonnage aurait privé les VG de tout historique.
+      const storagesForMetrics = storagesWithLun
+        .filter((s) => s.total && s.total > 0)
+        .map((s) => ({
+          storage: s.storage,
+          type: s.type,
+          usedBytes: s.used ?? 0,
+          totalBytes: s.total ?? 0,
+          pct: round1(((s.used ?? 0) / (s.total ?? 1)) * 100),
+        }));
 
       const running = vms.filter((v) => v.status === 'running');
       const network = {
@@ -317,6 +362,7 @@ export class Poller {
         nodes: nodeHealth,
         vms: vmSummaries,
         storages: storageInfos,
+        storageVolumes,
         network,
         topVms: topConsumers(vms),
         topPools: poolAggregates(vms),
@@ -324,7 +370,8 @@ export class Poller {
       };
       st.snapshot = snap;
       st.lastError = null;
-      await this.writeInflux(rt.id, rt.source, nodes, nodeHealth, vms, kpis, storageInfos);
+      // Séries par datastore = toutes les vues à capacité (VG compris) — pas la liste dédoublonnée.
+      await this.writeInflux(rt.id, rt.source, nodes, nodeHealth, vms, kpis, storagesForMetrics);
       return { id: rt.id, name: rt.name, url: rt.url, ok: true, snapshot: snap };
     } catch (err) {
       st.lastError = (err as Error).message;

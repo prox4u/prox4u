@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { EChartsOption } from 'echarts';
 import type { LineSeriesOption } from 'echarts/charts';
@@ -19,7 +19,6 @@ import {
 import {
   buildStorageInventory,
   buildStorageInventoryAll,
-  filterStorageRows,
   sortStorageRows,
   storageSeverity,
   usageSeverity,
@@ -100,6 +99,32 @@ function CapacityBar({ pct, sev }: { pct: number; sev: SeverityOrNa }) {
 /** VMs visibles dans le drill-down avant « Afficher plus » (garde-fou prod). */
 const VM_PAGE = 50;
 
+/** Un groupe de la hiérarchie iSCSI → LVM : le LUN (parent) + ses VG enfants. */
+interface StorageGroup {
+  row: StorageRowAll;
+  children: StorageRowAll[];
+}
+
+/**
+ * Un groupe est visible si le LUN OU l'un de ses VG correspond au filtre de type et/ou à la
+ * recherche. La recherche porte sur le LUN et tous ses VG (nom, type, nœud, contenus, VMs) —
+ * chercher un VG montre donc aussi son LUN parent.
+ */
+function groupMatches(g: StorageGroup, query: string, typeSel: string): boolean {
+  if (typeSel) {
+    const types = new Set<PveStorageType>([g.row.type, ...g.children.map((c) => c.type)]);
+    if (!types.has(typeSel as PveStorageType)) return false;
+  }
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const all = [g.row, ...g.children];
+  const haystack = all
+    .flatMap((r) => [r.storage, r.type, ...r.nodes, ...r.content, ...r.vms.flatMap((v) => [v.name, String(v.vmid), v.node])])
+    .join('\u0000')
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
 export function StorageInventory({ endpoints, endpointNames, view, onViewChange, query, onQueryChange, typeSel, onTypeChange, range, onRangeChange }: Props) {
   const { t } = useTranslation();
   const config = useOvercommitConfig();
@@ -145,23 +170,46 @@ export function StorageInventory({ endpoints, endpointNames, view, onViewChange,
     return buildStorageInventory(ep.storages, ep.vms).map((r) => ({ ...r, endpointId: ep.endpointId, endpointName: name }));
   }, [isAll, view, endpoints, endpointNames, allRows]);
 
-  // Déroulé : types présents dans la vue courante (dédoublonnés).
-  const typeOptions = useMemo(() => {
-    const seen = new Set<PveStorageType>();
-    for (const r of scoped) seen.add(r.type);
-    return [...seen].sort();
+  // Hiérarchie iSCSI → LVM : un LUN iSCSI (parent, sans parentStorage) regroupe ses VG enfants
+  // (parentStorage = nom du LUN). Les groupes sont filtrés/triés par leur LUN ; les VG restent
+  // rattachés (indentés) sous leur LUN. Un datastore sans parent ni enfant est un groupe seul.
+  const groups = useMemo<StorageGroup[]>(() => {
+    const tops = scoped.filter((r) => !r.parentStorage);
+    return tops.map((top) => ({
+      row: top,
+      children: scoped
+        .filter((r) => r.parentStorage === top.storage && r.endpointId === top.endpointId)
+        .sort((a, b) => a.storage.localeCompare(b.storage)),
+    }));
   }, [scoped]);
 
-  const rows = useMemo(
-    () => sortStorageRows(filterStorageRows(scoped, query, typeSel ? { type: typeSel as PveStorageType } : undefined), config, sort),
-    [scoped, query, typeSel, config, sort],
+  // Déroulé : types présents dans la vue courante (LUN + VG enfants, dédoublonnés).
+  const typeOptions = useMemo(() => {
+    const seen = new Set<PveStorageType>();
+    for (const g of groups) {
+      seen.add(g.row.type);
+      for (const c of g.children) seen.add(c.type);
+    }
+    return [...seen].sort();
+  }, [groups]);
+
+  // Groupes visibles : le LUN OU l'un de ses VG correspond à la recherche / au filtre de type.
+  const visibleGroups = useMemo(
+    () =>
+      sortStorageRows(
+        groups.filter((g) => groupMatches(g, query, typeSel)).map((g) => g.row),
+        config,
+        sort,
+      ).map((row) => groups.find((g) => g.row.key === row.key)!),
+    [groups, query, typeSel, config, sort],
   );
 
   const exportCsv = () => {
     // Inventaire plat : une ligne par VM sur un datastore (le vrai « quoi est stocké où »).
     const header = ['serveur', 'datastore', 'type', 'nature', 'noeud', 'vmid', 'vm', 'noeud_vm', 'disque_octets', 'etat'];
     const lines: string[][] = [];
-    for (const r of rows) {
+    const flatRows = visibleGroups.flatMap((g) => [g.row, ...g.children]);
+    for (const r of flatRows) {
       for (const v of r.vms) {
         lines.push([
           r.endpointName,
@@ -257,7 +305,7 @@ export function StorageInventory({ endpoints, endpointNames, view, onViewChange,
 
         <button
           onClick={exportCsv}
-          disabled={rows.some((r) => r.vms.length > 0) ? false : true}
+          disabled={visibleGroups.some((g) => g.row.vms.length > 0 || g.children.some((c) => c.vms.length > 0)) ? false : true}
           className="flex items-center gap-1.5 rounded-md border bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
           <Download className="h-3 w-3" />
@@ -265,8 +313,8 @@ export function StorageInventory({ endpoints, endpointNames, view, onViewChange,
         </button>
       </div>
 
-      {/* Tableau */}
-      {rows.length === 0 ? (
+      {/* Tableau (hiérarchie iSCSI → LVM : LUN parent dépliable, VG enfants indentés) */}
+      {visibleGroups.length === 0 ? (
         <div className="p-6 text-center text-xs text-muted-foreground">{t('storage.empty')}</div>
       ) : (
         <Table>
@@ -285,23 +333,17 @@ export function StorageInventory({ endpoints, endpointNames, view, onViewChange,
             </tr>
           </TableHeader>
           <TableBody>
-            {rows.map((r) => {
-              const open = expandedKeys.has(r.key);
-              const sev = storageSeverity(r, config);
-              const hist = history[r.endpointId]?.find((h) => h.storage === r.storage);
-              return (
-                <FragmentRow
-                  key={r.key}
-                  row={r}
-                  open={open}
-                  sev={sev}
-                  hist={hist}
-                  vmLimit={vmLimits.get(r.key) ?? VM_PAGE}
-                  onShowMore={() => showMoreVms(r.key)}
-                  onToggle={() => toggleRow(r.key)}
-                />
-              );
-            })}
+            {visibleGroups.map((g) => (
+              <TopRow
+                key={g.row.key}
+                group={g}
+                expandedKeys={expandedKeys}
+                vmLimits={vmLimits}
+                history={history}
+                onShowMore={(key) => showMoreVms(key)}
+                onToggle={(key) => toggleRow(key)}
+              />
+            ))}
           </TableBody>
         </Table>
       )}
@@ -345,125 +387,200 @@ function SortHead({
   );
 }
 
-function FragmentRow({
-  row,
-  open,
-  sev,
-  hist,
-  vmLimit,
+/**
+ * Ligne de la hiérarchie iSCSI → LVM : le LUN (parent) est dépliable. Déplié, il révèle soit
+ * ses VG enfants (indentés, chacun dépliable sur ses VMs), soit — s'il n'a pas de VG — le
+ * drill-down VMs classique. Les VG enfants sont des lignes complètes indentées sous le LUN.
+ */
+function TopRow({
+  group,
+  expandedKeys,
+  vmLimits,
+  history,
   onShowMore,
   onToggle,
 }: {
+  group: StorageGroup;
+  expandedKeys: Set<string>;
+  vmLimits: Map<string, number>;
+  history: Record<string, DatastoreHistoryEntry[]>;
+  onShowMore: (key: string) => void;
+  onToggle: (key: string) => void;
+}) {
+  const config = useOvercommitConfig();
+  const { row, children } = group;
+  const open = expandedKeys.has(row.key);
+  const sev = storageSeverity(row, config);
+  const hist = history[row.endpointId]?.find((h) => h.storage === row.storage);
+  // Dépliable si VG enfants, ou si VMs, ou si capacité connue : un datastore « local » sans VM
+  // (dir ISOs/backups) a bel et bien un graphique Occupation — il doit pouvoir s'ouvrir dessus.
+  const expandable = children.length > 0 || row.vms.length > 0 || row.hasCapacity;
+  return (
+    <>
+      <RowCells row={row} sev={sev} open={open} expandable={expandable} indent={false} onToggle={() => onToggle(row.key)} />
+      {open &&
+        children.map((c) => {
+          const cOpen = expandedKeys.has(c.key);
+          const cSev = storageSeverity(c, config);
+          const cHist = history[c.endpointId]?.find((h) => h.storage === c.storage);
+          return (
+            <Fragment key={c.key}>
+              <RowCells row={c} sev={cSev} open={cOpen} expandable={c.vms.length > 0 || c.hasCapacity} indent onToggle={() => onToggle(c.key)} />
+              {cOpen && (
+                <VmDrilldown
+                  row={c}
+                  hist={cHist}
+                  vmLimit={vmLimits.get(c.key) ?? VM_PAGE}
+                  onShowMore={() => onShowMore(c.key)}
+                />
+              )}
+            </Fragment>
+          );
+        })}
+      {open && children.length === 0 && (
+        <VmDrilldown row={row} hist={hist} vmLimit={vmLimits.get(row.key) ?? VM_PAGE} onShowMore={() => onShowMore(row.key)} />
+      )}
+    </>
+  );
+}
+
+/** Cellules d'une ligne d'inventaire (LUN, VG ou datastore autonome). */
+function RowCells({
+  row,
+  sev,
+  open,
+  expandable,
+  indent,
+  onToggle,
+}: {
   row: StorageRowAll;
-  open: boolean;
   sev: SeverityOrNa;
-  /** historique d'occupation + forecast du datastore (undefined = pas encore d'historique). */
-  hist: DatastoreHistoryEntry | undefined;
-  vmLimit: number;
-  onShowMore: () => void;
+  open: boolean;
+  expandable: boolean;
+  /** true = VG enfant du LUN (indenté sous le parent). */
+  indent: boolean;
   onToggle: () => void;
 }) {
   const { t } = useTranslation();
   const Icon = TYPE_ICON[row.type];
+  return (
+    <TableRow className={cn(expandable && 'cursor-pointer', indent && 'bg-muted/10')} onClick={expandable ? onToggle : undefined}>
+      <TableCell className="w-6 px-1">
+        {expandable ? (
+          <ChevronRight className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', open && 'rotate-90')} />
+        ) : null}
+      </TableCell>
+      {/* Ligne enfant (VG sous un LUN) : le serveur est déjà montré par le parent — pas de doublon. */}
+      <TableCell className="text-xs text-muted-foreground">{indent ? '' : row.endpointName}</TableCell>
+      <TableCell>
+        <div className={cn('flex items-center gap-2 text-xs font-medium', indent && 'pl-6')}>
+          <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span>{row.storage}</span>
+          {indent && row.parentStorage && (
+            <span className="text-[10px] text-muted-foreground">· {t('storage.childOf', { parent: row.parentStorage })}</span>
+          )}
+        </div>
+      </TableCell>
+      <TableCell>
+        <Badge tone={row.kind === 'shared' ? 'primary' : 'default'}>{t(`storage.type.${row.type}`)}</Badge>
+      </TableCell>
+      <TableCell className="text-xs text-muted-foreground">
+        {row.kind === 'shared' ? (
+          <span className="text-primary">{t('storage.kind.shared')}</span>
+        ) : (
+          row.nodes.join(', ') || '—'
+        )}
+      </TableCell>
+      <TableCell>
+        <div className="space-y-0.5">
+          <CapacityBar pct={row.pct} sev={sev} />
+          <div className="text-[10px] tabular-nums text-muted-foreground">
+            {row.hasCapacity ? `${formatBytes(row.used)} / ${formatBytes(row.total)}` : t('storage.na')}
+          </div>
+        </div>
+      </TableCell>
+      <TableCell className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+        {row.diskAllocated > 0 ? formatBytes(row.diskAllocated) : '—'}
+      </TableCell>
+      <TableCell className="text-[11px] text-muted-foreground">{row.content.join(', ') || '—'}</TableCell>
+      <TableCell className="text-right text-xs">
+        <span className="font-medium">{row.running + row.stopped}</span>
+        <span className="ml-1 text-[10px] text-muted-foreground">
+          {t('storage.stats', { running: row.running, stopped: row.stopped })}
+        </span>
+      </TableCell>
+      <TableCell>
+        <Badge tone={SEVERITY_TONE[sev]}>{t(`storage.state.${sev}`)}</Badge>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/** Drill-down VMs d'un datastore (LUN sans VG, VG enfant ou datastore autonome). */
+function VmDrilldown({
+  row,
+  hist,
+  vmLimit,
+  onShowMore,
+}: {
+  row: StorageRowAll;
+  hist: DatastoreHistoryEntry | undefined;
+  vmLimit: number;
+  onShowMore: () => void;
+}) {
+  const { t } = useTranslation();
   const shown = row.vms.slice(0, vmLimit);
   const hasMore = row.vms.length > shown.length;
   return (
-    <>
-      <TableRow className="cursor-pointer" onClick={onToggle}>
-        <TableCell className="w-6 px-1">
-          <ChevronRight className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', open && 'rotate-90')} />
-        </TableCell>
-        <TableCell className="text-xs text-muted-foreground">{row.endpointName}</TableCell>
-        <TableCell>
-          <div className="flex items-center gap-2 text-xs font-medium">
-            <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            {row.storage}
-          </div>
-        </TableCell>
-        <TableCell>
-          <Badge tone={row.kind === 'shared' ? 'primary' : 'default'}>{t(`storage.type.${row.type}`)}</Badge>
-        </TableCell>
-        <TableCell className="text-xs text-muted-foreground">
-          {row.kind === 'shared' ? (
-            <span className="text-primary">{t('storage.kind.shared')}</span>
+    <tr className="bg-muted/30">
+      <td colSpan={10} className="px-6 py-3">
+        <DatastorePanels hist={hist} allocPct={row.total > 0 ? (row.diskAllocated / row.total) * 100 : null} />
+        <div className="mt-3">
+          {row.vms.length === 0 ? (
+            <div className="text-[11px] text-muted-foreground">{t('storage.noVms')}</div>
           ) : (
-            row.nodes.join(', ') || '—'
-          )}
-        </TableCell>
-        <TableCell>
-          <div className="space-y-0.5">
-            <CapacityBar pct={row.pct} sev={sev} />
-            <div className="text-[10px] tabular-nums text-muted-foreground">
-              {row.hasCapacity ? `${formatBytes(row.used)} / ${formatBytes(row.total)}` : t('storage.na')}
-            </div>
-          </div>
-        </TableCell>
-        <TableCell className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
-          {row.diskAllocated > 0 ? formatBytes(row.diskAllocated) : '—'}
-        </TableCell>
-        <TableCell className="text-[11px] text-muted-foreground">{row.content.join(', ') || '—'}</TableCell>
-        <TableCell className="text-right text-xs">
-          <span className="font-medium">{row.running + row.stopped}</span>
-          <span className="ml-1 text-[10px] text-muted-foreground">
-            {t('storage.stats', { running: row.running, stopped: row.stopped })}
-          </span>
-        </TableCell>
-        <TableCell>
-          <Badge tone={SEVERITY_TONE[sev]}>{t(`storage.state.${sev}`)}</Badge>
-        </TableCell>
-      </TableRow>
-      {open && (
-        <tr className="bg-muted/30">
-          <td colSpan={10} className="px-6 py-3">
-            <DatastorePanels hist={hist} allocPct={row.total > 0 ? (row.diskAllocated / row.total) * 100 : null} />
-            <div className="mt-3">
-            {row.vms.length === 0 ? (
-              <div className="text-[11px] text-muted-foreground">{t('storage.noVms')}</div>
-            ) : (
-              <>
-                <Table>
-                  <TableHeader>
-                    <tr>
-                      <TableHead>{t('storage.col.vm')}</TableHead>
-                      <TableHead>{t('storage.col.vmid')}</TableHead>
-                      <TableHead className="text-right">{t('storage.col.disk')}</TableHead>
-                      <TableHead>{t('storage.col.vmnode')}</TableHead>
-                      <TableHead>{t('common.state')}</TableHead>
+            <>
+              <Table>
+                <TableHeader>
+                  <tr>
+                    <TableHead>{t('storage.col.vm')}</TableHead>
+                    <TableHead>{t('storage.col.vmid')}</TableHead>
+                    <TableHead className="text-right">{t('storage.col.disk')}</TableHead>
+                    <TableHead>{t('storage.col.vmnode')}</TableHead>
+                    <TableHead>{t('common.state')}</TableHead>
+                  </tr>
+                </TableHeader>
+                <TableBody>
+                  {shown.map((v) => (
+                    <tr key={v.vmid}>
+                      <TableCell className="text-xs font-medium">{v.name}</TableCell>
+                      <TableCell className="text-xs tabular-nums text-muted-foreground">{v.vmid}</TableCell>
+                      <TableCell className="text-right font-mono text-[11px] tabular-nums">{formatBytes(v.diskBytes)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{v.node}</TableCell>
+                      <TableCell>
+                        <Badge tone={v.status === 'running' ? 'ok' : 'default'}>{t(`storage.vmstatus.${v.status === 'running' ? 'running' : 'stopped'}`)}</Badge>
+                      </TableCell>
                     </tr>
-                  </TableHeader>
-                  <TableBody>
-                    {shown.map((v) => (
-                      <tr key={v.vmid}>
-                        <TableCell className="text-xs font-medium">{v.name}</TableCell>
-                        <TableCell className="text-xs tabular-nums text-muted-foreground">{v.vmid}</TableCell>
-                        <TableCell className="text-right font-mono text-[11px] tabular-nums">{formatBytes(v.diskBytes)}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{v.node}</TableCell>
-                        <TableCell>
-                          <Badge tone={v.status === 'running' ? 'ok' : 'default'}>{t(`storage.vmstatus.${v.status === 'running' ? 'running' : 'stopped'}`)}</Badge>
-                        </TableCell>
-                      </tr>
-                    ))}
-                  </TableBody>
-                </Table>
-                {hasMore && (
-                  <div className="mt-2 flex items-center justify-between">
-                    <span className="text-[11px] tabular-nums text-muted-foreground">{t('storage.vmShown', { shown: shown.length, total: row.vms.length })}</span>
-                    <button
-                      type="button"
-                      onClick={onShowMore}
-                      className="rounded-md border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-                    >
-                      {t('storage.showMore')}
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
+                  ))}
+                </TableBody>
+              </Table>
+              {hasMore && (
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-[11px] tabular-nums text-muted-foreground">{t('storage.vmShown', { shown: shown.length, total: row.vms.length })}</span>
+                  <button
+                    type="button"
+                    onClick={onShowMore}
+                    className="rounded-md border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {t('storage.showMore')}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }
 

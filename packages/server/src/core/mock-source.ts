@@ -217,6 +217,9 @@ export class MockSource implements DataSource {
         uptime: running ? 3 * DAY + Math.random() * 20 * DAY : null,
         pool: v.pool,
         storage: v.storage,
+        // Disques (datastore + taille allouée) — synthétisés du datastore de la VM (démo),
+        // cohérent avec maxdisk. Permet à la cartographie / ratio thin de fonctionner en mock.
+        disks: v.storage ? [{ storage: v.storage, sizeBytes: v.maxmem * 4 }] : undefined,
         // IP « détectées » déterministes par vmid (démo — en prod, l'agent invité doit les rapporter)
         ipAddresses: running ? [`10.9.${Math.floor(v.vmid / 250)}.${(v.vmid % 250) + 1}`] : [],
       } satisfies PveVmResource;

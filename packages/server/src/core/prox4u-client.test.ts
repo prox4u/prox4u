@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diskStorageOf, mapLimit } from './prox4u-client.js';
+import { diskStorageOf, iscsiHostVg, mapLimit } from './prox4u-client.js';
 
 /**
  * PVE 9 ne renvoie plus le champ `storage` dans /cluster/resources :
@@ -74,5 +74,42 @@ describe('mapLimit', () => {
       n += 1;
     });
     expect(n).toBe(0);
+  });
+});
+
+describe('iscsiHostVg (dédoublonnage iSCSI / VG LVM)', () => {
+  // Scénario réel clusterproxmox : la cible iSCSI « baie-iscsi » porte un VG LVM
+  // « Lun-iscsi » (base = « baie-iscsi:0.0.0.scsi-… ») → même volume, deux datastores.
+  const withVg = [
+    { storage: 'baie-iscsi', type: 'iscsi' },
+    { storage: 'Lun-iscsi', type: 'lvm', base: 'baie-iscsi:0.0.0.scsi-xyz' },
+  ];
+
+  it('cible iSCSI avec un VG dessus → renvoie le VG hôte', () => {
+    expect(iscsiHostVg(withVg, 'baie-iscsi')).toMatchObject({ storage: 'Lun-iscsi' });
+  });
+
+  it('cible iSCSI sans VG (LUN brut) → undefined (pas de doublon)', () => {
+    expect(iscsiHostVg([{ storage: 'san-brute', type: 'iscsi' }], 'san-brute')).toBeUndefined();
+  });
+
+  it('le VG pointe vers une AUTRE cible → undefined pour celle-ci', () => {
+    const other = [
+      { storage: 'iscsi-A', type: 'iscsi' },
+      { storage: 'iscsi-B', type: 'iscsi' },
+      { storage: 'vg', type: 'lvm', base: 'iscsi-A:lun-0' },
+    ];
+    expect(iscsiHostVg(other, 'iscsi-A')).toMatchObject({ storage: 'vg' });
+    expect(iscsiHostVg(other, 'iscsi-B')).toBeUndefined();
+  });
+
+  it('préfixe exact : « baie » ne doit pas matcher « baie-iscsi »', () => {
+    const tricky = [
+      { storage: 'baie', type: 'iscsi' },
+      { storage: 'baie-iscsi', type: 'iscsi' },
+      { storage: 'vg', type: 'lvm', base: 'baie-iscsi:lun-0' },
+    ];
+    expect(iscsiHostVg(tricky, 'baie-iscsi')).toMatchObject({ storage: 'vg' });
+    expect(iscsiHostVg(tricky, 'baie')).toBeUndefined(); // « baie-iscsi:… » ne commence pas par « baie: »
   });
 });

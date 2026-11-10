@@ -78,7 +78,11 @@ export function computeOvercommit(kpis: KpiSummary, config: OvercommitConfig): O
     kpis.ramTotalBytes > 0
       ? (kpis.ramAllocatedBytes + (config.hostRamProvisionPct / 100) * kpis.ramTotalBytes) / kpis.ramTotalBytes
       : null;
-  const disk = kpis.diskThinTotalBytes > 0 ? kpis.diskAllocatedBytes / kpis.diskThinTotalBytes : null;
+  // Disque : sur-allocation = disques alloués SUR les pools thin / capacité de ces pools.
+  // Numérateur = `diskThinAllocatedBytes` (disques sur thin uniquement) — pas `diskAllocatedBytes`
+  // (tous les disques, qui seraient mélangés à un dénominateur thin → ratio sans sens).
+  // Dénominateur = capacité des thin qui hébergent des disques (0 → null = n/a, pas un faux 916 %).
+  const disk = kpis.diskThinTotalBytes > 0 ? kpis.diskThinAllocatedBytes / kpis.diskThinTotalBytes : null;
   return { cpu: metric(cpu, config.cpu), ram: metric(ram, config.ram), disk: metric(disk, config.disk) };
 }
 

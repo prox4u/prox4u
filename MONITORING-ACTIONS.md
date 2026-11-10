@@ -41,10 +41,11 @@ pannes disque), **températures** (CPU/disques), **ZFS** (ARC, santé pools), **
   multi-choix des sections.
 - `[x]` **Consolidation Telegraf 15 min** : le consolidateur agrège `smart_device`, `sensors`,
   `zfs`, `systemd_units` de `raw` vers `consolidated` (buckets 15 min) — historique infini.
-- `[ ]` **Seuils capteurs personnalisés** : abaisser le seuil d'alerte par capteur (perso ≤
-  firmware, jamais au-dessus). Persistance `data/sensor-thresholds.json`, onglet Administration,
-  intégration dans le tableau capteurs (couleur suit le seuil effectif).
-  → Plan détaillé : [`docs/plan-seuils-capteurs.md`](docs/plan-seuils-capteurs.md)
+- `[x]` **Seuils capteurs personnalisés** (livré) : seuil perso **≤ firmware** (clamp input +
+   serveur), jamais au-dessus. Persistance `data/sensor-thresholds.json`, onglet Administration
+   « Seuils capteurs » (guard admin, `GET/PUT/DELETE /api/admin/sensor-thresholds`), le tableau
+   capteurs suit le seuil effectif (`tempTone`/`effectiveSensorThreshold`, shared).
+   → Plan : [`docs/plan-seuils-capteurs.md`](docs/plan-seuils-capteurs.md)
 - `[ ]` **Règles d'alarme** (SMART critique, température > seuil, unité échouée) dans le module
   `centreonnsca` (dépend des seuils perso ci-dessus).
 

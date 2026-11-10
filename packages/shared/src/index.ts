@@ -18,6 +18,8 @@ export type { NetworkKind } from './network.js';
 export { segmentImpact, buildNetworkInventory, buildNetworkInventoryAll, filterNetworkRows, encodeNetSel, decodeNetSel } from './network-inventory.js';
 export type { NetworkRow, NetworkRowAll, NetworkVmRef, NetworkSeverity, InventoryFilter } from './network-inventory.js';
 export { buildStorageInventory, buildStorageInventoryAll, filterStorageRows, storageSeverity, sortStorageRows, buildDatastoreForecast } from './storage-inventory.js';
+export { buildStorageVolumes } from './storage-volumes.js';
+export type { StorageVolumesResult, LunSizes } from './storage-volumes.js';
 export type { StorageRow, StorageRowAll, StorageVmRef, StorageKind, StorageInventoryFilter, StorageInventoryEndpoint, StorageInventoryResponse, StorageSortKey, StorageSortDir, StorageSort, DatastorePoint, DatastoreHistoryEntry, DatastoreHistoryResponse, DatastoreRange } from './storage-inventory.js';
 export { buildVmTree, DEFAULT_VM_FILTER, filterVmRows, sortVmRows } from './vm-view.js';
 export type { VmTreeNode, VmViewFilter, VmSortKey, VmSortDir } from './vm-view.js';
@@ -105,4 +107,5 @@ export type {
 } from './network.js';
 export { resources, DEFAULT_LANG } from './i18n/index.js';
 export type { Lang } from './i18n/index.js';
-export type { SmartDevice, SensorReading, ZfsStatus, FailedUnit, NodeSensorsResponse } from './node-sensors.js';
+export type { SmartDevice, SensorReading, ZfsStatus, FailedUnit, NodeSensorsResponse, SensorThresholds, SensorThresholdEntry, SensorThresholdsResponse } from './node-sensors.js';
+export { sensorKey, effectiveSensorThreshold, tempTone, smartHealthTone, smartTempDisplay } from './node-sensors.js';

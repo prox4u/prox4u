@@ -96,6 +96,68 @@ export interface PveStorage {
   shared?: boolean;
   /** Nœuds qui exposent ce datastore (champ `nodes` de /storage). Vide = inconnu. */
   nodes?: string[];
+  /**
+   * VG LVM qui reposent sur ce datastore — même volume physique vu deux fois (une cible iSCSI
+   * sur laquelle repose un VG LVM est remontée en datastore `iscsi` ET en datastore `lvm`).
+   * Posé sur le datastore iSCSI (le LUN = le volume physique de référence) : la liste des VG
+   * enfants, qui en sont les vues redondantes. Le LUN est compté, ses VG enfants sont exclus
+   * des agrégations de capacité (comptés via le LUN, pas deux fois). Plusieurs VG possibles sur
+   * un même LUN (vrai matériel).
+   */
+  duplicateOf?: string[];
+}
+
+/**
+ * Allocation de disques VM par datastore — agrégée par le poller depuis `VmSummary.disks[]`
+ * (Σ taille allouée `size=` des disques de chaque VM sur ce datastore, templates exclus).
+ * C'est la donnée qui permet de savoir **sur quel datastore** chaque disque est posé.
+ */
+export interface StorageDiskAlloc {
+  /** nom du datastore. */
+  storage: string;
+  /** Σ taille allouée des disques VM sur ce datastore (octets). */
+  allocatedBytes: number;
+}
+
+/**
+ * Volume physique de stockage — hiérarchie iSCSI → LVM. Un LUN iSCSI est le volume physique de
+ * référence ; les VG LVM qui reposent dessus en sont les **enfants** (un LUN peut porter
+ * plusieurs VG — vrai matériel). Capacité du LUN comptée UNE seule fois (pas la somme des vues).
+ * « Analyse intelligente » : on distingue thin (sur-allocation possible) de thick (usage).
+ *
+ * Sémantique d'« utilisé » d'un LUN : la somme des tailles des VG enfants (espace **engagé /
+ * réservé** par les VG), PAS les données des VG. Ex. LUN 600 Go / VG 100 Go → 100 Go engagés,
+ * 500 Go libres. Chaque VG enfant affiche, lui, ses propres données/taille.
+ */
+export interface StorageVolume {
+  /** Datastore de référence du volume (le LUN s'il a des VG enfants, sinon le datastore lui-même). */
+  storage: string;
+  type: PveStorageType;
+  /** VG LVM enfants du volume (un LUN iSCSI peut porter plusieurs VG). Vide si aucun enfant. */
+  children: StorageVolume[];
+  /** Capacité du volume, comptée UNE seule fois (LUN : taille du LUN ou somme des VG — pas les deux). */
+  totalBytes: number | null;
+  /** octets utilisés (LUN : Σ tailles des VG enfants = espace engagé · VG/volume : données). */
+  usedBytes: number | null;
+  /** Σ disques VM alloués sur le volume (tous les VG enfants confondus). */
+  allocatedBytes: number;
+  /** Le volume est thin-capable (lvmthin/zfs/rbd) ? */
+  thinCapable: boolean;
+  /** Des disques VM reposent sur ce volume ? */
+  hasDisks: boolean;
+  /** Ratio (LUN : engagé/capacité · VG : alloué/taille VG), null si pas de capacité connue. */
+  ratio: number | null;
+  /** Sémantique du ratio : overcommit (thin, peut >1) / usage (thick, ≤1) / na (pas de disques). */
+  kind: 'overcommit' | 'usage' | 'na';
+  /** Tonalité du ratio (politique overcommit si thin, politique d'usage si thick, na sinon). */
+  tone: SeverityOrNa;
+  /**
+   * Origine de la capacité d'un LUN iSCSI : 'lun' = taille du LUN connue (config
+   * storage-volumes.json, valeur d'autorité) · 'vg-sum' = somme des tailles des VG enfants
+   * (**borne basse** — le LUN peut être plus grand). Absent pour les volumes non-LUN (leur
+   * capacité est leur propre taille PVE, sans ambiguïté).
+   */
+  totalSource?: 'lun' | 'vg-sum';
 }
 
 export interface PvePool {
@@ -257,9 +319,11 @@ export interface KpiSummary {
   ramPct: number;
   /** RAM allouée aux VMs (maxmem, templates exclus) — pour le ratio de surallocation */
   ramAllocatedBytes: number;
-  /** taille des disques virtuels alloués aux VMs (maxdisk, templates exclus) — ratio de surallocation disk */
+  /** taille des disques virtuels alloués aux VMs (maxdisk, templates exclus) — toutes vues confondues */
   diskAllocatedBytes: number;
-  /** capacité des pools thin (LVM-thin/ZFS/Ceph RBD) — dénominateur du ratio de surallocation disk */
+  /** disques alloués SUR les pools thin uniquement — numérateur du ratio de surallocation disk */
+  diskThinAllocatedBytes: number;
+  /** capacité des pools thin **qui hébergent des disques VM** — dénominateur du ratio (0 → ratio n/a) */
   diskThinTotalBytes: number;
   storageUsedBytes: number;
   storageTotalBytes: number;
@@ -641,6 +705,8 @@ export interface DashboardSnapshot {
   /** toutes les VMs (compactes) — pour la page nœud */
   vms: VmSummary[];
   storages: StorageInfo[];
+  /** Cartographie des volumes physiques (regroupement des vues redondantes, thin/thick, ratio) */
+  storageVolumes: StorageVolume[];
   network: ClusterNetwork;
   topVms: TopConsumer[];
   topPools: PoolAggregate[];

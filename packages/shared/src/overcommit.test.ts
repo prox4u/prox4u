@@ -22,6 +22,7 @@ const kpis = (over: Partial<KpiSummary> = {}): KpiSummary => ({
   ramPct: 47,
   ramAllocatedBytes: 80 * GB,
   diskAllocatedBytes: 4 * 1024 * GB,
+  diskThinAllocatedBytes: 4 * 1024 * GB,
   diskThinTotalBytes: 8 * 1024 * GB,
   storageUsedBytes: 2 * 1024 * GB,
   storageTotalBytes: 10 * 1024 * GB,
@@ -108,7 +109,7 @@ describe('computeOvercommit', () => {
     expect(r.ram.tone).toBe('ok'); // ≤ 1
   });
 
-  it('disk = Σ maxdisk / capacité thin', () => {
+  it('disk = disques alloués sur thin / capacité thin', () => {
     const r = computeOvercommit(kpis(), DEFAULT_OVERCOMMIT_CONFIG);
     expect(r.disk.ratio).toBeCloseTo(0.5, 5);
     expect(r.disk.tone).toBe('ok');
@@ -118,6 +119,20 @@ describe('computeOvercommit', () => {
     const r = computeOvercommit(kpis({ diskThinTotalBytes: 0 }), DEFAULT_OVERCOMMIT_CONFIG);
     expect(r.disk.ratio).toBeNull();
     expect(r.disk.tone).toBe('na');
+  });
+
+  it('disques sur du thick uniquement (aucun disque sur un thin) → na, pas un ratio mélangé (bug 916 %)', () => {
+    // 4 To alloués au total, mais tous sur du thick (lvm/dir) → aucun disque sur un pool thin.
+    // Ancien bug : ratio = 4 To / capacité thin vide → 916 %. Désormais : n/a.
+    const r = computeOvercommit(kpis({ diskAllocatedBytes: 4 * 1024 * GB, diskThinAllocatedBytes: 0, diskThinTotalBytes: 0 }), DEFAULT_OVERCOMMIT_CONFIG);
+    expect(r.disk.ratio).toBeNull();
+    expect(r.disk.tone).toBe('na');
+  });
+
+  it('ratio disk borné au thin : les disques thick ne gonflent pas le numérateur', () => {
+    // 4 To sur thin + 100 To sur thick → le ratio ne compte que les 4 To thin / 8 To thin = ×0.5.
+    const r = computeOvercommit(kpis({ diskAllocatedBytes: 104 * 1024 * GB, diskThinAllocatedBytes: 4 * 1024 * GB, diskThinTotalBytes: 8 * 1024 * GB }), DEFAULT_OVERCOMMIT_CONFIG);
+    expect(r.disk.ratio).toBeCloseTo(0.5, 5);
   });
 
   it('sans capacité physique → ratios non applicables', () => {

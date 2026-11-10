@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Filter, HardDrive, RefreshCw, Thermometer, TriangleAlert, Zap } from 'lucide-react';
-import type { NodeSensorsResponse } from '@prox4u/shared';
+import { effectiveSensorThreshold, smartHealthTone, smartTempDisplay, tempTone, type NodeSensorsResponse } from '@prox4u/shared';
 import { fetchNodeSensors } from '../../../core/api/apiClient';
 import { Card, CardContent } from '../../../components/ui/card';
 import { Button } from '../../../components/ui/button';
@@ -12,8 +12,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 type SectionId = 'smart' | 'sensors' | 'zfs' | 'units';
 const SECTIONS: SectionId[] = ['smart', 'sensors', 'zfs', 'units'];
 
-function toneForHealth(healthOk: boolean): string {
-  return healthOk ? 'bg-ok/15 text-ok' : 'bg-crit/15 text-crit';
+/** Couleur du badge santé SMART — tri-state (gris pour la santé inconnue). */
+function toneForHealth(healthOk: boolean | null): string {
+  const tone = smartHealthTone(healthOk);
+  if (tone === 'crit') return 'bg-crit/15 text-crit';
+  if (tone === 'unknown') return 'bg-muted text-muted-foreground';
+  return 'bg-ok/15 text-ok';
+}
+
+/** Libellé santé SMART — tri-state (Inconnu si pas de SMART). */
+function healthLabel(healthOk: boolean | null, t: (key: string) => string): string {
+  const tone = smartHealthTone(healthOk);
+  if (tone === 'unknown') return t('nodeSensors.unknown');
+  return healthOk ? t('nodeSensors.healthy') : t('nodeSensors.unhealthy');
 }
 
 function toneForTemp(tempC: number | null): string {
@@ -21,6 +32,16 @@ function toneForTemp(tempC: number | null): string {
   if (tempC >= 80) return 'bg-crit/15 text-crit';
   if (tempC >= 60) return 'bg-warn/15 text-warn';
   return 'bg-ok/15 text-ok';
+}
+
+/** Couleur d'une température selon le ton (ok/warn/crit/na) — capteurs, seuil effectif. */
+function toneClass(tone: 'ok' | 'warn' | 'crit' | 'na'): string {
+  switch (tone) {
+    case 'crit': return 'bg-crit/15 text-crit';
+    case 'warn': return 'bg-warn/15 text-warn';
+    case 'ok': return 'bg-ok/15 text-ok';
+    default: return 'bg-muted text-muted-foreground';
+  }
 }
 
 /**
@@ -163,7 +184,7 @@ export function NodeSensorsPage() {
   const smartNodeValues = useMemo(() => data ? [...new Set(data.smart.map((d) => d.node))].sort() : [], [data]);
   const smartDeviceValues = useMemo(() => data ? [...new Set(data.smart.map((d) => d.device))].sort() : [], [data]);
   const smartModelValues = useMemo(() => data ? [...new Set(data.smart.map((d) => d.model ?? '—'))].sort() : [], [data]);
-  const smartHealthValues = useMemo(() => data ? [...new Set(data.smart.map((d) => d.healthOk ? t('nodeSensors.healthy') : t('nodeSensors.unhealthy')))] : [], [data, t]);
+  const smartHealthValues = useMemo(() => data ? [...new Set(data.smart.map((d) => healthLabel(d.healthOk, t)))].sort() : [], [data, t]);
 
   const sensorNodeValues = useMemo(() => data ? [...new Set(data.sensors.filter((s) => s.tempInput !== null).map((s) => s.node))].sort() : [], [data]);
   const sensorChipValues = useMemo(() => data ? [...new Set(data.sensors.filter((s) => s.tempInput !== null).map((s) => s.chip))].sort() : [], [data]);
@@ -188,7 +209,7 @@ export function NodeSensorsPage() {
   const filteredSmart = useMemo(() => {
     if (!data) return [];
     return data.smart.filter((d) => matches(
-      { node: d.node, device: d.device, model: d.model ?? '—', health: d.healthOk ? t('nodeSensors.healthy') : t('nodeSensors.unhealthy') },
+      { node: d.node, device: d.device, model: d.model ?? '—', health: healthLabel(d.healthOk, t) },
       smartF,
     ));
   }, [data, smartF, t]);
@@ -321,25 +342,28 @@ export function NodeSensorsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredSmart.map((d) => (
-                    <TableRow key={`${d.node}/${d.device}`}>
-                      <TableCell className="font-medium">{d.node}</TableCell>
-                      <TableCell>{d.device}</TableCell>
-                      <TableCell className="max-w-40 truncate">{d.model ?? '—'}</TableCell>
-                      <TableCell>
-                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${toneForHealth(d.healthOk)}`}>
-                          {d.healthOk ? t('nodeSensors.healthy') : t('nodeSensors.unhealthy')}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${toneForTemp(d.tempC)}`}>
-                          {d.tempC !== null ? `${d.tempC}°C` : '—'}
-                        </span>
-                      </TableCell>
-                      <TableCell>{d.powerOnHours !== null ? `${d.powerOnHours} h` : '—'}</TableCell>
-                      <TableCell>{d.percentageUsed !== null ? `${d.percentageUsed}%` : '—'}</TableCell>
-                    </TableRow>
-                  ))}
+                  {filteredSmart.map((d) => {
+                    const temp = smartTempDisplay(d.tempC).value; // 0 °C = pas de lecture → null → « — »
+                    return (
+                      <TableRow key={`${d.node}/${d.device}`}>
+                        <TableCell className="font-medium">{d.node}</TableCell>
+                        <TableCell>{d.device}</TableCell>
+                        <TableCell className="max-w-40 truncate">{d.model ?? '—'}</TableCell>
+                        <TableCell>
+                          <span className={`rounded px-2 py-0.5 text-xs font-medium ${toneForHealth(d.healthOk)}`}>
+                            {healthLabel(d.healthOk, t)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className={`rounded px-2 py-0.5 text-xs font-medium ${toneForTemp(temp)}`}>
+                            {temp !== null ? `${temp}°C` : '—'}
+                          </span>
+                        </TableCell>
+                        <TableCell>{d.powerOnHours !== null ? `${d.powerOnHours} h` : '—'}</TableCell>
+                        <TableCell>{d.percentageUsed !== null ? `${d.percentageUsed}%` : '—'}</TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -368,23 +392,38 @@ export function NodeSensorsPage() {
                     <TableHead className="w-36"><MultiFilter label={t('nodeSensors.chip')} values={sensorChipValues} selected={sensorF.chip ?? new Set()} onChange={(s) => setSensorF((p) => ({ ...p, chip: s }))} /></TableHead>
                     <TableHead className="w-32"><MultiFilter label={t('nodeSensors.feature')} values={sensorFeatureValues} selected={sensorF.feature ?? new Set()} onChange={(s) => setSensorF((p) => ({ ...p, feature: s }))} /></TableHead>
                     <TableHead>{t('nodeSensors.temp')}</TableHead>
-                    <TableHead>{t('nodeSensors.tempCrit')}</TableHead>
+                    <TableHead title={t('nodeSensors.thresholdHint')}>{t('nodeSensors.thresholdEffective')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredSensors.map((s) => (
-                    <TableRow key={`${s.node}/${s.chip}/${s.feature}`}>
-                      <TableCell className="font-medium">{s.node}</TableCell>
-                      <TableCell>{s.chip}</TableCell>
-                      <TableCell>{s.feature}</TableCell>
-                      <TableCell>
-                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${toneForTemp(s.tempInput)}`}>
-                          {s.tempInput}°C
-                        </span>
-                      </TableCell>
-                      <TableCell>{s.tempCrit !== null ? `${s.tempCrit}°C` : '—'}</TableCell>
-                    </TableRow>
-                  ))}
+                  {filteredSensors.map((s) => {
+                    const effective = effectiveSensorThreshold(s, data.sensorThresholds);
+                    const tone = tempTone(s.tempInput, effective);
+                    const custom = data.sensorThresholds[`${s.node}/${s.chip}/${s.feature}`];
+                    return (
+                      <TableRow key={`${s.node}/${s.chip}/${s.feature}`}>
+                        <TableCell className="font-medium">{s.node}</TableCell>
+                        <TableCell>{s.chip}</TableCell>
+                        <TableCell>{s.feature}</TableCell>
+                        <TableCell>
+                          <span className={`rounded px-2 py-0.5 text-xs font-medium ${toneClass(tone)}`}>
+                            {s.tempInput}°C
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          {/* Seuil effectif : perso si défini (≤ firmware), sinon firmware. */}
+                          {custom !== undefined ? (
+                            <span className="text-xs font-medium text-primary" title={`${t('nodeSensors.thresholdCustom')} : ${custom}°C — ${t('nodeSensors.thresholdFirmware')} : ${s.tempCrit ?? '—'}°C`}>
+                              {custom}°C
+                              {s.tempCrit !== null && <span className="ml-1 font-normal text-muted-foreground">({s.tempCrit}°C)</span>}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">{s.tempCrit !== null ? `${s.tempCrit}°C` : '—'}</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}

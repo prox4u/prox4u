@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Boxes, Siren, Users, UserCog } from 'lucide-react';
+import { Boxes, Siren, Thermometer, Users, UserCog } from 'lucide-react';
 import { parsePluginVersion } from '@prox4u/shared';
 import { adminApi, type AdminState } from '../../lib/auth-api';
 import { registry } from '../../core/plugin/registry';
 import { ModuleCatalog } from '../../components/admin/module-catalog';
 import { GroupManager } from '../../components/admin/group-manager';
 import { NscaConfig } from '../../components/admin/nsca-config';
+import { SensorThresholds } from '../../components/admin/sensor-thresholds';
 import { UserManager } from '../../components/admin/user-manager';
 
-type Tab = 'catalog' | 'groups' | 'users' | 'nsca';
+type Tab = 'catalog' | 'groups' | 'users' | 'nsca' | 'sensorThresholds';
 
 /**
  * Page d'administration (rôle admin uniquement — protégée par ProtectedRoute).
@@ -46,6 +47,7 @@ export function AdminPage() {
             { id: 'groups', label: t('admin.tab.groups'), icon: Users },
             { id: 'users', label: t('admin.tab.users'), icon: UserCog },
             { id: 'nsca', label: t('admin.tab.nsca'), icon: Siren },
+            { id: 'sensorThresholds', label: t('admin.tab.sensorThresholds'), icon: Thermometer },
           ] as const
         ).map(({ id, label, icon: Icon }) => (
           <button
@@ -78,6 +80,8 @@ export function AdminPage() {
         />
       ) : tab === 'nsca' ? (
         <NscaConfig onDone={() => void load()} />
+      ) : tab === 'sensorThresholds' ? (
+        <SensorThresholds onDone={() => void load()} />
       ) : tab === 'groups' ? (
         // Les groupes autorisent des FAMILLES entières (pas des versions).
         <GroupManager

@@ -81,6 +81,7 @@ function aggregateKpis(eps: EndpointSnapshot[]): KpiSummary {
     ramPct: ramTotal ? Math.round((sum((k) => k.ramUsedBytes) / ramTotal) * 1000) / 10 : 0,
     ramAllocatedBytes: sum((k) => k.ramAllocatedBytes),
     diskAllocatedBytes: sum((k) => k.diskAllocatedBytes),
+    diskThinAllocatedBytes: sum((k) => k.diskThinAllocatedBytes),
     diskThinTotalBytes: sum((k) => k.diskThinTotalBytes),
     storageUsedBytes: sum((k) => k.storageUsedBytes),
     storageTotalBytes: diskTotal,
