@@ -44,7 +44,7 @@ Page `/storage` : **inventaire vCenter** des datastores — une ligne par datast
 - **i18n** : `storage.volumes.*` (title, hint, thin, thick, capacity, **capacityLower, vgCapacity, committed, lunNote, lunNoteHelp, vgChildren, vgChildrenHelp**, allocated, overcommit, usage, na, vms).
 
 ## 5. Données consommées
-- REST : `fetchStorageInventory()` → `/api/storage-inventory` (cache serveur 5 min).
+- REST : `fetchStorageInventory()` → `/api/storage-inventory` (cache serveur 5 min) · `fetchStorageDatastoreHistory(endpointId, 'year'|'month')` → `/api/storage-datastore-history` — séries d'occupation par datastore (`datastore_metrics` InfluxDB, repli RRD si < 7 j) + prévision de saturation (jours avant 80/90 %, pente, projection 30 j) ; alimente le **graphe Occupation** du drill-down.
 - Fonctions pures shared : `buildStorageInventory(storages, vms)`, `buildStorageInventoryAll(endpoints, names)`, `sortStorageRows(rows, config, sort)`, `storageSeverity(row, config)`, **`buildStorageVolumes(storages, alloc, config, lunSizes?)`** (cartographie en arbre — voir §4B).
 - Modèle de ligne (`StorageRowAll`) : key, endpointId/Name, storage, type, kind (shared/node), nodes[], **parentStorage?** (LUN iSCSI dont le datastore est un VG enfant — sert à la hiérarchie de la table), pct, used/total, hasCapacity, content[], vms[] {vmid, name, node, diskBytes, status}, running/stopped.
 - Modèle volume (`StorageVolume`) : storage (référence = le LUN s'il a des VG enfants), type, **children[] (VG enfants, vide sinon)**, totalBytes/usedBytes (capacité du LUN comptée une fois · utilisé = Σ tailles VG), allocatedBytes (Σ disques VM), thinCapable, hasDisks, ratio, kind (overcommit/usage/na), tone, **totalSource? ('lun' | 'vg-sum' — borne basse)**.
