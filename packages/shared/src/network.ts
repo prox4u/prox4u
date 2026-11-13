@@ -15,6 +15,10 @@ export interface NodeNic {
   ip: string | null;
   subnet: string | null;
   comment: string | null;
+  /** Noms alternatifs du device noyau (champ `altnames` PVE, ex. `enx9c6b00dd220c` pour `nic0`) — c'est le nom que Telegraf rapporte. */
+  altnames?: string[];
+  /** UP/DOWN côté PVE (champ `active`) — null/absent si inconnu. */
+  active?: boolean | null;
 }
 
 /** Pont Linux d'un nœud (vmbr*, ou pont sans IP ex. « nfs »). */
@@ -26,6 +30,10 @@ export interface NodeBridge {
   /** NICs physiques attachées (champ `bridge_ports` de l'API PVE). */
   ports: string[];
   comment: string | null;
+  /** Noms alternatifs du device noyau (rare pour un pont — sinon le noyau s'appelle `name`). */
+  altnames?: string[];
+  /** UP/DOWN côté PVE (champ `active`) — null/absent si inconnu. */
+  active?: boolean | null;
 }
 
 /** Interface réseau d'une VM/CT → pont (parsing de la config). */

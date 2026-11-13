@@ -17,10 +17,12 @@ import { SensorThresholdStore } from './thresholds.js';
  *  - registerSensorThresholdRoutes : GET/PUT/DELETE /api/admin/sensor-thresholds
  *    (onglet Administration « Seuils capteurs » — guard rôle admin).
  *  - registerNodeSystemRoutes : GET /api/node-system (load/swap/usage par cœur,
- *    dernier point par nœud) + GET /api/node-diskio (I/O par device physique) —
+ *    dernier point par nœud) + GET /api/node-diskio (I/O par device physique)
+ *    + GET /api/node-net (trafic PAR INTERFACE — liste des interfaces depuis
+ *    l'API PVE, joint noyau via `altnames`, 1 carte graphique par interface) —
  *    Vue d'ensemble. Même source Telegraf raw, mêmes pièges (counters, trous).
  */
-export function registerNodeSensorsModule(app: FastifyInstance, ctx: AppContext, _poller: Poller): void {
+export function registerNodeSensorsModule(app: FastifyInstance, ctx: AppContext, poller: Poller): void {
   const dataDir = path.dirname(ctx.config.authFile);
   const store = new SensorThresholdStore(path.join(dataDir, 'sensor-thresholds.json'), ctx.logger);
   store.init();
@@ -28,5 +30,5 @@ export function registerNodeSensorsModule(app: FastifyInstance, ctx: AppContext,
   registerSensorHistoryRoute(app, ctx, store);
   registerSmartHistoryRoute(app, ctx);
   registerSensorThresholdRoutes(app, ctx, store);
-  registerNodeSystemRoutes(app, ctx);
+  registerNodeSystemRoutes(app, ctx, poller);
 }

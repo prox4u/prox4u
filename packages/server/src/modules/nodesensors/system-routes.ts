@@ -4,6 +4,7 @@ import type {
   NodeCpuCore,
   NodeDiskioResponse,
   NodeDiskioRow,
+  NodeNetIface,
   NodeNetResponse,
   NodeNetRow,
   NodeSystemResponse,
@@ -11,7 +12,8 @@ import type {
 } from '@prox4u/shared';
 import { isPhysicalDevice } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
-import type { AppContext } from '../../core/poller.js';
+import type { NodeNetwork } from '../../core/data-source.js';
+import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 
 /**
  * Métriques système hôte (Telegraf, tables `system` / `mem` / `cpu` / `diskio`) —
@@ -153,12 +155,60 @@ export function diskioRowsToDevices(rows: InfluxRow[]): NodeDiskioRow[] {
 }
 
 /**
+ * Liste des interfaces d'un nœud pour la vue « 1 carte graphique par
+ * interface » (même liste que la page Réseau de Proxmox) :
+ *  - source : `GET /nodes/{n}/network` (noms PVE + `altnames` = noms
+ *    alternatifs du device noyau, ex. le nom dérivé du MAC) ;
+ *  - joint nom PVE ↔ noyau : SUR UN NŒUD PVE le device noyau est renommé
+ *    selon /etc/network/interfaces → le nom que Telegraf rapporte est le NOM
+ *    PVE (cas courant, vérifié en live : `nic2` et non `enx9c6b00dd220c`).
+ *    Les `altnames` restent en candidats de secours (nœuds non renommés).
+ *    `kernels = [name, ...altnames]` — les mesures se joignent sur n'importe
+ *    lequel ;
+ *  - union : les devices noyau vus seulement dans les mesures `rows` mais
+ *    absents de la config PVE (ex. fw* internes au firewall PVE) sont ajoutés
+ *    en `kind:'other'` (rien n'est perdu) ;
+ *  - tri par nom (ordre numérique — nic0 < nic1 < … < nic10).
+ */
+export function buildNodeNetIfaces(net: NodeNetwork | null, rows: Array<{ iface?: unknown }>): NodeNetIface[] {
+  const out: NodeNetIface[] = [];
+  if (net && net.online) {
+    for (const b of net.bridges) {
+      out.push({ name: b.name, kernels: [b.name, ...(b.altnames ?? [])], kind: 'bridge', active: b.active ?? null });
+    }
+    for (const n of net.nics) {
+      out.push({ name: n.name, kernels: [n.name, ...(n.altnames ?? [])], kind: 'nic', active: n.active ?? null });
+    }
+  }
+  const covered = new Set(out.flatMap((i) => i.kernels));
+  for (const r of rows) {
+    const k = String(r.iface ?? '');
+    if (k && !covered.has(k)) {
+      covered.add(k);
+      out.push({ name: k, kernels: [k], kind: 'other', active: null });
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
+/** Nœud → endpoint dont le dernier snapshot connaît ce nœud (null si introuvable / pas de snapshot). */
+export function nodeEndpoint(ctx: AppContext, poller: Poller, node: string): EndpointRuntime | null {
+  const multi = poller.getMulti();
+  if (!multi) return null;
+  for (const e of ctx.endpoints) {
+    const snap = multi.endpoints.find((m) => m.id === e.id)?.snapshot ?? null;
+    if (snap?.nodes.some((n) => n.node === node)) return e;
+  }
+  return null;
+}
+
+/**
  * GET /api/node-system — dernier point par nœud : load 1/5/15 + nb cœurs +
  * uptime (`system`), swap (`mem`), usage CPU global + par cœur (`cpu`).
  * Les 3 requêtes sont isolées (une table absente ne fait pas perdre les
  * autres) ; les lignes sont triées time DESC → le premier point par clé gagne.
  */
-export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext): void {
+export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, poller: Poller): void {
   const sysCache = new Map<string, { at: number; value: NodeSystemResponse }>();
   const diskioCache = new Map<string, { at: number; value: NodeDiskioResponse }>();
   const netCache = new Map<string, { at: number; value: NodeNetResponse }>();
@@ -322,7 +372,7 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext):
       reply.send(cached.value);
       return;
     }
-    let body: NodeNetResponse = { timeframe: tf, node, rows: [], source: 'insufficientData' };
+    let body: NodeNetResponse = { timeframe: tf, node, interfaces: [], rows: [], source: 'insufficientData' };
     if (influxReady(ctx)) {
       try {
         const { bucket, bucketSec, window } = HOST_DISKIO_TF[tf];
@@ -338,10 +388,21 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext):
           out.push({ t, iface, inBps: normRate(r.in_bps), outBps: normRate(r.out_bps) });
         }
         out.sort((a, b) => a.iface.localeCompare(b.iface, undefined, { numeric: true }) || a.t - b.t);
-        body = { timeframe: tf, node, rows: out, source: out.length > 0 ? 'influx' : 'insufficientData' };
+        body = { timeframe: tf, node, interfaces: [], rows: out, source: out.length > 0 ? 'influx' : 'insufficientData' };
       } catch (err) {
         ctx.logger.warn(`node-net(${key}) : InfluxDB indisponible (${(err as Error).message})`);
       }
+    }
+    // Liste des interfaces (API PVE /nodes/{n}/network) — dispo AVANT le
+    // redéploiement de l'agent : joint nom PVE ↔ noyau (altnames) + union des
+    // devices noyau vus seulement dans les mesures (kind:'other').
+    try {
+      const ep = nodeEndpoint(ctx, poller, node);
+      let net: NodeNetwork | null = null;
+      if (ep) net = (await ep.source.getNetwork()).find((n) => n.node === node) ?? null;
+      body.interfaces = buildNodeNetIfaces(net, body.rows);
+    } catch (err) {
+      ctx.logger.warn(`node-net(${key}) : réseau PVE indisponible (${(err as Error).message})`);
     }
     netCache.set(key, { at: Date.now(), value: body });
     reply.send(body);

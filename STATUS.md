@@ -1518,11 +1518,48 @@ faire un graphique par interface pour le nœud et le VM pour tous ».
 - **À voir après redéploiement** : les vraies séries par interface (vnet/tap + vmbr + NICs
   physiques) et le joint MAC sur les VMs en marche.
 
+### Rework (retour utilisateur même jour) — « je veux ces interfaces » : 1 carte graphique PAR INTERFACE PVE
+
+Avec 2 captures (page Réseau PVE + section Prox4u vide) : l’utilisateur veut la **liste des
+interfaces du serveur** (nfs, nic0…nic3, vmbr0, wlp206s0), **chaque interface avec son
+graphique** — pas un seul bloc générique « Réseau — par interface ».
+
+- **Liste = API PVE `GET /nodes/{n}/network`** (déjà lue par `Prox4uClient.getNetwork()`,
+  enrichie : `altnames` + `active` conservés ; `NodeNic`/`NodeBridge` + champs optionnels
+  dans shared/network.ts). `registerNodeSystemRoutes(app, ctx, poller)` résout nœud →
+  endpoint (`nodeEndpoint` via `poller.getMulti()`), `buildNodeNetIfaces(net, rows)` (pur,
+  exporté, testé) : joint + union des kernels vus seulement dans les mesures en
+  `kind:'other'` (ex. `fw*` internes au firewall PVE, vus live avec du vrai trafic).
+- **Découverte live (joint)** : la table `net` était déjà peuplée (agent (re)déployé
+  entre-temps) et rapporte `nic2` — **pas** `enx9c6b00dd220c` : sur un nœud PVE le device
+  noyau est **renommé** selon /etc/network/interfaces ; `altnames` (noms dérivés du MAC)
+  sont des noms **alternatifs**, pas les noms courants. Joint révisé : `kernels =
+  [name, ...altnames]` (candidats, le joint passe sur n’importe lequel) — robuste aux deux
+  schémas de nommage.
+- **Web** (`node-net-card.tsx` refondue) : 1 `Card` par interface — titre = nom PVE +
+  badge `pont/carte réseau/interface · actif`, joint `rows[].iface ∈ iface.kernels`,
+  CSV par carte, état vide **par carte** (`overview.netif.ifaceNone` si d’autres mesures
+  existent, `overview.netif.none` si rien). i18n fr/en : `overview.netif.{ifaceNone,
+  kind.*,active,inactive}`.
+- **Vérifications** : tests (**270 shared + 177 server**, +9 : buildNodeNetIfaces, nodeEndpoint,
+  interfaces du node-net) ; **API live** : `/api/node-net?node=proxmox&timeframe=day` →
+  13 interfaces (7 de la page Réseau PVE + 6 `fw*`), `nic2`/`vmbr0`/`nfs` jointes à leurs
+  5 points, plus de doublon ; **navigateur fresh** : 13 cartes nommées, graphes réels sur
+  les interfaces mesurées, « Aucune mesure … (interface inactive ?) » sur nic0/nic1/nic3/
+  wlp206s0, 16 ECharts rendus, 0 erreur console.
+
 ### Pièges rencontrés
 - **`normRate(null)` = 0, pas null** (`Number(null)` = 0) : les mocks de tests qui simulent
   un reset de counter doivent porter un **nombre négatif** (`out_bps: -1`), pas `null`.
 - **Colonne `interface`** (table `net`) : tag Telegraf → colonne SQL à **guillemets
   doubles** (`"interface"`), aliasé immédiatement dans `netRateSql`.
+- **Nommage noyau des nœuds PVE** : le device noyau est renommé selon /etc/network/
+  interfaces → Telegraf (`net`) rapporte le NOM PVE (`nic2`), pas le nom dérivé du MAC
+  (`enx9c6b00dd220c` = `altnames`). Le joint à une seule valeur `altnames[0]` perdait les
+  séries (« nic2 » en plus dupliqué en `kind:'other'`) → joint en **candidats**
+  `kernels = [name, ...altnames]`.
+- **`active` PVE** : champ présent seulement si l’interface est UP (absent sinon) →
+  `num01` renvoie `null` (pas `false`) → l’UI n’affiche « inactif » que sur explicite.
 
 ---
 
