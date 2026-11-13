@@ -1,6 +1,6 @@
 ---
 name: api
-description: Contrat de l'API REST de Prox4u — /api/health, /api/dashboard, /api/endpoints, /api/capacity, /api/trends, /api/metrics, /api/overcommit-risk, /api/network-topology, /api/storage-inventory, /api/vm-config, /api/node-sensors + WebSocket /ws ; formes de réponse, caches 5 min (1 min pour node-sensors), repli InfluxDB→RRD. Use when working on packages/server/src/modules/, adding an endpoint, or consuming the API from a plugin.
+description: Contrat de l'API REST de Prox4u — /api/health, /api/dashboard, /api/endpoints, /api/capacity, /api/trends, /api/metrics, /api/overcommit-risk, /api/network-topology, /api/storage-inventory, /api/vm-config, /api/node-sensors, /api/node-sensors-history + WebSocket /ws ; formes de réponse, caches 5 min (1 min pour node-sensors), repli InfluxDB→RRD. Use when working on packages/server/src/modules/, adding an endpoint, or consuming the API from a plugin.
 ---
 
 # Prox4u — Contrat API REST
@@ -28,6 +28,7 @@ Serveur Fastify (`packages/server`), HTTPS :8080 en prod. Modules : `modules/das
 | `GET /api/storage-inventory` | 5 min/ep | `{ endpoints: [{ endpointId, storages: PveStorage[], vms: StorageVmRef[] }] }` — groupement/agrégats calculés côté client (`shared/storage-inventory`) |
 | `GET /api/vm-config?endpoint=&vmid=` | snapshots 5 min/(ep,vmid) ; config 1 h (client PVE) ; live = snapshot courant | `VmDetailResponse { vm: VmSummary (live), config: VmConfigInfo \| null, snapshots: PveVmSnapshot[] }` — 400 si vmid invalide, 404 endpoint/VM inconnu, 503 avant le 1er tick. Snapshots = appel PVE à la demande (`/nodes/{n}/{type}/{vmid}/snapshot`, pseudo-entrée `current` filtrée) |
 | `GET /api/node-sensors` | 1 min | `NodeSensorsResponse { timeframe, nodes[], smart: SmartDevice[], sensors: SensorReading[], zfs: ZfsStatus[], failedUnits: FailedUnit[], source:'influx'\|'empty' }` — métriques locales Telegraf (SMART, capteurs, ZFS ARC, unités systemd) depuis la base `raw`, dernier point par clé. **try/catch par section** (une table absente ne vide pas les autres) · `health_ok` arrive en boolean `true` · colonnes ZFS = `arcstats_*` (voir skill `node-sensors`) |
+ | `GET /api/node-sensors-history?node=&chip=&feature=&range=month\|year` | 5 min/capteur | `SensorHistoryResponse { node, chip, feature, range, points:{time,temp}[], threshold, thresholdCustom, thresholdFirmware, source }` — historique des valeurs d'un capteur (température °C). **Double source** raw (bucket 10 min, 31 j) + consolidated (15 min, ∞), le raw prime à `t` égal. Série **sparse** (les trous = nœud éteint ne sont pas comblés). Seuils : `threshold` = effectif (perso ≤ firmware), `thresholdFirmware` exposé pour la 2ᵉ ligne si perso. 400 si `node`/`chip`/`feature` absent (voir skill `node-sensors` §3.2) |
 
 ## 3. WebSocket `/ws`
 - Pousse `{ type:'snapshot', data: MultiDashboardSnapshot }` **toutes les 5 s** (rythme du poller) + immédiatement au connect.

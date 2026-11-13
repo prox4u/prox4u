@@ -21,6 +21,8 @@ export interface ChartTheme {
   diskWrite: string;
   netIn: string;
   netOut: string;
+  /** Capteurs nœuds (températures). */
+  temp: string;
   gaugeTrack: string;
 }
 
@@ -41,6 +43,7 @@ export function chartTheme(theme: Theme): ChartTheme {
       diskWrite: '#fb923c',
       netIn: '#34d399',
       netOut: '#fbbf24',
+      temp: '#f87171',
       gaugeTrack: 'rgba(148,163,184,0.15)',
     };
   }
@@ -59,6 +62,7 @@ export function chartTheme(theme: Theme): ChartTheme {
     diskWrite: '#ea580c',
     netIn: '#10b981',
     netOut: '#f59e0b',
+    temp: '#ef4444',
     gaugeTrack: 'rgba(107,114,128,0.15)',
   };
 }

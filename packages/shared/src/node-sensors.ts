@@ -111,6 +111,33 @@ export interface SensorThresholdsResponse {
   sensors: SensorThresholdEntry[];
 }
 
+/** Point d'historique d'un capteur — température (°C) à un instant donné. */
+export interface SensorHistoryPoint {
+  time: number; // unix seconds
+  temp: number;
+}
+
+/** Réponse GET /api/node-sensors-history — historique des valeurs d'un capteur. */
+export interface SensorHistoryResponse {
+  node: string;
+  chip: string;
+  feature: string;
+  range: 'month' | 'year';
+  /**
+   * Série de températures, triée par temps croissant. Les **trous** (pas de point
+   * sur une période) sont réels : le nœud était éteint / sans mesure — ils ne
+   * sont pas comblés (le front les affiche tels quels, `connectNulls: false`).
+   */
+  points: SensorHistoryPoint[];
+  /** Seuil effectif (perso ≤ firmware) à tracer en ligne de référence — `null` si inconnu. */
+  threshold: number | null;
+  /** `true` si le seuil effectif est personnalisé (sinon firmware). */
+  thresholdCustom: boolean;
+  /** Seuil critique firmware (valeur matériel) — pour tracer la 2ᵉ ligne quand un seuil perso existe. */
+  thresholdFirmware: number | null;
+  source: 'influx' | 'empty';
+}
+
 /** Clé d'identification d'un capteur : `node/chip/feature` (aucun `/` à l'intérieur). */
 export function sensorKey(r: { node: string; chip: string; feature: string }): string {
   return `${r.node}/${r.chip}/${r.feature}`;

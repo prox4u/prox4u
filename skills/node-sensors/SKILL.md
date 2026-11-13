@@ -1,6 +1,6 @@
 ---
 name: node-sensors
-description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds). Use when working on the node-sensors plugin, the /api/node-sensors route, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, custom sensor thresholds, or the « Seuils capteurs » admin tab.
+description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds), ET historique des valeurs d'un capteur (GET /api/node-sensors-history, fenêtre modal avec graphe ECharts depuis l'icône de la table capteurs). Use when working on the node-sensors plugin, the /api/node-sensors or /api/node-sensors-history routes, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, the sensor value-history dialog, custom sensor thresholds, or the « Seuils capteurs » admin tab.
 ---
 
 # Node Sensors — métriques locales Telegraf
@@ -44,16 +44,18 @@ base `consolidated` (∞)
 | Fichier | Rôle |
 |---|---|
 | `packages/shared/src/node-sensors.ts` | Types partagés : `SmartDevice`, `SensorReading`, `ZfsStatus`, `FailedUnit`, `NodeSensorsResponse` |
-| `packages/server/src/modules/nodesensors/routes.ts` | `GET /api/node-sensors` — cache 1 min, **try/catch par section** (une table absente ne fait pas perdre les autres), dernier point par clé |
+| `packages/server/src/modules/nodesensors/routes.ts` | `GET /api/node-sensors` — cache 1 min, **try/catch par section** (une table absente ne fait pas perdre les autres), dernier point par clé · `GET /api/node-sensors-history` — série de température d'un capteur (raw 10 min + consolidated 15 min, fusion, seuils, cache 5 min) |
 | `packages/server/src/modules/nodesensors/index.ts` | Enregistre le module |
 | `packages/web/src/plugins/node-sensors/index.ts` | Manifest `id:'node-sensors'`, route `/node-sensors`, menu order 70 (icône `Thermometer`) |
-| `packages/web/src/plugins/node-sensors/pages/node-sensors.tsx` | Page 4 tableaux + `MultiFilter` (filtres colonnes multi-choix, position fixe) + filtre des sections. Le tableau capteurs colore la température selon le **seuil effectif** (perso sinon firmware) via `tempTone`/`effectiveSensorThreshold` (shared) |
+| `packages/web/src/plugins/node-sensors/pages/node-sensors.tsx` | Page 4 tableaux + `MultiFilter` (filtres colonnes multi-choix, position fixe) + filtre des sections. Le tableau capteurs colore la température selon le **seuil effectif** (perso sinon firmware) via `tempTone`/`effectiveSensorThreshold` (shared) + **icône graphique par température** (icône `Activity`) ouvrant l'historique des valeurs (`SensorHistoryDialog`) |
+| `packages/web/src/plugins/node-sensors/components/sensor-history-dialog.tsx` | Fenêtre « Historique des valeurs » d'un capteur : fetch `fetchSensorHistory(node, chip, feature, range)`, toggle 31 j / 1 an, graphe ECharts (couleur `ct.temp`, `connectNulls: false` → **les trous restent visibles**), `markLine` seuil effectif (+ firmware en pointillé gris si seuil perso), dernière mesure, état vide / erreur / chargement |
+| `packages/web/src/components/ui/dialog.tsx` | Modal léger zéro-dépendance (overlay sombre + panneau centré, fermeture X / overlay / Échap, scroll body gelé) — réutilisable |
 | `packages/shared/src/node-sensors.ts` | Types partagés + fonctions pures testées : `sensorKey`, `effectiveSensorThreshold`, `tempTone`, `smartHealthTone` (tri-state SMART), `smartTempDisplay` (0 °C = pas de lecture) |
 | `packages/server/src/modules/nodesensors/thresholds.ts` | `SensorThresholdStore` — data/sensor-thresholds.json (écriture atomique tmp+rename, chmod 600, fail-fast si corrompu) |
 | `packages/web/src/components/admin/sensor-thresholds.tsx` | Onglet Administration « Seuils capteurs » (tableau nœud/puce/capteur/temp/seuil firmware RO/seuil perso input clampé + reset par ligne + tout) |
 | `packages/web/src/plugins/node-sensors/lib/sensor-thresholds-api.ts` | Client API /api/admin/sensor-thresholds (list/save/resetAll/resetOne) |
 | `packages/server/src/core/influx-consolidator.ts` | Consolidation 15 min des 4 tables Telegraf |
-| `packages/web/src/core/api/apiClient.ts` | `fetchNodeSensors()` |
+| `packages/web/src/core/api/apiClient.ts` | `fetchNodeSensors()` · `fetchSensorHistory(node, chip, feature, range)` |
 | `deploiement/60-telegraf-nodes.sh` | Déploiement de l'agent Telegraf sur un nœud (bare-metal, idempotent, `--dry-run`) |
 
 ## 3. Endpoint API
@@ -79,6 +81,35 @@ base `consolidated` (∞)
 `PUT /api/admin/sensor-thresholds` (body `{ thresholds }`) → remplace le jeu, **clamp perso ≤ firmware** (valeurs invalides ≤ 0 ignorées, body tableau → 400).
 `DELETE /api/admin/sensor-thresholds` → tout réinitialiser · `DELETE /api/admin/sensor-thresholds/:node/:chip/:feature` → réinitialiser un capteur.
 Toutes les routes sont sous `/api/admin/*` → **guard rôle admin** (skill `general`). Le firmware est lu dans InfluxDB (`sensors.temp_crit`) — le store ne le connaît pas.
+
+### 3.2 Historique des valeurs d'un capteur — `GET /api/node-sensors-history`
+
+`?node=&chip=&feature=&range=month|year` (défaut `month` ; les 3 identifiants **requis**, longueur
+≤ 128 → sinon **400** via `reply.code(400).send` — pas `return { statusCode }`, ne fait rien en
+Fastify 5). → `SensorHistoryResponse` :
+
+```ts
+{
+  node, chip, feature, range,
+  points: { time, temp }[],   // triée par temps croissant — SPARSE : les trous (nœud éteint) ne sont pas comblés
+  threshold: number | null,   // seuil effectif (perso ≤ firmware) — ligne de référence du graphe
+  thresholdCustom: boolean,
+  thresholdFirmware: number | null,  // firmware — 2ᵉ ligne si un seuil perso existe
+  source: 'influx' | 'empty'
+}
+```
+
+- **Double source** (pattern `/api/storage-datastore-history`) : `raw` (rétention 31 j, points 10 s)
+  bucketé en **10 min** (`date_bin(INTERVAL '10 minutes')` — les points 10 s feraient ~270k points
+  sur 31 j par capteur, trop pour un graphe navigateur) + `consolidated` (rétention ∞, buckets
+  **15 min** écrits par le consolidateur) → ~2900 pts / 31 j, ~8900 / 1 an.
+- **Fusion** : au même horodatage, le point **raw prime** (plus fin) ; le consolidé n'écrase jamais
+  un point raw (même logique que `datastore_metrics`).
+- **Seuils** : `threshold` = perso (`store.getThresholds()[sensorKey]`) sinon firmware
+  (dernier `temp_crit` non nul, fenêtre 1 h — le firmware ne bouge pas). Capteur sans `temp_crit`
+  (ex. `tctl` de `k10temp`) → `threshold: null`, pas de ligne de référence.
+- **Cache 5 min** par clé `node/chip/feature:range`. Identité échappée en SQL par `sqlStr`
+  (guillemets simples doublés) — les valeurs viennent de la query string.
 
 - `SmartDevice` : `device`, `model`, `serialNo`, `healthOk` (**tri-state** `boolean | null` —
   `true`=PASSED, `false`=FAILED, `null`=**inconnu** : disque virtuel / volume RAID / état
@@ -114,6 +145,13 @@ Toutes les routes sont sous `/api/admin/*` → **guard rôle admin** (skill `gen
 - **Filtre des sections** : dropdown multi-choix (option « Toutes ») qui montre/masque les 4
   tableaux.
 - **Filtres colonnes** : un `MultiFilter` par colonne de statut (nœud, device, santé, …).
+- **Historique des valeurs** : chaque température de la table capteurs porte une **icône
+  graphique** (lucide `Activity`) → ouvre `SensorHistoryDialog` (modal `ui/dialog.tsx`) : identité
+  `node/chip/feature`, dernière mesure, toggle **31 j / 1 an** (style du range stockage), graphe
+  ECharts (couleur thème `ct.temp`, aire dégradée, `connectNulls: false` → **les trous = nœud sans
+  mesure (éteint) restent visibles, jamais comblés**), `markLine` seuil effectif (rouge pointillés)
+  + seuil firmware (gris) si perso, note explicative des trous. i18n `nodeSensors.history.*` /
+  `nodeSensors.range.*`.
 - **`MultiFilter`** : dropdown avec checkboxes, valeurs extraites des données, **option « Tous »**
   en haut (coche = tout sélectionner, décoche = tout libérer). **`position:fixed`** calculé depuis
   `getBoundingClientRect()` du bouton (pas d'overflow du tableau), **fond opaque** `#0f1117`,
@@ -142,6 +180,11 @@ Toutes les routes sont sous `/api/admin/*` → **guard rôle admin** (skill `gen
   aussi `health_ok = NULL` ; mapper NULL → `false` afficherait « CRITIQUE » (faux positif). Le
   parsing serveur (`parseHealthOk`, routes.ts) et le consolidateur 15 min préservent le NULL.
   `0 °C` = pas de lecture (`smartTempDisplay`) → affiché « — ».
+- **Historique des valeurs** (livré) : résolution **raw 10 min / consolidated 15 min** — jamais de
+  points 10 s bruts dans le graphe (~270k pts / 31 j / capteur). Les **trous de la série sont des
+  données** (nœud éteint = pas de mesure) : la série est sparse, `connectNulls: false`, **aucune
+  complétion / interpolation** (anticiper du vrai matériel : un nœud éteint pendant des jours n'est
+  pas une panne de l'app). `max(temp_input)` par bucket (cohérent avec le consolidateur).
 
 ## 7. Pièges rencontrés (corrigés — ne pas réintroduire)
 
@@ -157,6 +200,9 @@ Toutes les routes sont sous `/api/admin/*` → **guard rôle admin** (skill `gen
 - **Filtres superposés / illisibles** : le dropdown initial était **transparent** et **coupé par
   l'overflow du tableau** → `position:fixed` (calculé depuis le bounding rect du bouton), **fond
   opaque**, `z-50`. Un `position:absolute` dans un conteneur `overflow:hidden` serait masqué.
+- **400 « silencieux » (Fastify 5)** : `return { statusCode: 400, … }` depuis un handler async
+  **ne set pas le code HTTP** (renvoyé tel quel dans le body, status 200) — utiliser
+  `reply.code(400).send(…)` comme partout ailleurs dans le codebase (vérifié test + live).
 
 ## 8. À suivre
 

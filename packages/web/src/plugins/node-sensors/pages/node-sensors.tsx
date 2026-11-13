@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Filter, HardDrive, RefreshCw, Thermometer, TriangleAlert, Zap } from 'lucide-react';
-import { effectiveSensorThreshold, smartHealthTone, smartTempDisplay, tempTone, type NodeSensorsResponse } from '@prox4u/shared';
+import { Activity, ChevronDown, Filter, HardDrive, RefreshCw, Thermometer, TriangleAlert, Zap } from 'lucide-react';
+import { effectiveSensorThreshold, smartHealthTone, smartTempDisplay, tempTone, type NodeSensorsResponse, type SensorReading } from '@prox4u/shared';
 import { fetchNodeSensors } from '../../../core/api/apiClient';
+import { SensorHistoryDialog } from '../components/sensor-history-dialog';
 import { Card, CardContent } from '../../../components/ui/card';
 import { Button } from '../../../components/ui/button';
 import { Skeleton } from '../../../components/ui/skeleton';
@@ -143,6 +144,8 @@ export function NodeSensorsPage() {
   const [error, setError] = useState<string | null>(null);
   const [visibleSections, setVisibleSections] = useState<Set<SectionId>>(new Set(SECTIONS));
   const [filterOpen, setFilterOpen] = useState(false);
+  // Capteur dont on affiche l'historique des valeurs (fenêtre graphique) — null = fermée.
+  const [historySensor, setHistorySensor] = useState<SensorReading | null>(null);
 
   // Filtres colonnes : Set de valeurs sélectionnées (vide = tout afficher)
   const [smartF, setSmartF] = useState<Record<string, Set<string>>>({});
@@ -406,9 +409,21 @@ export function NodeSensorsPage() {
                         <TableCell>{s.chip}</TableCell>
                         <TableCell>{s.feature}</TableCell>
                         <TableCell>
-                          <span className={`rounded px-2 py-0.5 text-xs font-medium ${toneClass(tone)}`}>
-                            {s.tempInput}°C
-                          </span>
+                          <div className="flex items-center gap-1">
+                            <span className={`rounded px-2 py-0.5 text-xs font-medium ${toneClass(tone)}`}>
+                              {s.tempInput}°C
+                            </span>
+                            {/* Icône graphique : ouvre l'historique des valeurs du capteur (fenêtre). */}
+                            <button
+                              type="button"
+                              onClick={() => setHistorySensor(s)}
+                              title={t('nodeSensors.history.open')}
+                              aria-label={t('nodeSensors.history.open')}
+                              className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                            >
+                              <Activity className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </TableCell>
                         <TableCell>
                           {/* Seuil effectif : perso si défini (≤ firmware), sinon firmware. */}
@@ -512,6 +527,9 @@ export function NodeSensorsPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Fenêtre « Historique des valeurs » du capteur sélectionné (icône de la table Capteurs). */}
+      <SensorHistoryDialog sensor={historySensor} onClose={() => setHistorySensor(null)} />
     </div>
   );
 }
