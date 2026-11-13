@@ -55,13 +55,13 @@ base `consolidated` (∞)
 | `packages/web/src/components/admin/sensor-thresholds.tsx` | Onglet Administration « Seuils capteurs » (tableau nœud/puce/capteur/temp/seuil firmware RO/seuil perso input clampé + reset par ligne + tout) |
 | `packages/web/src/plugins/node-sensors/lib/sensor-thresholds-api.ts` | Client API /api/admin/sensor-thresholds (list/save/resetAll/resetOne) |
 | `packages/shared/src/system-metrics.ts` | Types + fonctions pures testées des métriques système hôte : `NodeSystemRow/Response`, `NodeDiskioRow/Response`, `VmDiskioPoint/Series/Response`, `NodeNetRow/Response`, `VmNetPoint/Series/Response`, `parsePveMapperName` (LV `vg--vm--101--disk--0` → vmid/ctid, depuis le **suffixe** LV car le VG peut contenir `--`), `mapperLabel`, `isPhysicalDevice` (disques entiers seuls) |
-| `packages/server/src/modules/nodesensors/system-routes.ts` | `GET /api/node-system` (dernier point par nœud : `system`+`mem`+`cpu`, cache 60 s) · `GET /api/node-diskio?node=&timeframe=` (I/O par device physique, SQL `diskioRateSql` = bucket d'abord puis LAG des counters, cache 5 min) · `GET /api/node-net?node=&timeframe=` (trafic réseau **par interface hôte**, SQL `netRateSql` idem sur `bytes_recv`/`bytes_sent`, **vnet\*/tap\*/veth\*/lo exclus dans le SQL** — double-comptage avec la vue VM, cache 5 min) — consommés par la Vue d'ensemble (carte Système cross-node) ET le Monitor nœud Vue VM v2 (sections Système / CPU par cœur / I/O disques / Réseau par interface) |
+| `packages/server/src/modules/nodesensors/system-routes.ts` | `registerNodeSystemRoutes(app, ctx, poller)` — `GET /api/node-system` (dernier point par nœud : `system`+`mem`+`cpu`, cache 60 s) · `GET /api/node-diskio?node=&timeframe=` (I/O par device physique, SQL `diskioRateSql` = bucket d'abord puis LAG des counters, cache 5 min) · `GET /api/node-net?node=&timeframe=` (trafic réseau **par interface hôte** : SQL `netRateSql` idem sur `bytes_recv`/`bytes_sent`, **vnet\*/tap\*/veth\*/lo exclus dans le SQL** — double-comptage avec la vue VM — **+ `interfaces: NodeNetIface[]` = liste des interfaces du nœud depuis l'API PVE** `GET /nodes/{n}/network` via `nodeEndpoint(ctx, poller, node)` → endpoint du snapshot → `ep.source.getNetwork()` ; joint nom PVE ↔ noyau en **candidats** `kernels = [name, ...altnames]` ; helper pur exporté `buildNodeNetIfaces(net, rows)` testé, cache 5 min) — consommés par la Vue d'ensemble (carte Système cross-node) ET le Monitor nœud Vue VM v2 (sections Système / CPU par cœur / I/O disques / Réseau par interface) |
 | `packages/server/src/modules/vmview/vm-diskio.ts` | `GET /api/vm-diskio?endpoint=&vmid=&timeframe=` — I/O PAR DISQUE d'une VM : mapping `dm_names` (dernier point par (node, dm), fenêtre 1 h) + `diskioRateSql` sur les dm de la VM ; états `influx` / `noMapping` (table absente) / `insufficientData` (pas de LV dm pour la VM) |
 | `packages/server/src/modules/vmview/vm-net.ts` | `GET /api/vm-net?endpoint=&vmid=&timeframe=` — trafic réseau **PAR INTERFACE d'une VM** (l'API PVE n'expose que l'agrégat : /cluster/resources, rrddata, QGA network-get-interfaces « not implemented ») : snapshot poller → node/type de la VM, `getVmConfig` → cartes (net0/net1, bridge, **MAC**), `net_if_mac` (fenêtre 1 h, `latestIfMacMapping`) → MAC → tap hôte, 1 `netRateSql` sur les tap résolus ; états `influx` / `noMapping` (tables absentes) / `insufficientData` (VM hors snapshot, pas de carte lue) — MAC non trouvée (VM arrêtée, SDN) = série listée `hostIface=null`, points vides |
 | `packages/web/src/plugins/hypervision/components/system-nodes-card.tsx` | Carte Vue d'ensemble « Système — par nœud » (tableau cross-node, pleine largeur) : load 1/5/15 teinté vs nb de cœurs (≥1 warn, ≥2 crit), iowait (≥10 warn, ≥25 crit), swap (≥50 warn, ≥80 crit), uptime |
 | `packages/web/src/plugins/vm-view_v2/components/node-system-card.tsx` | Section Monitor nœud « Système (nœud) » (chips, nœud affiché uniquement) : load 1/5/15 teinté, cœurs, iowait, swap, uptime — mêmes seuils que la carte cross-node |
 | `packages/web/src/plugins/vm-view_v2/components/node-diskio-card.tsx` | Section Monitor nœud « I/O disques (nœud) » : nœud FIXE (prop), timeframe piloté par la barre d'outils de l'onglet (prop), 2 graphes (débits lecture=plein/écriture=pointillé par device ; busy % + IOPS double axe) + export CSV — base de temps commune, trous = null (pas d'interpolation) |
-| `packages/web/src/plugins/vm-view_v2/components/node-net-card.tsx` | Section Monitor nœud « Réseau — par interface » : **UN GRAPHIQUE PAR INTERFACE HÔTE** (vmbr*, NICs physiques) RX=plein/TX=pointillé, nœud FIXE + timeframe de l'onglet (props), export CSV (t, iface, in_bps, out_bps) — tap des VMs exclus (vue VM), trous = null |
+| `packages/web/src/plugins/vm-view_v2/components/node-net-card.tsx` | Section Monitor nœud « Réseau — par interface » : **UNE CARTE GRAPHIQUE PAR INTERFACE DU NŒUD** (même liste que la page Réseau de Proxmox — source API PVE, dispo AVANT le redéploiement de l'agent) : titre = nom PVE + badge type (pont/carte réseau/interface) + actif, joint des mesures sur `iface.kernels` (nom PVE + altnames), 1 graphe RX=plein/TX=pointillé par carte, export CSV par carte (timestamp, in_bps, out_bps), état vide **par carte** (`overview.netif.ifaceNone` si d'autres interfaces mesurées, `overview.netif.none` si rien) — tap des VMs exclus (vue VM), trous = null |
 | `packages/web/src/plugins/vm-view_v2/components/cpu-cores-card.tsx` | Section Monitor nœud « CPU par cœur » : barres horizontales usage courant (teinte <70 ok / <90 warn / ≥90 crit), tooltip user/system/iowait, export CSV, **hauteur dynamique** (≥240 px, sinon 18 px/cœur) |
 | `packages/web/src/plugins/vm-view_v2/components/node-monitor.tsx` | Onglet Monitor NŒUD : graphes PVE (CPU/RAM/rootfs/réseau via `/api/metrics?node=`) + sections agent hôte ci-dessus (dont « Réseau — par interface » après le graphe Réseau agrégé) — sources **indépendantes** (si la série PVE est vide, les sections Telegraf restent montées, et inversement) |
 | `packages/web/src/plugins/vm-view_v2/components/vm-monitor.tsx` | Onglet Monitor VM : section « Disques I/O — par device (hôte) » (`PerDeviceDiskSection`) après le graphe disque agrégat — 1 carte par disque (débits + saturation + export CSV) ; section « Réseau — par interface » (`PerIfaceNetSection`) après le graphe Réseau agrégat — **1 carte par NIC** (RX/TX, note « MAC non trouvée » si pas de tap), états noMapping/insufficientData/noMac lisibles |
@@ -174,13 +174,21 @@ Trois routes de plus, **même source** (tables Telegraf `raw`), dans le même mo
   seulement — les CT `base-<ctid>--` sont parsés mais non demandés). 1 requête `diskioRateSql`
   par nœud (`name IN (…)`). Libellé UI = `mapperLabel` (`vm-100-disk-0 (vg rapide)`).
 
- - `GET /api/node-net?node=&timeframe=` → `NodeNetResponse { timeframe, node, rows:
-   NodeNetRow[], source: 'influx'|'insufficientData' }` — trafic réseau **par interface hôte**
-   (table `net`, plugin Telegraf) : NICs physiques + ponts (vmbr*), **vnet\*/tap\*/veth\*/lo
-   exclus dans le SQL** (le trafic des tap est montré dans le Monitor de chaque VM — sinon
-   double-comptage). Même buckets que node-diskio (raw, 31 j), cache 5 min par (node, tf),
-   400 sans `node` ou timeframe invalide. Table absente (agent non (re)déployé) →
-   `insufficientData`, pas une erreur HTTP.
+ - `GET /api/node-net?node=&timeframe=` → `NodeNetResponse { timeframe, node, interfaces:
+   NodeNetIface[], rows: NodeNetRow[], source: 'influx'|'insufficientData' }` — trafic réseau
+   **par interface hôte** (table `net`, plugin Telegraf) : NICs physiques + ponts (vmbr*),
+   **vnet\*/tap\*/veth\*/lo exclus dans le SQL** (le trafic des tap est montré dans le Monitor
+   de chaque VM — sinon double-comptage). **`interfaces`** = liste des interfaces du nœud
+   (API PVE `GET /nodes/{n}/network` — dispo même si `rows` est vide, agent non déployé) :
+   `NodeNetIface { name (nom PVE), kernels: string[] (candidats noyau = [name, ...altnames]),
+   kind: 'bridge'|'nic'|'other', active: boolean|null }` ; les devices noyau vus seulement dans
+   les mesures (ex. `fw*` internes au firewall PVE) sont ajoutés en `kind:'other'`
+   (`buildNodeNetIfaces`, helper pur exporté). Joint des mesures : `rows[].iface` ∈ `kernels`
+   (sur un nœud PVE le device noyau est renommé selon /etc/network/interfaces → le nom PVE est
+   le cas courant, vérifié live ; `altnames` = noms dérivés du MAC en secours). Même buckets
+   que node-diskio (raw, 31 j), cache 5 min par (node, tf), 400 sans `node` ou timeframe
+   invalide. Table absente (agent non (re)déployé) → `insufficientData` (avec `interfaces`
+   renseigné), pas une erreur HTTP.
  - `GET /api/vm-net?endpoint=&vmid=&timeframe=` (module `vmview`) → `VmNetResponse {
    timeframe, vmid, series: VmNetSeries[], source: 'influx'|'insufficientData'|'noMapping' }` —
    trafic **PAR INTERFACE d'une VM**. L'API PVE n'expose que l'agrégat (vérifié 9.1/9.2 :
@@ -332,6 +340,22 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
   - **Unités** : PVE `netin`/`netout` = **octets** cumulés depuis le boot (pas bits — confirmé
     forum PVE) → les débits calculés (octets/s) partagent `formatBps` avec les graphes agrégés
     existants, pas de facteur 8.
+  - **Liste des interfaces = API PVE, 1 carte graphique par interface** (retour UI 2026-11-13 :
+    « je veux ces interfaces » — la liste de la page Réseau de Proxmox, pas un bloc générique
+    vide). `registerNodeSystemRoutes(app, ctx, poller)` résout nœud → endpoint via
+    `nodeEndpoint(ctx, poller, node)` (snapshot du poller) → `ep.source.getNetwork()`
+    (`/nodes/{n}/network` : `iface`, `altnames`, `type`, `active` — champs conservés par
+    `Prox4uClient.getNetwork()` : `NodeNic`/`NodeBridge` + `altnames?`/`active?`, shared/network.ts).
+    **Joint noyau** : sur un nœud PVE le device noyau est **renommé** selon /etc/network/interfaces
+    → Telegraf rapporte le NOM PVE (`nic2`, vérifié live — `altnames` = noms dérivés du MAC
+    `enx9c6b00dd220c`, ce ne sont PAS les noms courants) → `kernels = [name, ...altnames]`
+    (candidats, le joint passe sur n‧importe lequel). Pont : kernel = nom du pont. PVE
+    `active` présent seulement si UP (absent sinon → null, l’UI n’affiche « inactif » que sur
+    explicite). `buildNodeNetIfaces(net, rows)` (pur, exporté, testé) : union des kernels vus
+    seulement dans les mesures (ex. `fw*` internes au firewall PVE) en `kind:'other'` — rien
+    n’est perdu. Web : 1 `Card` par interface (titre = nom PVE + badge kind/actif, CSV par
+    carte, état vide par carte ; i18n `overview.netif.{ifaceNone,kind.*,active,inactive}`).
+    Les mesures restent dispo même si la liste PVE échoue (nœud hors ligne → `kind:'other'`).
 
 ## 7. Pièges rencontrés (corrigés — ne pas réintroduire)
 

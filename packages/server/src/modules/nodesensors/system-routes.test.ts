@@ -4,16 +4,21 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { NodeDiskioResponse, NodeNetResponse, NodeSystemResponse } from '@prox4u/shared';
-import type { AppContext } from '../../core/poller.js';
-import { diskioRateSql, diskioRowsToDevices, netRateSql, registerNodeSystemRoutes } from './system-routes.js';
+import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
+import { buildNodeNetIfaces, diskioRateSql, diskioRowsToDevices, netRateSql, nodeEndpoint, registerNodeSystemRoutes } from './system-routes.js';
 
 const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
 /** AppContext mock : `querySql` routé par un fragment du SQL, SQL capturés dans `sqlLog`. */
-function makeCtx(dir: string, routes: Record<string, (sql: string) => unknown[]>, sqlLog?: string[]): AppContext {
+function makeCtx(
+  dir: string,
+  routes: Record<string, (sql: string) => unknown[]>,
+  sqlLog?: string[],
+  endpoints: EndpointRuntime[] = [],
+): AppContext {
   return {
     config: { authFile: path.join(dir, 'auth.json') } as AppContext['config'],
-    endpoints: [],
+    endpoints,
     logger,
     influx: {
       enabled: true,
@@ -31,6 +36,29 @@ function makeCtx(dir: string, routes: Record<string, (sql: string) => unknown[]>
     auth: {} as AppContext['auth'],
     hub: {} as AppContext['hub'],
   };
+}
+
+/** Poller mock : getMulti() → null (pas de snapshot) ou un endpoint `ep1` dont le snapshot connaît `nodes`. */
+function makePoller(nodes: string[] = []): Poller {
+  return {
+    getMulti: () =>
+      nodes.length === 0
+        ? null
+        : ({
+            generatedAt: 0,
+            mock: true,
+            defaultEndpointId: 'ep1',
+            overcommit: {},
+            endpoints: [
+              {
+                id: 'ep1',
+                name: 'ep1',
+                ok: true,
+                snapshot: { nodes: nodes.map((node) => ({ node, online: true })) },
+              },
+            ],
+          } as never),
+  } as unknown as Poller;
 }
 
 // --- Aides pures ------------------------------------------------------------------------
@@ -77,6 +105,62 @@ describe('diskioRowsToDevices', () => {
   });
 });
 
+describe('buildNodeNetIfaces', () => {
+  it('PVE indisponible (net null) → devices noyau vus dans les mesures (kind other, dedup)', () => {
+    const out = buildNodeNetIfaces(null, [{ iface: 'vmbr0' }, { iface: 'vmbr0' }, { iface: 'nic-x' }]);
+    expect(out).toEqual([
+      { name: 'nic-x', kernels: ['nic-x'], kind: 'other', active: null },
+      { name: 'vmbr0', kernels: ['vmbr0'], kind: 'other', active: null },
+    ]);
+  });
+
+  it('joint PVE↔noyau : pont (kernel = name), carte (altnames), carte sans altnames (candidats = nom PVE seulement)', () => {
+    const net = {
+      node: 'proxmox',
+      online: true,
+      ip: null,
+      nics: [
+        { name: 'nic0', ip: null, subnet: null, comment: null, altnames: ['enx9c6b00dd220b'], active: false },
+        { name: 'nic1', ip: null, subnet: null, comment: null, active: false }, // pas d'altnames → kernel inconnu
+      ],
+      bridges: [{ name: 'vmbr0', ip: null, subnet: null, gateway: null, ports: [], comment: null, active: true }],
+    };
+    const out = buildNodeNetIfaces(net, []);
+    expect(out).toEqual([
+      { name: 'nic0', kernels: ['nic0', 'enx9c6b00dd220b'], kind: 'nic', active: false },
+      { name: 'nic1', kernels: ['nic1'], kind: 'nic', active: false },
+      { name: 'vmbr0', kernels: ['vmbr0'], kind: 'bridge', active: true },
+    ]);
+  });
+
+  it('nœud hors ligne (online: false) → pas de liste PVE, seulement les mesures', () => {
+    const net = {
+      node: 'x',
+      online: false,
+      ip: null,
+      nics: [{ name: 'nic2', ip: null, subnet: null, comment: null, altnames: ['enx9c6b00dd220c'], active: false }],
+      bridges: [],
+    };
+    const out = buildNodeNetIfaces(net, [{ iface: 'eth9' }]);
+    expect(out).toEqual([{ name: 'eth9', kernels: ['eth9'], kind: 'other', active: null }]);
+  });
+
+  it('union : un kernel couvert par la config PVE n’est pas dupliqué en other', () => {
+    const net = {
+      node: 'x',
+      online: true,
+      ip: null,
+      nics: [{ name: 'nic2', ip: null, subnet: null, comment: null, altnames: ['enx9c6b00dd220c'], active: true }],
+      bridges: [],
+    };
+    const out = buildNodeNetIfaces(net, [{ iface: 'enx9c6b00dd220c' }, { iface: 'dock0' }]);
+    expect(out).toEqual([
+      { name: 'dock0', kernels: ['dock0'], kind: 'other', active: null },
+      { name: 'nic2', kernels: ['nic2', 'enx9c6b00dd220c'], kind: 'nic', active: true },
+    ]);
+  });
+});
+
 // --- GET /api/node-system -----------------------------------------------------------------
 
 describe('GET /api/node-system', () => {
@@ -108,6 +192,7 @@ describe('GET /api/node-system', () => {
         'FROM mem': () => memRows,
         'FROM cpu': () => cpuRows,
       }),
+      makePoller(),
     );
     await app.ready();
   });
@@ -141,7 +226,7 @@ describe('GET /api/node-system', () => {
     const ctx2 = makeCtx(dir2, {});
     (ctx2.influx as { enabled: boolean }).enabled = false;
     const app2 = Fastify();
-    registerNodeSystemRoutes(app2, ctx2);
+    registerNodeSystemRoutes(app2, ctx2, makePoller());
     await app2.ready();
     const res = await app2.inject({ method: 'GET', url: '/api/node-system' });
     expect(res.statusCode).toBe(200);
@@ -167,7 +252,7 @@ describe('GET /api/node-diskio', () => {
     dir = mkdtempSync(path.join(tmpdir(), 'diskio-routes-'));
     sqlLog = [];
     app = Fastify();
-    registerNodeSystemRoutes(app, makeCtx(dir, { 'FROM diskio': () => diskioRows }, sqlLog));
+    registerNodeSystemRoutes(app, makeCtx(dir, { 'FROM diskio': () => diskioRows }, sqlLog), makePoller());
     await app.ready();
   });
   afterEach(async () => {
@@ -207,13 +292,30 @@ describe('GET /api/node-net', () => {
   const netRows = [
     { t: '2026-11-13T12:00:00Z', iface: 'vmbr0', in_bps: 1e7, out_bps: 2e7 },
     { t: '2026-11-13T12:00:00Z', iface: 'enp1s0f0', in_bps: 5e6, out_bps: -1 }, // delta négatif → null
+    { t: '2026-11-13T12:00:00Z', iface: 'dock0', in_bps: 1, out_bps: 2 }, // kernel absent de la config PVE
   ];
+
+  /** Endpoint mock dont la source renvoie le réseau PVE du nœud `proxmox`. */
+  const ep = {
+    id: 'ep1',
+    source: {
+      getNetwork: async () => [
+        {
+          node: 'proxmox',
+          online: true,
+          ip: '192.168.1.80',
+          nics: [{ name: 'nic2', ip: null, subnet: null, comment: null, altnames: ['enp1s0f0'], active: true }],
+          bridges: [{ name: 'vmbr0', ip: '192.168.1.80', subnet: null, gateway: null, ports: ['nic2'], comment: null, active: true }],
+        },
+      ],
+    },
+  } as unknown as EndpointRuntime;
 
   beforeEach(async () => {
     dir = mkdtempSync(path.join(tmpdir(), 'node-net-routes-'));
     sqlLog = [];
     app = Fastify();
-    registerNodeSystemRoutes(app, makeCtx(dir, { 'FROM net': () => netRows }, sqlLog));
+    registerNodeSystemRoutes(app, makeCtx(dir, { 'FROM net': () => netRows }, sqlLog, [ep]), makePoller(['proxmox']));
     await app.ready();
   });
   afterEach(async () => {
@@ -233,6 +335,7 @@ describe('GET /api/node-net', () => {
     expect(body.source).toBe('influx');
     expect(body.node).toBe('proxmox');
     expect(body.rows).toEqual([
+      { t: 1794571200, iface: 'dock0', inBps: 1, outBps: 2 },
       { t: 1794571200, iface: 'enp1s0f0', inBps: 5e6, outBps: null },
       { t: 1794571200, iface: 'vmbr0', inBps: 1e7, outBps: 2e7 },
     ]);
@@ -246,18 +349,77 @@ describe('GET /api/node-net', () => {
     expect(sql).toContain("INTERVAL '5 minutes'");
   });
 
-  it('insufficientData si table net absente (agent non déployé)', async () => {
+  it('interfaces : liste PVE (joint altnames) + union des kernels des mesures (kind other)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/node-net?node=proxmox&timeframe=day' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as NodeNetResponse;
+    expect(body.interfaces).toEqual([
+      { name: 'dock0', kernels: ['dock0'], kind: 'other', active: null }, // seulement dans les mesures
+      { name: 'nic2', kernels: ['nic2', 'enp1s0f0'], kind: 'nic', active: true }, // nom PVE + altnames
+      { name: 'vmbr0', kernels: ['vmbr0'], kind: 'bridge', active: true }, // pont : nom = noyau
+    ]);
+  });
+
+  it('nœud inconnu du snapshot → pas de joint PVE, interfaces = kernels des mesures (kind other)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/node-net?node=introuvable&timeframe=day' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as NodeNetResponse;
+    // Le mock SQL renvoie toujours les mêmes lignes (WHERE ignoré) — sans joint
+    // PVE, tous les kernels mesurés apparaissent en kind 'other'.
+    expect(body.interfaces).toEqual([
+      { name: 'dock0', kernels: ['dock0'], kind: 'other', active: null },
+      { name: 'enp1s0f0', kernels: ['enp1s0f0'], kind: 'other', active: null },
+      { name: 'vmbr0', kernels: ['vmbr0'], kind: 'other', active: null },
+    ]);
+    expect(body.source).toBe('influx');
+  });
+
+  it('insufficientData si table net absente (agent non déployé) — interfaces PVE tout de même renseignées', async () => {
     const app2 = Fastify();
     registerNodeSystemRoutes(
       app2,
-      makeCtx(dir, {
-        'FROM net': () => {
-          throw new Error("Error during planning: table 'public.iox.net' not found");
+      makeCtx(
+        dir,
+        {
+          'FROM net': () => {
+            throw new Error("Error during planning: table 'public.iox.net' not found");
+          },
         },
-      }),
+        undefined,
+        [ep],
+      ),
+      makePoller(['proxmox']),
     );
     const res = await app2.inject({ method: 'GET', url: '/api/node-net?node=proxmox&timeframe=day' });
     expect(res.statusCode).toBe(200);
-    expect(res.json().source).toBe('insufficientData');
+    const body = res.json() as NodeNetResponse;
+    expect(body.source).toBe('insufficientData');
+    expect(body.interfaces).toEqual([
+      { name: 'nic2', kernels: ['nic2', 'enp1s0f0'], kind: 'nic', active: true },
+      { name: 'vmbr0', kernels: ['vmbr0'], kind: 'bridge', active: true },
+    ]);
+    await app2.close();
+  });
+});
+
+// --- nodeEndpoint (résolution nœud → endpoint) -------------------------------------------
+
+describe('nodeEndpoint', () => {
+  it('sans snapshot (getMulti null) → null', () => {
+    const ep = { id: 'ep1', source: {} } as unknown as EndpointRuntime;
+    const ctx = makeCtx('/tmp/nonexist', {}, undefined, [ep]);
+    expect(nodeEndpoint(ctx, makePoller(), 'proxmox')).toBeNull();
+  });
+
+  it('snapshot présent mais nœud absent → null', () => {
+    const ep = { id: 'ep1', source: {} } as unknown as EndpointRuntime;
+    const ctx = makeCtx('/tmp/nonexist', {}, undefined, [ep]);
+    expect(nodeEndpoint(ctx, makePoller(['autre']), 'proxmox')).toBeNull();
+  });
+
+  it('nœud connu par l’endpoint → cet endpoint', () => {
+    const ep = { id: 'ep1', source: {} } as unknown as EndpointRuntime;
+    const ctx = makeCtx('/tmp/nonexist', {}, undefined, [ep]);
+    expect(nodeEndpoint(ctx, makePoller(['proxmox']), 'proxmox')).toBe(ep);
   });
 });

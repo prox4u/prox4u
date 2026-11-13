@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { MetricsTimeframe, NodeNetResponse, VmNetPoint } from '@prox4u/shared';
+import type { MetricsTimeframe, NodeNetIface, NodeNetResponse, NodeNetRow, VmNetPoint } from '@prox4u/shared';
 import { fetchNodeNet } from '../../../core/api/apiClient';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Skeleton } from '../../../components/ui/skeleton';
@@ -16,12 +16,15 @@ const REFRESH_MS = 60_000;
 const CHART_H = 240;
 
 /**
- * Monitor nœud (Vue VM v2) — section « Réseau — par interface » : UN GRAPHIQUE
- * PAR INTERFACE HÔTE (NICs physiques + ponts vmbr*) — le trafic des tap des
- * VMs (vnet* / tap* / veth*) est exclu (montré dans le Monitor de chaque VM,
- * double-comptage sinon). Source : agent Telegraf (table net, 10 s) — pas
- * l'agrégat Proxmox du graphe « Réseau » ci-dessus. Nœud fixe (celui affiché),
- * timeframe piloté par la barre d'outils de l'onglet.
+ * Monitor nœud (Vue VM v2) — section « Réseau — par interface » : UNE CARTE
+ * GRAPHIQUE PAR INTERFACE DU NŒUD — même liste que la page Réseau de Proxmox
+ * (API PVE : ponts + cartes physiques, nom PVE dans le titre ; le joint avec
+ * les mesures se fait sur le nom noyau `altnames`). Le trafic des tap des VMs
+ * (vnet* / tap* / veth*) est exclu (montré dans le Monitor de chaque VM,
+ * double-comptage sinon). Source des mesures : agent Telegraf (table net,
+ * 10 s) — pas l'agrégat Proxmox du graphe « Réseau » ci-dessus. La LISTE des
+ * interfaces est dispo même avant le (re)déploiement de l'agent (état vide par
+ * carte). Nœud fixe (celui affiché), timeframe piloté par la barre d'outils.
  */
 export function NodeNetCard({ node, timeframe }: { node: string; timeframe: MetricsTimeframe }) {
   const { t } = useTranslation();
@@ -50,84 +53,63 @@ export function NodeNetCard({ node, timeframe }: { node: string; timeframe: Metr
     };
   }, [node, timeframe, tick]);
 
-  /** Base de temps commune (union des buckets) — trous = null dans chaque série. */
-  const times = useMemo(() => {
-    const s = new Set<number>();
-    for (const r of data?.rows ?? []) s.add(r.t);
-    return [...s].sort((a, b) => a - b);
-  }, [data]);
-
-  const ifaces = useMemo(() => {
-    const m = new Map<string, Map<number, VmNetPoint>>();
-    for (const r of data?.rows ?? []) {
-      const pts = m.get(r.iface) ?? new Map<number, VmNetPoint>();
-      pts.set(r.t, { t: r.t, inBps: r.inBps, outBps: r.outBps });
-      m.set(r.iface, pts);
-    }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
-  }, [data]);
-
-  /** Export CSV du timeframe affiché — mêmes conventions que le reste de l'onglet Monitor. */
-  const exportCsv = () => {
-    if (!data || data.rows.length === 0) return;
-    const header = ['timestamp', 'iface', 'in_bps', 'out_bps'];
-    const rows = [...data.rows]
-      .sort((a, b) => a.iface.localeCompare(b.iface, undefined, { numeric: true }) || a.t - b.t)
-      .map((r) => [
-        new Date(r.t * 1000).toISOString(),
-        r.iface,
-        r.inBps != null ? String(r.inBps) : '',
-        r.outBps != null ? String(r.outBps) : '',
-      ]);
-    downloadCsvFile(`node-net-${node}-${timeframe}-${new Date().toISOString().slice(0, 10)}.csv`, header, rows);
-  };
+  const ifaces = data?.interfaces ?? [];
+  const hasAnyPoints = (data?.rows.length ?? 0) > 0;
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-2">
-        <CardTitle title={t('overview.netif.hint')}>{t('overview.netif')}</CardTitle>
-        <button
-          onClick={exportCsv}
-          disabled={!data || data.rows.length === 0}
-          title={t('vm.mon.export')}
-          className="rounded-md border p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-        >
-          <Download className="h-3.5 w-3.5" />
-        </button>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        {loading && times.length === 0 ? (
-          <Skeleton className="w-full" style={{ height: CHART_H }} />
-        ) : (
-          <>
-            {ifaces.map(([iface, pts]) => (
-              <NodeNetIfaceChart key={iface} iface={iface} times={times} pts={pts} timeframe={timeframe} />
-            ))}
-            {data && !loading && times.length === 0 && (
-              <div className="pb-1 text-center text-[11px] text-muted-foreground">{t('overview.netif.none')}</div>
-            )}
-          </>
-        )}
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-3">
+      <p className="px-1 text-[11px] text-muted-foreground">{t('overview.netif.hint')}</p>
+      {loading && ifaces.length === 0 ? (
+        <Skeleton className="w-full" style={{ height: CHART_H }} />
+      ) : (
+        <>
+          {ifaces.map((iface) => (
+            <NodeNetIfaceCard
+              key={iface.name}
+              iface={iface}
+              rows={(data?.rows ?? []).filter((r) => iface.kernels.includes(r.iface))}
+              hasAnyPoints={hasAnyPoints}
+              node={node}
+              timeframe={timeframe}
+            />
+          ))}
+          {!loading && ifaces.length === 0 && (
+            <div className="py-6 text-center text-[11px] text-muted-foreground">{t('overview.netif.none')}</div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
-/** Graphe de débit d'UNE interface hôte : RX (trait plein) + TX (pointillé), octets/s. */
-function NodeNetIfaceChart({
+/**
+ * Carte graphique d'UNE interface du nœud : nom PVE (titre) + type/état
+ * actif, trafic RX (trait plein) / TX (pointillé) en octets/s, export CSV.
+ * État vide par carte : aucune mesure sur la fenêtre (agent hôte pas encore
+ * (re)déployé, interface inactive, ou nom noyau inconnu).
+ */
+function NodeNetIfaceCard({
   iface,
-  times,
-  pts,
+  rows,
+  hasAnyPoints,
+  node,
   timeframe,
 }: {
-  iface: string;
-  times: number[];
-  pts: Map<number, VmNetPoint>;
+  iface: NodeNetIface;
+  rows: NodeNetRow[];
+  hasAnyPoints: boolean;
+  node: string;
   timeframe: MetricsTimeframe;
 }) {
   const { t } = useTranslation();
   const theme = useTheme((s) => s.theme);
   const ct = chartTheme(theme);
+
+  const pts = useMemo(
+    () => new Map<number, VmNetPoint>(rows.map((r) => [r.t, { t: r.t, inBps: r.inBps, outBps: r.outBps }])),
+    [rows],
+  );
+  const times = useMemo(() => [...pts.keys()].sort((a, b) => a - b), [pts]);
 
   const option = useMemo(() => {
     if (times.length === 0) return null;
@@ -140,10 +122,48 @@ function NodeNetIfaceChart({
 
   const ref = useEChart(option);
 
+  const kind = t(`overview.netif.kind.${iface.kind}`);
+  const up = iface.active == null ? null : t(iface.active ? 'overview.netif.active' : 'overview.netif.inactive');
+  const subtitle = [kind, up].filter(Boolean).join(' \u00b7 ');
+
+  /** Export CSV de cette interface sur le timeframe affiché. */
+  const exportCsv = () => {
+    const header = ['timestamp', 'in_bps', 'out_bps'];
+    const body = [...rows]
+      .sort((a, b) => a.t - b.t)
+      .map((r) => [
+        new Date(r.t * 1000).toISOString(),
+        r.inBps != null ? String(r.inBps) : '',
+        r.outBps != null ? String(r.outBps) : '',
+      ]);
+    downloadCsvFile(`node-net-${node}-${iface.name}-${timeframe}-${new Date().toISOString().slice(0, 10)}.csv`, header, body);
+  };
+
   return (
-    <div>
-      <div className="px-1 pb-1 text-[11px] font-medium text-muted-foreground">{iface}</div>
-      <div ref={ref} style={{ height: CHART_H }} className="w-full" />
-    </div>
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <CardTitle title={t('overview.netif.hint')}>
+          {iface.name}
+          {subtitle ? <span className="ml-2 text-[11px] font-normal text-muted-foreground">{subtitle}</span> : null}
+        </CardTitle>
+        <button
+          onClick={exportCsv}
+          disabled={rows.length === 0}
+          title={t('vm.mon.export')}
+          className="rounded-md border p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <div className="py-6 text-center text-[11px] text-muted-foreground">
+            {hasAnyPoints ? t('overview.netif.ifaceNone') : t('overview.netif.none')}
+          </div>
+        ) : (
+          <div ref={ref} style={{ height: CHART_H }} className="w-full" />
+        )}
+      </CardContent>
+    </Card>
   );
 }

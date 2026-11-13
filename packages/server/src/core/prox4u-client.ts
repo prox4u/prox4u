@@ -380,9 +380,18 @@ export class Prox4uClient implements DataSource {
                 gateway: str(e.gateway) ?? null,
                 ports: (str(e.bridge_ports) ?? '').split(/\s+/).filter(Boolean),
                 comment,
+                altnames: altnamesOf(e),
+                active: num01(e.active),
               });
             } else {
-              nics.push({ name: str(e.iface) ?? '?', ip, subnet: subnetOf(ip), comment });
+              nics.push({
+                name: str(e.iface) ?? '?',
+                ip,
+                subnet: subnetOf(ip),
+                comment,
+                altnames: altnamesOf(e),
+                active: num01(e.active),
+              });
             }
           }
           return { node: n.node, online: true, ip: n.ip ?? null, nics, bridges };
@@ -677,6 +686,10 @@ interface RawNetIf {
   gateway?: string | null;
   bridge_ports?: string | null;
   comment?: string | null;
+  /** Noms alternatifs du device noyau (ex. `enx9c6b00dd220c` pour `nic0`). */
+  altnames?: string[];
+  /** UP/DOWN (0/1). */
+  active?: number;
 }
 
 /** Commentaires PVE : chaîne parfois multi-lignes avec \n final → on nettoie. */
@@ -684,6 +697,16 @@ function cleanComment(v: unknown): string | null {
   if (typeof v !== 'string') return null;
   const s = v.replace(/\s+$/g, '').trim();
   return s.length > 0 ? s : null;
+}
+
+/** PVE `altnames` (noms du device noyau) → tableau propre (vide si absent). */
+function altnamesOf(e: RawNetIf): string[] {
+  return Array.isArray(e.altnames) ? e.altnames.filter((a) => typeof a === 'string' && a.length > 0) : [];
+}
+
+/** PVE `active` (0/1) → boolean (null si champ absent). */
+function num01(v: unknown): boolean | null {
+  return v === 1 || v === 0 ? v === 1 : null;
 }
 
 function offlineNode(node: string, ip: string | undefined): PveNodeStatus {
