@@ -1,4 +1,4 @@
-import type { DatastoreHistoryResponse, MetricsTimeframe, NodeSensorsResponse, ProxmoxInventoryResponse, SensorHistoryResponse, VmFsResponse } from '@prox4u/shared';
+import type { DatastoreHistoryResponse, MetricsTimeframe, NodeSensorsResponse, ProxmoxInventoryResponse, SensorHistoryResponse, SmartHistoryResponse, VmFsResponse } from '@prox4u/shared';
 import type {
   CapacityResponse,
   MetricsResponse,
@@ -61,6 +61,17 @@ export function fetchStorageDatastoreHistory(endpoint: string, range: 'year' | '
 export function fetchSensorHistory(node: string, chip: string, feature: string, range: 'year' | 'month' = 'month'): Promise<SensorHistoryResponse> {
   return getJson<SensorHistoryResponse>(
     `/api/node-sensors-history?node=${encodeURIComponent(node)}&chip=${encodeURIComponent(chip)}&feature=${encodeURIComponent(feature)}&range=${range}`,
+  );
+}
+
+/**
+ * Historique de température d'un DISQUE SMART (table smart_device). Pas de
+ * seuil firmware (les disques n'ont pas de `temp_crit`) — le front trace la
+ * référence fixe de la table. 0 °C (pas de capteur) = exclu de la série.
+ */
+export function fetchSmartHistory(node: string, device: string, range: 'year' | 'month' = 'month'): Promise<SmartHistoryResponse> {
+  return getJson<SmartHistoryResponse>(
+    `/api/smart-device-history?node=${encodeURIComponent(node)}&device=${encodeURIComponent(device)}&range=${range}`,
   );
 }
 

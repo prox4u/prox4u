@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { NodeSensorsResponse, SensorHistoryResponse, SensorThresholdsResponse } from '@prox4u/shared';
+import type { NodeSensorsResponse, SensorHistoryResponse, SensorThresholdsResponse, SmartHistoryResponse } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
 import type { AppContext } from '../../core/poller.js';
-import { registerNodeSensors, registerSensorHistoryRoute, registerSensorThresholdRoutes } from './routes.js';
+import { registerNodeSensors, registerSensorHistoryRoute, registerSensorThresholdRoutes, registerSmartHistoryRoute } from './routes.js';
 import { SensorThresholdStore } from './thresholds.js';
 
 const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
@@ -295,6 +295,83 @@ describe('registerSensorHistoryRoute — historique des valeurs capteur', () => 
     expect(body.source).toBe('empty');
     expect(body.points).toEqual([]);
     expect(body.threshold).toBe(null);
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('registerSmartHistoryRoute — historique des valeurs disque SMART', () => {
+  // raw (buckets 10 min) et consolidated (buckets 15 min) : le raw prime à t égal,
+  // SAUF s'il est à 0 °C (pas de capteur) — il est alors exclu de la série.
+  const rawRows = [
+    { t: '2026-11-10T00:00:00Z', temp: 0 }, // 0 °C = pas de lecture → exclu
+    { t: '2026-11-10T00:10:00Z', temp: 38 },
+    { t: '2026-11-10T00:20:00Z', temp: 40 },
+  ];
+  const aggRows = [
+    { t: '2026-11-10T00:00:00Z', temp: 36 }, // seul au même `t` (le raw y est à 0)
+    { t: '2026-11-10T00:30:00Z', temp: 42 }, // uniquement consolidated
+  ];
+
+  async function boot(
+    raw: Record<string, string | number | null>[] = rawRows,
+    agg: Record<string, string | number | null>[] = aggRows,
+  ) {
+    const dir = mkdtempSync(path.join(tmpdir(), 'smart-history-'));
+    const ctx: AppContext = {
+      config: { authFile: path.join(dir, 'auth.json') } as AppContext['config'],
+      endpoints: [],
+      logger,
+      influx: {
+        enabled: true,
+        rawDb: 'raw',
+        aggDb: 'consolidated',
+        querySql: async (_db: string, sql: string) => {
+          if (sql.includes("INTERVAL '10 minutes'")) return raw;
+          if (sql.includes("INTERVAL '15 minutes'")) return agg;
+          return [];
+        },
+      } as unknown as AppContext['influx'],
+      auth: {} as AppContext['auth'],
+      hub: {} as AppContext['hub'],
+    };
+    const app = Fastify();
+    registerSmartHistoryRoute(app, ctx);
+    await app.ready();
+    return { app, dir };
+  }
+
+  it('merge raw + consolidated : raw prime, 0 °C (pas de capteur) exclu de la série', async () => {
+    const { app, dir } = await boot();
+    const res = await app.inject({ method: 'GET', url: '/api/smart-device-history?node=proxmox&device=nvme0n1&range=month' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as SmartHistoryResponse;
+    expect(body.source).toBe('influx');
+    expect(body.points).toEqual([
+      { time: influxTsToUnix('2026-11-10T00:00:00Z'), temp: 36 }, // le raw y est à 0 °C → consolidé conservé
+      { time: influxTsToUnix('2026-11-10T00:10:00Z'), temp: 38 },
+      { time: influxTsToUnix('2026-11-10T00:20:00Z'), temp: 40 },
+      { time: influxTsToUnix('2026-11-10T00:30:00Z'), temp: 42 }, // consolidated seul
+    ]);
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('identité disque incomplète (device absent) → 400', async () => {
+    const { app, dir } = await boot();
+    const res = await app.inject({ method: 'GET', url: '/api/smart-device-history?node=proxmox' });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('aucun point → source empty (disque sans sonde / nœud éteint)', async () => {
+    const { app, dir } = await boot([], []);
+    const res = await app.inject({ method: 'GET', url: '/api/smart-device-history?node=proxmox&device=sda' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as SmartHistoryResponse;
+    expect(body.source).toBe('empty');
+    expect(body.points).toEqual([]);
     await app.close();
     rmSync(dir, { recursive: true, force: true });
   });

@@ -138,6 +138,20 @@ export interface SensorHistoryResponse {
   source: 'influx' | 'empty';
 }
 
+/**
+ * Réponse GET /api/smart-device-history — historique de température d'un DISQUE
+ * (table `smart_device`, colonne `temp_c`). Pas de seuil firmware : les disques
+ * n'exposent pas de `temp_crit` — le front trace la référence fixe 80 °C (convention
+ * de la table SMART). Les points à 0 °C (pas de capteur) sont exclus.
+ */
+export interface SmartHistoryResponse {
+  node: string;
+  device: string;
+  range: 'month' | 'year';
+  points: SensorHistoryPoint[];
+  source: 'influx' | 'empty';
+}
+
 /** Clé d'identification d'un capteur : `node/chip/feature` (aucun `/` à l'intérieur). */
 export function sensorKey(r: { node: string; chip: string; feature: string }): string {
   return `${r.node}/${r.chip}/${r.feature}`;

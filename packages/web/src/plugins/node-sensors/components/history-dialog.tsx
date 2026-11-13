@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { EChartsOption, LineSeriesOption } from 'echarts';
-import { sensorKey, type SensorHistoryResponse, type SensorReading } from '@prox4u/shared';
-import { fetchSensorHistory } from '../../../core/api/apiClient';
+import { sensorKey, type SensorHistoryPoint, type SensorHistoryResponse, type SensorReading, type SmartDevice } from '@prox4u/shared';
+import { fetchSensorHistory, fetchSmartHistory } from '../../../core/api/apiClient';
 import { useEChart } from '../../../hooks/use-echart';
 import { chartTheme } from '../../../lib/chart-theme';
 import { cn } from '../../../lib/utils';
@@ -13,25 +13,74 @@ import { Skeleton } from '../../../components/ui/skeleton';
 type Range = 'month' | 'year';
 
 /**
- * Fenêtre « Historique des valeurs » d'un capteur (température) — ouverte depuis
- * l'icône de la table « Capteurs ». Les mesures Telegraf (10 s) sont bucketées
- * côté serveur (raw 10 min / 31 j + consolidated 15 min / 1 an) ; les **trous**
- * de la courbe = nœud sans mesure (éteint) — ils restent visibles, pas comblés.
+ * Cible de la fenêtre « Historique des valeurs » : un capteur (table `sensors`,
+ * seuils effectif/firmware) ou un disque SMART (table `smart_device`, référence
+ * critique fixe 80 °C de la table).
  */
-export function SensorHistoryDialog({ sensor, onClose }: { sensor: SensorReading | null; onClose: () => void }) {
+export type HistoryTarget =
+  | { kind: 'sensor'; sensor: SensorReading }
+  | { kind: 'smart'; device: SmartDevice };
+
+/** Identité stable de la cible — clé de fetch + en-tête de la fenêtre. */
+export function historyTargetKey(target: HistoryTarget): string {
+  return target.kind === 'sensor'
+    ? sensorKey(target.sensor)
+    : `${target.device.node}/${target.device.device}`;
+}
+
+/** Ligne de référence à tracer sur le graphe (seuil ou seuil firmware). */
+interface HistoryMarkLine {
+  value: number;
+  color: string;
+  /** `true` = pointillés rouges (seuil critique), `false` = petits pointillés gris (référence). */
+  primary: boolean;
+  label: string;
+}
+
+/** Réponse normalisée pour le graphe (indifférent capteur / disque). */
+interface HistoryData {
+  points: SensorHistoryPoint[];
+  markLines: HistoryMarkLine[];
+}
+
+/**
+ * Fenêtre « Historique des valeurs » — ouverte depuis l'icône des tables
+ * « Capteurs » et « Santé disques (SMART) ». Les mesures Telegraf (10 s) sont
+ * bucketées côté serveur (raw 10 min / 31 j + consolidated 15 min / 1 an) ;
+ * les **trous** de la courbe = nœud sans mesure (éteint) — ils restent
+ * visibles, pas comblés.
+ */
+export function HistoryDialog({ target, onClose }: { target: HistoryTarget | null; onClose: () => void }) {
   const { t } = useTranslation();
+  // NB : `chartTheme()` renvoie un objet NOUVEAU à chaque appel — on dépend de
+  // `theme` (string stable) dans l'effet, jamais de l'objet (boucle de re-fetch).
+  const theme = useTheme((s) => s.theme);
   const [range, setRange] = useState<Range>('month');
-  const [data, setData] = useState<SensorHistoryResponse | null>(null);
+  const [data, setData] = useState<HistoryData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!sensor) return;
+    if (!target) return;
     let alive = true;
     setLoading(true);
     setError(null);
     setData(null);
-    fetchSensorHistory(sensor.node, sensor.chip, sensor.feature, range)
+
+    const axisLabel = chartTheme(theme).axisLabel;
+    const load: Promise<HistoryData> =
+      target.kind === 'sensor'
+        ? fetchSensorHistory(target.sensor.node, target.sensor.chip, target.sensor.feature, range).then((d) => ({
+            points: d.points,
+            markLines: sensorMarkLines(d, t, axisLabel),
+          }))
+        : fetchSmartHistory(target.device.node, target.device.device, range).then((d) => ({
+            points: d.points,
+            // Pas de temp_crit pour les disques : référence critique fixe de la table.
+            markLines: [{ value: 80, color: '#ef4444', primary: true, label: t('nodeSensors.history.smartThreshold') }],
+          }));
+
+    load
       .then((d) => {
         if (alive) setData(d);
       })
@@ -44,20 +93,20 @@ export function SensorHistoryDialog({ sensor, onClose }: { sensor: SensorReading
     return () => {
       alive = false;
     };
-  }, [sensor, range]);
+  }, [target, range, t, theme]);
 
-  const open = sensor !== null;
+  const open = target !== null;
   const last = data && data.points.length > 0 ? data.points[data.points.length - 1] : null;
 
   return (
-    <Dialog open={open} onClose={onClose} wide title={sensor ? t('nodeSensors.history.title') : ''}>
-      {sensor && (
+    <Dialog open={open} onClose={onClose} wide title={target ? t('nodeSensors.history.title') : ''}>
+      {target && (
         <div className="space-y-3">
-          {/* En-tête : identité du capteur + dernière valeur + période */}
+          {/* En-tête : identité de la cible + dernière valeur + période */}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
-              <div className="truncate font-mono text-xs" title={sensorKey(sensor)}>
-                {sensorKey(sensor)}
+              <div className="truncate font-mono text-xs" title={historyTargetKey(target)}>
+                {historyTargetKey(target)}
               </div>
               {last && (
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
@@ -88,7 +137,7 @@ export function SensorHistoryDialog({ sensor, onClose }: { sensor: SensorReading
           ) : error ? (
             <p className="text-xs text-crit">{t('nodeSensors.history.error', { msg: error })}</p>
           ) : data && data.points.length > 0 ? (
-            <SensorHistoryChart data={data} />
+            <HistoryChart points={data.points} markLines={data.markLines} />
           ) : (
             <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">
               {t('nodeSensors.history.empty')}
@@ -102,14 +151,26 @@ export function SensorHistoryDialog({ sensor, onClose }: { sensor: SensorReading
   );
 }
 
-/** Graphe de température + lignes de référence des seuils (effectif, firmware si perso). */
-function SensorHistoryChart({ data }: { data: SensorHistoryResponse }) {
+/** Lignes de référence d'un capteur : seuil effectif + firmware (si perso). */
+function sensorMarkLines(d: SensorHistoryResponse, t: (key: string) => string, axisLabel: string): HistoryMarkLine[] {
+  const lines: HistoryMarkLine[] = [];
+  if (d.threshold !== null) {
+    lines.push({ value: d.threshold, color: '#ef4444', primary: true, label: `${t('nodeSensors.thresholdEffective')} ${d.threshold} °C` });
+  }
+  if (d.thresholdCustom && d.thresholdFirmware !== null) {
+    lines.push({ value: d.thresholdFirmware, color: axisLabel, primary: false, label: `${t('nodeSensors.thresholdFirmware')} ${d.thresholdFirmware} °C` });
+  }
+  return lines;
+}
+
+/** Graphe de température + lignes de référence (seuils capteur / référence disque). */
+function HistoryChart({ points, markLines }: { points: SensorHistoryPoint[]; markLines: HistoryMarkLine[] }) {
   const { t } = useTranslation();
   const theme = useTheme((s) => s.theme);
   const ct = chartTheme(theme);
 
   const option = useMemo<EChartsOption>(() => {
-    const seriesData = data.points.map((p) => [p.time * 1000, p.temp]);
+    const seriesData = points.map((p) => [p.time * 1000, p.temp]);
     const series: LineSeriesOption[] = [
       {
         name: t('nodeSensors.temp'),
@@ -134,43 +195,24 @@ function SensorHistoryChart({ data }: { data: SensorHistoryResponse }) {
             ],
           },
         },
-        // Lignes de référence : seuil effectif (rouge pointillés) + firmware
-        // (gris) quand un seuil perso le remplace.
+        // Lignes de référence : seuil critique (rouge pointillés) + référence
+        // secondaire (gris petits pointillés) — capteurs : effectif + firmware ;
+        // disques : seule la référence critique fixe 80 °C.
         markLine:
-          data.threshold !== null || (data.thresholdCustom && data.thresholdFirmware !== null)
+          markLines.length > 0
             ? {
                 silent: true,
                 symbol: 'none',
-                data: [
-                  ...(data.threshold !== null
-                    ? [
-                        {
-                          yAxis: data.threshold,
-                          lineStyle: { type: 'dashed' as const, color: '#ef4444', width: 1.5 },
-                          label: {
-                            formatter: `${t('nodeSensors.thresholdEffective')} ${data.threshold} °C`,
-                            color: '#ef4444',
-                            fontSize: 10,
-                            position: 'insideEndTop' as const,
-                          },
-                        },
-                      ]
-                    : []),
-                  ...(data.thresholdCustom && data.thresholdFirmware !== null
-                    ? [
-                        {
-                          yAxis: data.thresholdFirmware,
-                          lineStyle: { type: 'dotted' as const, color: ct.axisLabel, width: 1 },
-                          label: {
-                            formatter: `${t('nodeSensors.thresholdFirmware')} ${data.thresholdFirmware} °C`,
-                            color: ct.axisLabel,
-                            fontSize: 10,
-                            position: 'insideEndBottom' as const,
-                          },
-                        },
-                      ]
-                    : []),
-                ],
+                data: markLines.map((l, i) => ({
+                  yAxis: l.value,
+                  lineStyle: { type: l.primary ? ('dashed' as const) : ('dotted' as const), color: l.color, width: l.primary ? 1.5 : 1 },
+                  label: {
+                    formatter: l.label,
+                    color: l.color,
+                    fontSize: 10,
+                    position: i === 0 ? ('insideEndTop' as const) : ('insideEndBottom' as const),
+                  },
+                })),
               }
             : undefined,
       },
@@ -201,7 +243,7 @@ function SensorHistoryChart({ data }: { data: SensorHistoryResponse }) {
       },
       series,
     };
-  }, [data, ct, t]);
+  }, [points, markLines, ct, t]);
 
   const ref = useEChart(option);
   return <div ref={ref} className="h-72 w-full" />;

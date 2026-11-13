@@ -1,6 +1,6 @@
 ---
 name: node-sensors
-description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds), ET historique des valeurs d'un capteur (GET /api/node-sensors-history, fenêtre modal avec graphe ECharts depuis l'icône de la table capteurs). Use when working on the node-sensors plugin, the /api/node-sensors or /api/node-sensors-history routes, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, the sensor value-history dialog, custom sensor thresholds, or the « Seuils capteurs » admin tab.
+description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds), ET historique des valeurs d'un capteur OU d'un disque SMART (GET /api/node-sensors-history, GET /api/smart-device-history, fenêtre modal « Historique des valeurs » avec graphe ECharts depuis l'icône des tables capteurs et SMART). Use when working on the node-sensors plugin, the /api/node-sensors, /api/node-sensors-history or /api/smart-device-history routes, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, the value-history dialog (sensors & SMART disks), custom sensor thresholds, or the « Seuils capteurs » admin tab.
 ---
 
 # Node Sensors — métriques locales Telegraf
@@ -43,19 +43,19 @@ base `consolidated` (∞)
 
 | Fichier | Rôle |
 |---|---|
-| `packages/shared/src/node-sensors.ts` | Types partagés : `SmartDevice`, `SensorReading`, `ZfsStatus`, `FailedUnit`, `NodeSensorsResponse` |
-| `packages/server/src/modules/nodesensors/routes.ts` | `GET /api/node-sensors` — cache 1 min, **try/catch par section** (une table absente ne fait pas perdre les autres), dernier point par clé · `GET /api/node-sensors-history` — série de température d'un capteur (raw 10 min + consolidated 15 min, fusion, seuils, cache 5 min) |
+| `packages/shared/src/node-sensors.ts` | Types partagés : `SmartDevice`, `SensorReading`, `ZfsStatus`, `FailedUnit`, `NodeSensorsResponse`, `SensorHistoryPoint` / `SensorHistoryResponse` / `SmartHistoryResponse` (historiques, §3.2) |
+| `packages/server/src/modules/nodesensors/routes.ts` | `GET /api/node-sensors` — cache 1 min, **try/catch par section** (une table absente ne fait pas perdre les autres), dernier point par clé · `GET /api/node-sensors-history` — série de température d'un capteur (raw 10 min + consolidated 15 min, fusion, seuils, cache 5 min) · `GET /api/smart-device-history` — idem pour un disque SMART (`smart_device.temp_c`, sans seuil, 0 °C exclus, cache 5 min) — les deux partagent le helper `mergedTempBuckets` |
 | `packages/server/src/modules/nodesensors/index.ts` | Enregistre le module |
 | `packages/web/src/plugins/node-sensors/index.ts` | Manifest `id:'node-sensors'`, route `/node-sensors`, menu order 70 (icône `Thermometer`) |
-| `packages/web/src/plugins/node-sensors/pages/node-sensors.tsx` | Page 4 tableaux + `MultiFilter` (filtres colonnes multi-choix, position fixe) + filtre des sections. Le tableau capteurs colore la température selon le **seuil effectif** (perso sinon firmware) via `tempTone`/`effectiveSensorThreshold` (shared) + **icône graphique par température** (icône `Activity`) ouvrant l'historique des valeurs (`SensorHistoryDialog`) |
-| `packages/web/src/plugins/node-sensors/components/sensor-history-dialog.tsx` | Fenêtre « Historique des valeurs » d'un capteur : fetch `fetchSensorHistory(node, chip, feature, range)`, toggle 31 j / 1 an, graphe ECharts (couleur `ct.temp`, `connectNulls: false` → **les trous restent visibles**), `markLine` seuil effectif (+ firmware en pointillé gris si seuil perso), dernière mesure, état vide / erreur / chargement |
+| `packages/web/src/plugins/node-sensors/pages/node-sensors.tsx` | Page 4 tableaux + `MultiFilter` (filtres colonnes multi-choix, position fixe) + filtre des sections. Le tableau capteurs colore la température selon le **seuil effectif** (perso sinon firmware) via `tempTone`/`effectiveSensorThreshold` (shared). **Icône graphique `Activity`** sur la cellule Temp. des tables capteurs ET SMART (SMART : seulement si lecture ≠ 0 °C) ouvrant la fenêtre générique `HistoryDialog` (état `historyTarget: HistoryTarget \| null`) |
+| `packages/web/src/plugins/node-sensors/components/history-dialog.tsx` | Fenêtre « Historique des valeurs » **générique** — cible `HistoryTarget = { kind:'sensor'; sensor } \| { kind:'smart'; device }` : fetch `fetchSensorHistory` / `fetchSmartHistory`, toggle 31 j / 1 an, graphe ECharts (couleur `ct.temp`, `connectNulls: false` → **les trous restent visibles**), lignes de référence `markLine` (capteur : seuil effectif rouge + firmware gris si perso ; SMART : ligne fixe **80 °C** critique), dernière mesure, état vide / erreur / chargement. **Piège** : `chartTheme()` renvoie un objet NOUVEAU à chaque appel — les deps de l'effet de fetch doivent être `theme` (string stable), jamais l'objet `ct` (boucle infinie de re-fetch) |
 | `packages/web/src/components/ui/dialog.tsx` | Modal léger zéro-dépendance (overlay sombre + panneau centré, fermeture X / overlay / Échap, scroll body gelé) — réutilisable |
 | `packages/shared/src/node-sensors.ts` | Types partagés + fonctions pures testées : `sensorKey`, `effectiveSensorThreshold`, `tempTone`, `smartHealthTone` (tri-state SMART), `smartTempDisplay` (0 °C = pas de lecture) |
 | `packages/server/src/modules/nodesensors/thresholds.ts` | `SensorThresholdStore` — data/sensor-thresholds.json (écriture atomique tmp+rename, chmod 600, fail-fast si corrompu) |
 | `packages/web/src/components/admin/sensor-thresholds.tsx` | Onglet Administration « Seuils capteurs » (tableau nœud/puce/capteur/temp/seuil firmware RO/seuil perso input clampé + reset par ligne + tout) |
 | `packages/web/src/plugins/node-sensors/lib/sensor-thresholds-api.ts` | Client API /api/admin/sensor-thresholds (list/save/resetAll/resetOne) |
 | `packages/server/src/core/influx-consolidator.ts` | Consolidation 15 min des 4 tables Telegraf |
-| `packages/web/src/core/api/apiClient.ts` | `fetchNodeSensors()` · `fetchSensorHistory(node, chip, feature, range)` |
+| `packages/web/src/core/api/apiClient.ts` | `fetchNodeSensors()` · `fetchSensorHistory(node, chip, feature, range)` · `fetchSmartHistory(node, device, range)` |
 | `deploiement/60-telegraf-nodes.sh` | Déploiement de l'agent Telegraf sur un nœud (bare-metal, idempotent, `--dry-run`) |
 
 ## 3. Endpoint API
@@ -82,11 +82,17 @@ base `consolidated` (∞)
 `DELETE /api/admin/sensor-thresholds` → tout réinitialiser · `DELETE /api/admin/sensor-thresholds/:node/:chip/:feature` → réinitialiser un capteur.
 Toutes les routes sont sous `/api/admin/*` → **guard rôle admin** (skill `general`). Le firmware est lu dans InfluxDB (`sensors.temp_crit`) — le store ne le connaît pas.
 
-### 3.2 Historique des valeurs d'un capteur — `GET /api/node-sensors-history`
+### 3.2 Historique des valeurs (capteurs + disques SMART)
 
-`?node=&chip=&feature=&range=month|year` (défaut `month` ; les 3 identifiants **requis**, longueur
-≤ 128 → sinon **400** via `reply.code(400).send` — pas `return { statusCode }`, ne fait rien en
-Fastify 5). → `SensorHistoryResponse` :
+Deux endpoints, **même pattern** (helper partagé `mergedTempBuckets` dans `routes.ts`) :
+
+- `GET /api/node-sensors-history?node=&chip=&feature=&range=month|year` — table `sensors`, colonne `temp_input`
+- `GET /api/smart-device-history?node=&device=&range=month|year` — table `smart_device`, colonne `temp_c`
+
+`range` défaut `month` ; l'identité **requise** (capteur : `node`+`chip`+`feature`, disque :
+`node`+`device`), longueur ≤ 128 → sinon **400** via `reply.code(400).send` (`bad-sensor` /
+`bad-device`) — pas `return { statusCode }`, ne fait rien en Fastify 5. Réponses :
+`SensorHistoryResponse` (ci-dessous) / `SmartHistoryResponse { node, device, range, points, source }`.
 
 ```ts
 {
@@ -108,8 +114,14 @@ Fastify 5). → `SensorHistoryResponse` :
 - **Seuils** : `threshold` = perso (`store.getThresholds()[sensorKey]`) sinon firmware
   (dernier `temp_crit` non nul, fenêtre 1 h — le firmware ne bouge pas). Capteur sans `temp_crit`
   (ex. `tctl` de `k10temp`) → `threshold: null`, pas de ligne de référence.
-- **Cache 5 min** par clé `node/chip/feature:range`. Identité échappée en SQL par `sqlStr`
-  (guillemets simples doublés) — les valeurs viennent de la query string.
+- **Cache 5 min** par clé `node/chip/feature:range` (capteurs) / `node/device:range` (SMART).
+  Identité échappée en SQL par `sqlStr` (guillemets simples doublés) — les valeurs viennent de
+  la query string.
+- **SMART** (`/api/smart-device-history`) : **pas de seuil** — les disques n'exposent pas de
+  `temp_crit` (le front trace la référence fixe **80 °C** critique de la table, i18n
+  `nodeSensors.history.smartThreshold`) et les points à **0 °C sont exclus** (prédicat
+  `keep(t) => t > 0` dans `mergedTempBuckets` — 0 = pas de sonde, cf. `smartTempDisplay` ;
+  sinon un disque sans capteur tracerait une ligne plate à 0 °C).
 
 - `SmartDevice` : `device`, `model`, `serialNo`, `healthOk` (**tri-state** `boolean | null` —
   `true`=PASSED, `false`=FAILED, `null`=**inconnu** : disque virtuel / volume RAID / état
@@ -145,13 +157,15 @@ Fastify 5). → `SensorHistoryResponse` :
 - **Filtre des sections** : dropdown multi-choix (option « Toutes ») qui montre/masque les 4
   tableaux.
 - **Filtres colonnes** : un `MultiFilter` par colonne de statut (nœud, device, santé, …).
-- **Historique des valeurs** : chaque température de la table capteurs porte une **icône
-  graphique** (lucide `Activity`) → ouvre `SensorHistoryDialog` (modal `ui/dialog.tsx`) : identité
-  `node/chip/feature`, dernière mesure, toggle **31 j / 1 an** (style du range stockage), graphe
-  ECharts (couleur thème `ct.temp`, aire dégradée, `connectNulls: false` → **les trous = nœud sans
-  mesure (éteint) restent visibles, jamais comblés**), `markLine` seuil effectif (rouge pointillés)
-  + seuil firmware (gris) si perso, note explicative des trous. i18n `nodeSensors.history.*` /
-  `nodeSensors.range.*`.
+- **Historique des valeurs** : chaque température des tables capteurs **et SMART** porte une
+  **icône graphique** (lucide `Activity` ; SMART : seulement si lecture ≠ 0 °C) → ouvre
+  `HistoryDialog` (modal `ui/dialog.tsx`, générique capteur/disque) : identité
+  `node/chip/feature` ou `node/device`, dernière mesure, toggle **31 j / 1 an** (style du range
+  stockage), graphe ECharts (couleur thème `ct.temp`, aire dégradée, `connectNulls: false` →
+  **les trous = nœud sans mesure (éteint) restent visibles, jamais comblés**), `markLine` —
+  capteur : seuil effectif (rouge pointillés) + seuil firmware (gris) si perso ; SMART : ligne
+  critique fixe **80 °C** (pas de `temp_crit` pour les disques), note explicative des trous.
+  i18n `nodeSensors.history.*` / `nodeSensors.range.*`.
 - **`MultiFilter`** : dropdown avec checkboxes, valeurs extraites des données, **option « Tous »**
   en haut (coche = tout sélectionner, décoche = tout libérer). **`position:fixed`** calculé depuis
   `getBoundingClientRect()` du bouton (pas d'overflow du tableau), **fond opaque** `#0f1117`,
