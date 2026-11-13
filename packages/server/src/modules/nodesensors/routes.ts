@@ -179,13 +179,19 @@ export function registerNodeSensors(app: FastifyInstance, ctx: AppContext, store
     }
 
     // --- Unités systemd en échec ---
+    // SEULES les vraies alertes : active='failed' (unité échouée) ou load='error'
+    // (fichier unit illisible/erroné). On NE filtre PAS sur sub='dead' : « inactive
+    // (dead) » est l'état de repos NORMAL des one-shots (terminés au boot / par
+    // timer), des unités à la demande (rescue, hibernate…) et des non-installées
+    // (load='not-found') — avec sub='dead', la section serait noyée (~170 lignes
+    // par nœud d'états sains, le vrai échec enfoui).
     let failedUnits: FailedUnit[] = [];
     try {
       const unitRows = await ctx.influx!.querySql<Record<string, string | number | null>>(
         db,
         `SELECT node, name, active, sub, load, time
          FROM systemd_units WHERE time >= now() - INTERVAL '1h'
-           AND (active = 'failed' OR load = 'error' OR sub = 'dead')
+           AND (active = 'failed' OR load = 'error')
          ORDER BY time DESC`,
       );
       const unitMap = new Map<string, FailedUnit>();

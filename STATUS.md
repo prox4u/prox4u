@@ -1262,6 +1262,55 @@ sont attendus** (nœuds éteints) — le graphe les montre tels quels, jamais co
 
 ---
 
+## ✅ Fait — « Unités systemd en échec » : seules les vraies alertes (filtre `active=failed` / `load=error`)
+
+Question utilisateur (2026-11-13) : dans « Unités systemd en échec » (297 lignes), **ces services
+existent-ils ? pourquoi « inactif » ?** — analyse faite sur les vrais nœuds (API prox4u + API PVE +
+InfluxDB) puis correction du filtre (choix utilisateur : vraies alertes seulement).
+
+### Constats (environnement de test, 3 nœuds PVE réels)
+- **Source** : Telegraf sur chaque nœud, D-Bus `ListUnits()` (toutes les unités connues du manager,
+  ~170/nœud), 10 s. L'ancien filtre `active='failed' OR load='error' OR sub='dead'` confondait
+  « ne tourne pas » et « en échec » : **296 des 297 lignes étaient des états sains**.
+- **225 `inactive (dead)` = état de repos NORMAL** : one-shots (exécutés au boot / par timer :
+  apt-daily, logrotate, fstrim, systemd-*, initrd-*, xfs_scrub_all, zfs-import-cache…), unités à la
+  demande (rescue, hibernate, getty-static, console-getty), services non activés dans cette config.
+  Recoupement inter-nœuds (preuve que c'est de la configuration, pas un défaut) : `corosync`
+  running sur ProxSite1/2 (cluster HA 2 nœuds) / dead sur proxmox (standalone) ; `iscsid`+
+  `open-iscsi` running sur ProxSite1/2 (consommateurs des LUNs iSCSI) / dead sur proxmox ;
+  `smartmontools` running sur proxmox / dead sur ProxSite1/2.
+- **71 `load='not-found'` = n'existent PAS sur le nœud** (pas de fichier unit) : services
+  « alternatives » non installés sur PVE (chrony au lieu de ntp/ntpsec/openntpd, ifupdown2 au lieu
+  de NetworkManager, journal au lieu de syslog, headless sans plymouth…). Ils apparaissent car
+  `ListUnits()` renvoie aussi les unités référencées par d'autres unités dont le fichier a disparu
+  (vestiges de provisioning — jeu de 23 identiques sur les 3 nœuds, stables depuis le 06/11,
+  persistant au travers des redémarrages = image commune).
+- **Le seul vrai échec : `openipmi.service` sur `proxmox`** (active=failed) : démon openIPMI (KCS,
+  `/dev/ipmi0`) sur un nœud Threadripper PRO sans BMC IPMI exploitable (env. de test). Cause exacte
+  lisible uniquement sur le nœud : `journalctl -u openipmi` (tokens `supervision` sans privilège
+  `Sys.Syslog` → endpoint PVE `/journal` en 403).
+- **Asymétrie du vieux filtre** : 113 one-shots avec `RemainAfterExit=yes` sont `active (exited)`
+  (non listés) alors que leurs semblables sans l'option sont listés — le contenu dépendait des
+  options du fichier unit, pas de la santé des services.
+
+### Correction
+- **Filtre** (`modules/nodesensors/routes.ts`) : `AND (active = 'failed' OR load = 'error')` —
+  **seules les vraies alertes** (unité échouée / fichier unit illisible). Plus de `sub='dead'`.
+  Test sur le contrat du SQL (contient failed/error, ne contient plus `sub = 'dead'`).
+- **Web** : note explicative sous le titre de la section (i18n `nodeSensors.failedUnitsHint` fr/en)
+  — l'utilisateur comprend pourquoi la liste est courte.
+- **Docs** : skill `node-sensors` (commentaire `FailedUnit`, table InfluxDB + note ⚠️ sémantique
+  des états systemd_units) + cette section.
+
+### Vérifications effectuées
+- typecheck (shared/server/web) → tests (**144 server** = 143 + 1 contrat SQL ; **259 shared**
+  verts) → `pnpm build` → `./server.sh restart`.
+- **API live** : `/api/node-sensors` → `failedUnits` = **1** (`openipmi.service` sur proxmox),
+  au lieu de 297.
+- **Navigateur** (fresh) : section 1 ligne + note, 0 erreur console.
+
+---
+
 ## ⏳ À faire
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
