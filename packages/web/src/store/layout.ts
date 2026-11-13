@@ -9,7 +9,9 @@ export type { Layout, LayoutItem };
  * DEFAULT_LAYOUT (nouveaux blocs, restructuration). Les layouts persistés d'une
  * version antérieure sont alors jetés au rechargement (retour aux défauts).
  */
-export const LAYOUT_VERSION = 3;
+/** v4 : la rangée système de la Vue d'ensemble ne contient plus que la carte « Système »
+ *  (I/O disques + CPU par cœur déplacés dans le Monitor nœud de la Vue VM v2). */
+export const LAYOUT_VERSION = 4;
 
 /** Layout initial = design validé (graphes ressources en tête, grille 12 colonnes). */
 export const DEFAULT_LAYOUT: Layout = [

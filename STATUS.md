@@ -1400,6 +1400,61 @@ uptime) + **P1** (I/O disques par device physique) + **P2** (CPU par cœur) et M
 
 ---
 
+## ✅ Fait — I/O disques + CPU par cœur : de la Vue d'ensemble au Monitor nœud (Vue VM v2) + carte Système dupliquée (livré, validé navigateur — **commité**)
+
+Arbitrage utilisateur (2026-11-13, suite de la livraison précédente) : les cartes
+**« I/O disques (nœud) »** et **« CPU par cœur »** sortent de la Vue d'ensemble pour aller
+dans l'onglet **Monitor du nœud** (Vue VM v2 — le nœud est sélectionnable dans l'arbre comme
+une VM) ; la carte **« Système — par nœud »** reste dans la Vue d'ensemble (seule vue
+vraiment « parc ») ET est dupliquée en version mono-nœud (chips) dans le Monitor.
+
+### Vue d'ensemble (`overview.tsx`)
+- Plus que la carte « Système — par nœud » (tableau cross-node) — **pleine largeur w=12**
+  sur la rangée y=5. `LAYOUT_VERSION` 3→4 (layouts persistés antérieurs jetés).
+- Le hook `useNodeSystem` (1 fetch `/api/node-system` / 60 s) reste pour la carte.
+
+### Monitor nœud (`node-monitor.tsx`) — 3 nouvelles sections, 2 sources indépendantes
+- **Têtes d'onglet** : `NodeSystemCard` (nouveau, `vm-view_v2/components/node-system-card.tsx`)
+  — chips du nœud affiché : load 1/5/15 teinté vs cœurs, cœurs, iowait, swap, uptime
+  (mêmes seuils que la carte cross-node, dupliqués en fonctions pures locales).
+- **Après le graphe CPU** : `CpuCoresCard` (déplacé) — usage courant par cœur, nœud fixe
+  (prop `row`), **hauteur dynamique** (≥240 px, sinon 18 px/cœur — 432 px sur 24 cœurs,
+  240 px sur 6), export CSV.
+- **Après le graphe rootfs** : `NodeDiskioCard` (déplacé) — I/O par device physique, nœud
+  fixe + **timeframe piloté par la barre d'outils de l'onglet** (pas de switcher local),
+  export CSV.
+- Sources **indépendantes** : le fetch `/api/node-system` (tick 60 s, cache 60 s serveur)
+  est ajouté au node-monitor ; si la série PVE est vide (nœud trop récent/hors ligne), les
+  sections Telegraf restent montées (états vides propres), et inversement.
+- **Aucun changement serveur** (`/api/node-system` + `/api/node-diskio` existent déjà).
+
+### Composants
+- `git mv` des 2 cartes `plugins/hypervision/components/` → `plugins/vm-view_v2/components/`
+  (aucun import inter-plugins dans le codebase — déplacer plutôt qu'importer).
+- i18n : 2 nouvelles clés `vm.node.system` / `vm.node.system.hint` (fr/en) ; les sections
+  graphiques réutilisent `overview.diskio.*` / `overview.cpubars.*` (une seule source de
+  wording).
+
+### Vérifications effectuées
+- shared build → typecheck (3 paquets) → tests (**270 shared + 155 server**) → `pnpm build`
+  → `./server.sh restart` — tout vert.
+- **Navigateur fresh** (admin) : Vue d'ensemble = carte Système seule (3 nœuds réels,
+  w=12), 3 graphes ressources, 0 erreur console nouvelle ; Monitor nœud `proxmox`
+  (24 cœurs) = 7 sections dans l'ordre (Système → CPU → **CPU par cœur** → RAM → rootfs →
+  **I/O disques** → Réseau), 7 instances ECharts initialisées avec données réelles
+  (load 7.18/24 cœurs, cpubars 432 px, nvme0n1/nvme1n1/sda) ; le click « 7j » sur la barre
+  d'outils a déclenché `/api/node-diskio?node=proxmox&timeframe=week` ✓ ; Monitor nœud
+  `ProxSite1` (6 cœurs) = idem, cpubars 240 px (hauteur dynamique ✓) ; 0 warning console
+  (aucune clé i18n manquante).
+
+### Pièges rencontrés
+- **Nom ambiguït dans l'arbre** : une VM #104 « ProxSite1 » existe sous le nœud `proxmox`
+  ET un nœud « ProxSite1 » dans le cluster ClusterProxmox — le clic texte seul ouvre la VM
+  ; le nœud se distingue par son compteur « 0/1 » dans l'arbre. (Aucun bug : l'ID de nœud
+  vs de VM sont distincts dans la data.)
+
+---
+
 ## ⏳ À faire
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)

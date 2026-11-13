@@ -44,7 +44,7 @@ hypervision/
 ## 3. OverviewPage (`/`) — parc multi-endpoints
 - **Titre de page** (convention §5 du skill `general`) : `h1` « Vue d'ensemble » (`nav.overview`) + ligne d'aide (`overview.hint`) en tête, au-dessus de la grille.
 - `ResponsiveGridLayout` (breakpoints lg 1200 / md 800 / sm 400, cols 12/8/4, rowHeight 90, margin 16).
-- Layout par défaut : graphes ressources en tête (`res-cpu`/`res-ram`/`res-storage` w4 h3), rangée KPIs (w3 h2 ×4), cartes endpoints (w4 h3, 3/rangée), puis alertes (w5) + table endpoints (w7).
+- Layout par défaut : graphes ressources en tête (`res-cpu`/`res-ram`/`res-storage` w4 h3), rangée KPIs (w3 h2 ×4), **rangée système** (`sys-nodes` **w12 h5** : carte « Système — par nœud » cross-node, agent hôte Telegraf — load/iowait/swap/uptime ; les vues I/O par device et CPU par cœur sont dans le Monitor du nœud de la Vue VM v2, skill `node-sensors` §3.3), cartes endpoints (w4 h3, 3/rangée), puis alertes (w5) + table endpoints (w7).
 - **Layout persisté** (`store/layout`, `overviewLayout.lg`) : les positions drag/resize utilisateur priment ; les nouveaux endpoints reprennent leur emplacement calculé. Clé de memo = ids des endpoints (stable entre deux pushes WS).
 - **Compteur « agents PVE » sur la carte VMs** (`KpiVmsCard`) : sous-ligne de la carte « VMs & conteneurs » — **rouge « N VM(s) sans agent PVE »** si `vmsAgentDown > 0` (VMs QEMU en cours sans QGA, critique), sinon « agents PVE OK ». Agrégé par `aggregateKpis` (`sum(k => k.vmsAgentDown ?? 0)`). Pas de nouvelle carte (le layout persisté l'aurait masquée) — sous-ligne dans la carte existante.
 - Données : `useMulti()` (WS). Agrégats locaux : `aggregateKpis` (pondération par capacité), `overallRisk` (la sévérité la plus forte gagne, `na` ignorée).

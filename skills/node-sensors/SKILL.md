@@ -1,6 +1,6 @@
 ---
 name: node-sensors
-description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds), ET historique des valeurs d'un capteur OU d'un disque SMART (GET /api/node-sensors-history, GET /api/smart-device-history, fenêtre modal « Historique des valeurs » avec graphe ECharts depuis l'icône des tables capteurs et SMART), ET métriques système hôte (GET /api/node-system : load/swap/iowait/usage par cœur ; GET /api/node-diskio : I/O par device physique — consommées par la Vue d'ensemble), ET mapping device-mapper → LV PVE (table dm_names écrite par le plugin exec Telegraf, consommée par GET /api/vm-diskio de la vue VM). Use when working on the node-sensors plugin, the /api/node-sensors, /api/node-sensors-history, /api/smart-device-history, /api/node-system or /api/node-diskio routes, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, the value-history dialog (sensors & SMART disks), custom sensor thresholds, the « Seuils capteurs » admin tab, the overview system cards (load/swap/disk I/O/per-core CPU), or the dm_names Telegraf mapping.
+description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds), ET historique des valeurs d'un capteur OU d'un disque SMART (GET /api/node-sensors-history, GET /api/smart-device-history, fenêtre modal « Historique des valeurs » avec graphe ECharts depuis l'icône des tables capteurs et SMART), ET métriques système hôte (GET /api/node-system : load/swap/iowait/usage par cœur ; GET /api/node-diskio : I/O par device physique — consommées par la Vue d'ensemble (carte Système cross-node) et le Monitor nœud de la Vue VM v2 (sections Système / CPU par cœur / I/O disques)), ET mapping device-mapper → LV PVE (table dm_names écrite par le plugin exec Telegraf, consommée par GET /api/vm-diskio de la vue VM). Use when working on the node-sensors plugin, the /api/node-sensors, /api/node-sensors-history, /api/smart-device-history, /api/node-system or /api/node-diskio routes, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, the value-history dialog (sensors & SMART disks), custom sensor thresholds, the « Seuils capteurs » admin tab, the overview system card (load/swap/uptime), the node monitor sections (CPU per-core, per-device disk I/O), or the dm_names Telegraf mapping.
 ---
 
 # Node Sensors — métriques locales Telegraf
@@ -55,11 +55,13 @@ base `consolidated` (∞)
 | `packages/web/src/components/admin/sensor-thresholds.tsx` | Onglet Administration « Seuils capteurs » (tableau nœud/puce/capteur/temp/seuil firmware RO/seuil perso input clampé + reset par ligne + tout) |
 | `packages/web/src/plugins/node-sensors/lib/sensor-thresholds-api.ts` | Client API /api/admin/sensor-thresholds (list/save/resetAll/resetOne) |
 | `packages/shared/src/system-metrics.ts` | Types + fonctions pures testées des métriques système hôte : `NodeSystemRow/Response`, `NodeDiskioRow/Response`, `VmDiskioPoint/Series/Response`, `parsePveMapperName` (LV `vg--vm--101--disk--0` → vmid/ctid, depuis le **suffixe** LV car le VG peut contenir `--`), `mapperLabel`, `isPhysicalDevice` (disques entiers seuls) |
-| `packages/server/src/modules/nodesensors/system-routes.ts` | `GET /api/node-system` (dernier point par nœud : `system`+`mem`+`cpu`, cache 60 s) · `GET /api/node-diskio?node=&timeframe=` (I/O par device physique, SQL `diskioRateSql` = bucket d'abord puis LAG des counters, cache 5 min) — consommés par la Vue d'ensemble (3 cartes) |
+| `packages/server/src/modules/nodesensors/system-routes.ts` | `GET /api/node-system` (dernier point par nœud : `system`+`mem`+`cpu`, cache 60 s) · `GET /api/node-diskio?node=&timeframe=` (I/O par device physique, SQL `diskioRateSql` = bucket d'abord puis LAG des counters, cache 5 min) — consommés par la Vue d'ensemble (carte Système cross-node) ET le Monitor nœud Vue VM v2 (sections Système / CPU par cœur / I/O disques) |
 | `packages/server/src/modules/vmview/vm-diskio.ts` | `GET /api/vm-diskio?endpoint=&vmid=&timeframe=` — I/O PAR DISQUE d'une VM : mapping `dm_names` (dernier point par (node, dm), fenêtre 1 h) + `diskioRateSql` sur les dm de la VM ; états `influx` / `noMapping` (table absente) / `insufficientData` (pas de LV dm pour la VM) |
-| `packages/web/src/plugins/hypervision/components/system-nodes-card.tsx` | Carte Vue d'ensemble « Système — par nœud » : load 1/5/15 teinté vs nb de cœurs (≥1 warn, ≥2 crit), iowait (≥10 warn, ≥25 crit), swap (≥50 warn, ≥80 crit), uptime |
-| `packages/web/src/plugins/hypervision/components/node-diskio-card.tsx` | Carte Vue d'ensemble « I/O disques (nœud) » : sélecteur nœud + timeframe 1h/24h/7j/30j, 2 graphes (débits lecture=plein/écriture=pointillé par device ; busy % + IOPS double axe) — base de temps commune, trous = null (pas d'interpolation) |
-| `packages/web/src/plugins/hypervision/components/cpu-cores-card.tsx` | Carte Vue d'ensemble « CPU par cœur » : barres horizontales usage courant (teinte <70 ok / <90 warn / ≥90 crit), tooltip user/system/iowait, sélecteur nœud |
+| `packages/web/src/plugins/hypervision/components/system-nodes-card.tsx` | Carte Vue d'ensemble « Système — par nœud » (tableau cross-node, pleine largeur) : load 1/5/15 teinté vs nb de cœurs (≥1 warn, ≥2 crit), iowait (≥10 warn, ≥25 crit), swap (≥50 warn, ≥80 crit), uptime |
+| `packages/web/src/plugins/vm-view_v2/components/node-system-card.tsx` | Section Monitor nœud « Système (nœud) » (chips, nœud affiché uniquement) : load 1/5/15 teinté, cœurs, iowait, swap, uptime — mêmes seuils que la carte cross-node |
+| `packages/web/src/plugins/vm-view_v2/components/node-diskio-card.tsx` | Section Monitor nœud « I/O disques (nœud) » : nœud FIXE (prop), timeframe piloté par la barre d'outils de l'onglet (prop), 2 graphes (débits lecture=plein/écriture=pointillé par device ; busy % + IOPS double axe) + export CSV — base de temps commune, trous = null (pas d'interpolation) |
+| `packages/web/src/plugins/vm-view_v2/components/cpu-cores-card.tsx` | Section Monitor nœud « CPU par cœur » : barres horizontales usage courant (teinte <70 ok / <90 warn / ≥90 crit), tooltip user/system/iowait, export CSV, **hauteur dynamique** (≥240 px, sinon 18 px/cœur) |
+| `packages/web/src/plugins/vm-view_v2/components/node-monitor.tsx` | Onglet Monitor NŒUD : graphes PVE (CPU/RAM/rootfs/réseau via `/api/metrics?node=`) + sections agent hôte ci-dessus — sources **indépendantes** (si la série PVE est vide, les sections Telegraf restent montées, et inversement) |
 | `packages/web/src/plugins/vm-view_v2/components/vm-monitor.tsx` | Onglet Monitor VM : section « Disques I/O — par device (hôte) » (`PerDeviceDiskSection`) après le graphe disque agrégat — 1 carte par disque (débits + saturation + export CSV), états noMapping/insufficientData lisibles |
 | `packages/server/src/core/influx-consolidator.ts` | Consolidation 15 min des 4 tables Telegraf (**pas** diskio/mem/cpu/system — counters, cf. §6) |
 | `packages/web/src/core/api/apiClient.ts` | `fetchNodeSensors()` · `fetchSensorHistory(node, chip, feature, range)` · `fetchSmartHistory(node, device, range)` · `fetchNodeSystem()` · `fetchNodeDiskio(node, timeframe)` · `fetchVmDiskio(endpoint, vmid, timeframe)` |
@@ -140,7 +142,7 @@ Deux endpoints, **même pattern** (helper partagé `mergedTempBuckets` dans `rou
   `poolAllocated`/`poolFree` (pools, null dans v1).
 - `FailedUnit` : `name`, `active`, `sub`, `load`.
 
-### 3.3 Métriques système hôte (Vue d'ensemble) + I/O par device
+### 3.3 Métriques système hôte (Vue d'ensemble + Monitor nœud) + I/O par device
 
 Trois routes de plus, **même source** (tables Telegraf `raw`), dans le même module
 (`system-routes.ts`, enregistrement dans `index.ts`) :
@@ -151,6 +153,9 @@ Trois routes de plus, **même source** (tables Telegraf `raw`), dans le même mo
   total−free), `cpu` (cpu-total → iowait/user/system ; `cpu0..N` → usage par cœur =
   100 − idle − iowait). Cache 60 s (données 10 s). L'API PVE donne loadavg/swap **en instantané**
   (vue nœud) mais **ni historique, ni iowait, ni par cœur** — d'où la source agent.
+  **Consommé 2×** (un fetch par vue, tick 60 s) : la carte « Système » cross-node de la Vue
+  d'ensemble (hook `useNodeSystem` dans `overview.tsx`) et le Monitor nœud Vue VM v2
+  (sections Système + CPU par cœur — `node-monitor.tsx` cherche la ligne du nœud affiché).
 - `GET /api/node-diskio?node=&timeframe=` → `NodeDiskioResponse { timeframe, node, devices:
   NodeDiskioRow[], source: 'influx'|'insufficientData' }` — I/O **par device physique**
   (nvme0n1, sda… ; dm-N/loop/md/sr/ram exclus **dans le SQL**, **partitions** sda1/nvme0n1p1
@@ -278,9 +283,12 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
   - **Devices physiques = disques entiers seuls** : dm-N exclus dans le SQL (ce sont les LV —
     I/O double-comptée avec le disque sous-jacent), **partitions** (sda1, nvme0n1p1) filtrées
     côté TS (`isPhysicalDevice`) — le disque entier porte déjà toute l'I/O.
-  - Vue d'ensemble : **une seule fetch** `/api/node-system` (tick 60 s) partagée par les 3
-    cartes (hook `useNodeSystem` dans `overview.tsx`) ; rangée de grid `y=5 h=5`, `LAYOUT_VERSION`
-    bumpé (2→3) → layouts persistés antérieurs jetés au rechargement.
+  - **Placement UI (arbitrage 2026-11-13)** : la Vue d'ensemble ne garde que la carte
+    « Système » **cross-node** (tableau pleine largeur w=12, rangée y=5) — c'est la seule vue
+    vraiment « parc » ; l'I/O par device et le CPU par cœur sont des **drill-down d'un nœud**
+    → dans l'onglet **Monitor du nœud** (Vue VM v2), où le nœud est fixe (pas de sélecteur) et
+    le timeframe de l'I/O disques est piloté par la barre d'outils de l'onglet. `LAYOUT_VERSION`
+    bumpé (2→3→4) → layouts persistés antérieurs jetés au rechargement.
 
 ## 7. Pièges rencontrés (corrigés — ne pas réintroduire)
 

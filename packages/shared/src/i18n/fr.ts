@@ -442,6 +442,8 @@ export const fr: Record<string, string> = {
   'vm.mon.iops': 'IOPS',
   'vm.mon.await': 'Attente',
   'vm.node.insufficient': "Pas d'historique pour ce nœud (InfluxDB indisponible, ou nœud hors ligne / trop récent).",
+  'vm.node.system': 'Système (nœud)',
+  'vm.node.system.hint': 'Charge (load), iowait et swap — agent hôte (10 s), non fourni par l’API Proxmox.',
   'vm.tab.config': 'Configuration',
   'vm.tab.network': 'Réseau',
   'vm.tab.snapshots': 'Snapshots',

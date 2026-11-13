@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type RefObject } from 'react';
 import { Download } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { EChartsOption } from 'echarts';
-import type { MetricsPoint, MetricsResponse, MetricsTimeframe } from '@prox4u/shared';
+import type { MetricsPoint, MetricsResponse, MetricsTimeframe, NodeSystemRow } from '@prox4u/shared';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Skeleton } from '../../../components/ui/skeleton';
 import { useEChart } from '../../../hooks/use-echart';
@@ -10,7 +10,10 @@ import { useOvercommitConfig } from '../../../core/data/use-endpoint';
 import { useTheme } from '../../../store/theme';
 import { chartTheme } from '../../../lib/chart-theme';
 import { pctOption, rateOption, downloadCsvFile } from '../../../lib/monitor-charts';
-import { fetchMetrics } from '../../../core/api/apiClient';
+import { fetchMetrics, fetchNodeSystem } from '../../../core/api/apiClient';
+import { NodeSystemCard } from './node-system-card';
+import { CpuCoresCard } from './cpu-cores-card';
+import { NodeDiskioCard } from './node-diskio-card';
 
 const TIMEFRAMES: MetricsTimeframe[] = ['hour', 'day', 'week', 'month'];
 /** Auto-refresh pendant que l'onglet est ouvert (données pushées toutes les 5 s côté serveur). */
@@ -24,9 +27,11 @@ interface Props {
 
 /**
  * Onglet Monitor d'un nœud Proxmox (v2) : historiques CPU / RAM / Disque rootfs / Réseau
- * depuis InfluxDB (node_metrics via /api/metrics?node=). Même expérience que le Monitor VM :
- * un graphe par ligne, timeframes 1 h / 24 h / 7 j / 30 j, auto-refresh 60 s, export CSV
- * du timeframe affiché (général + par graphe).
+ * depuis InfluxDB (node_metrics via /api/metrics?node=) + sections agent hôte (Telegraf,
+ * même source que la carte « Système » de la Vue d'ensemble) : Système (load/iowait/swap/
+ * uptime du nœud), CPU par cœur (point courant), I/O disques par device physique. Même
+ * expérience que le Monitor VM : un graphe par ligne, timeframes 1 h / 24 h / 7 j / 30 j
+ * (pilotent aussi la section I/O disques), auto-refresh 60 s, export CSV.
  */
 export function NodeMonitor({ endpointId, node }: Props) {
   const { t } = useTranslation();
@@ -36,6 +41,8 @@ export function NodeMonitor({ endpointId, node }: Props) {
   const [data, setData] = useState<MetricsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
+  const [sysRows, setSysRows] = useState<NodeSystemRow[]>([]);
+  const [sysLoading, setSysLoading] = useState(true);
 
   useEffect(() => {
     const id = setInterval(() => setTick((x) => x + 1), REFRESH_MS);
@@ -58,8 +65,34 @@ export function NodeMonitor({ endpointId, node }: Props) {
     };
   }, [endpointId, node, tf, tick]);
 
+  /** Système hôte (Telegraf 10 s) — source indépendante de node_metrics : dernier point
+   *  du nœud affiché, partagé par les sections « Système » et « CPU par cœur ». */
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetchNodeSystem()
+        .then((r) => {
+          if (!cancelled) setSysRows(r.nodes);
+        })
+        .catch((err) => console.warn('chargement node-system (monitor nœud) en échec', err))
+        .finally(() => {
+          if (!cancelled) setSysLoading(false);
+        });
+    };
+    load();
+    const id = setInterval(load, REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+  const sysRow = sysRows.find((r) => r.node === node);
+
   const ct = chartTheme(theme);
   const hasData = !!data && data.points.length > 0;
+  /** Graphe PVE affiché tant que la 1ʳᵉ série n'est pas revenue (skeleton pendant le
+   *  chargement) ; les sections agent hôte sont indépendantes et restent montées. */
+  const showCharts = hasData || loading;
   const times = useMemo(() => (hasData && data ? data.points.map((p) => p.time) : []), [hasData, data]);
   const bands = { warnPct: config.usage.warnPct, critPct: config.usage.critPct };
 
@@ -165,7 +198,10 @@ export function NodeMonitor({ endpointId, node }: Props) {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Barre d'outils : timeframes + export CSV. */}
+      {/* Système — agent hôte (Telegraf 10 s) : load / iowait / swap / uptime du nœud affiché. */}
+      <NodeSystemCard row={sysRow} loading={sysLoading} />
+
+      {/* Barre d'outils : timeframes + export CSV — pilote aussi la section I/O disques. */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex rounded-lg border bg-secondary p-0.5">
           {TIMEFRAMES.map((x) => (
@@ -191,20 +227,24 @@ export function NodeMonitor({ endpointId, node }: Props) {
         </button>
       </div>
 
-      {/* Pas de série : InfluxDB indisponible (sans repli RRD) ou nœud trop récent / hors ligne. */}
-      {!loading && data && !hasData ? (
+      {/* Pas de série PVE : InfluxDB indisponible (sans repli RRD) ou nœud trop récent /
+       * hors ligne. Les sections agent hôte (ci-dessous) ont une source indépendante. */}
+      {!loading && (!data || !hasData) && (
         <div className="rounded-lg border px-3 py-6 text-center text-xs text-muted-foreground">
           {t('vm.node.insufficient')}
         </div>
-      ) : (
-        /* Un graphe par ligne (pleine largeur, plus de profondeur) + export CSV par graphe. */
-        <div className="flex flex-col gap-3">
-          {chartCard(t('metrics.cpu'), cpuRef, true, () => downloadCsv('cpu', ALL_COLS.slice(0, 1)))}
-          {chartCard(t('metrics.ram'), ramRef, false, () => downloadCsv('ram', ALL_COLS.slice(1, 2)))}
-          {chartCard(t('node.kpi.rootfs'), diskRef, false, () => downloadCsv('disk', ALL_COLS.slice(2, 3)))}
-          {chartCard(t('vm.mon.net'), netRef, false, () => downloadCsv('net', ALL_COLS.slice(3)))}
-        </div>
       )}
+
+      {/* Un graphe PVE par ligne (pleine largeur, plus de profondeur) + export CSV par
+       * graphe, entrecoupé des sections agent hôte (groupées par thème). */}
+      <div className="flex flex-col gap-3">
+        {showCharts && chartCard(t('metrics.cpu'), cpuRef, true, () => downloadCsv('cpu', ALL_COLS.slice(0, 1)))}
+        <CpuCoresCard row={sysRow} loading={sysLoading} />
+        {showCharts && chartCard(t('metrics.ram'), ramRef, false, () => downloadCsv('ram', ALL_COLS.slice(1, 2)))}
+        {showCharts && chartCard(t('node.kpi.rootfs'), diskRef, false, () => downloadCsv('disk', ALL_COLS.slice(2, 3)))}
+        <NodeDiskioCard node={node} timeframe={tf} />
+        {showCharts && chartCard(t('vm.mon.net'), netRef, false, () => downloadCsv('net', ALL_COLS.slice(3)))}
+      </div>
     </div>
   );
 }
