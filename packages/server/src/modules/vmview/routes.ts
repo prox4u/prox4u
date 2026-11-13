@@ -12,6 +12,7 @@ import type {
 import { influxTsToUnix } from '../../core/influx.js';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 import { registerVmDiskioRoute } from './vm-diskio.js';
+import { registerVmNetRoute } from './vm-net.js';
 
 const SNAP_CACHE_TTL_MS = 5 * 60 * 1000;
 const METRICS_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -208,6 +209,9 @@ export function registerVmInventory(app: FastifyInstance, ctx: AppContext, polle
 
   // I/O disque PAR DISQUE de la VM (nœud hôte, Telegraf diskio + dm_names).
   registerVmDiskioRoute(app, ctx);
+
+  // Réseau PAR INTERFACE de la VM (nœud hôte, Telegraf net + net_if_mac, joint par MAC).
+  registerVmNetRoute(app, ctx, poller);
 }
 
 // --- Aides métriques par VM (pures, testées) --------------------------------------------

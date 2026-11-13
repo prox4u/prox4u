@@ -1455,6 +1455,77 @@ vraiment « parc ») ET est dupliquée en version mono-nœud (chips) dans le Mon
 
 ---
 
+## ✅ Fait — Réseau PAR INTERFACE : Monitor nœud + Monitor de toutes les VMs (livré, validé API + navigateur — **commité**)
+
+Demande utilisateur (2026-11-13) : « dans vue VMs, pour les graphiques avec le réseau, il faut
+faire un graphique par interface pour le nœud et le VM pour tous ».
+
+### Source de données (investigations live PVE 9.1.1 / 9.2.2)
+- **L'API PVE n'expose pas le trafic par interface d'une VM** : `/cluster/resources` et
+  `rrddata` = agrégat par VM seulement ; QGA `network-get-interfaces` « not implemented »
+  (et sans compteurs de trafic de toute façon) ; `/nodes/{n}/qemu/{vmid}/network` idem.
+- **Source retenue : côté hôte** — chaque carte de VM est un **device tap** (`vnet*`/`tap*`/
+  `veth*`) dont le **MAC** est celui de l'interface VM (config PVE `net0`/`net1`). L'agent
+  Telegraf lit les counters de toutes les interfaces (plugin **`net`**, `bytes_recv`/
+  `bytes_sent`, 10 s) et un 2ᵉ script exec écrit **`net_if_mac`** (iface hôte → MAC,
+  `/sys/class/net/*/address`, fenêtre 1 h, même pattern que `dm_names`).
+- **Joint carte VM ↔ tap par MAC** (minuscules des deux côtés) — robuste bridge/SDN/OVS/LXC,
+  indépendant du nommage des devices PVE.
+- **Unités** : PVE `netin`/`netout` = **octets** cumulés depuis le boot (confirmé forum PVE)
+  → cohérent avec `formatBps` (o/s) des graphes agrégés existants, pas de facteur 8.
+
+### Serveur (même pattern que diskio : bucket d'abord + LAG, delta négatif → null, cache 5 min)
+- `netRateSql` exportée/testée dans `system-routes.ts` (table `net`, colonne `"interface"`
+  en quotes doubles, alias `iface`).
+- **`GET /api/node-net?node=&timeframe=`** : trafic par **interface hôte** (NICs physiques +
+  ponts vmbr*) — **vnet\*/tap\*/veth\*/lo exclus dans le SQL** (double-comptage avec la vue VM).
+  Table absente → `insufficientData` (agent à (re)déployer), pas une erreur HTTP.
+- **`GET /api/vm-net?endpoint=&vmid=&timeframe=`** (nouveau `vmview/vm-net.ts` + test) :
+  snapshot poller → node/type de la VM, `getVmConfig` (cache 1 h) → cartes (bridge, MAC),
+  `net_if_mac` → MAC → tap (`latestIfMacMapping`, pur + testé), 1 `netRateSql` sur les tap
+  résolus. États : `noMapping` (tables absentes) / `insufficientData` (VM hors snapshot,
+  aucune carte lue) ; **MAC non trouvée (VM arrêtée, SDN) = série `hostIface=null`, points
+  vides — jamais de valeur inventée**. Enregistré dans `vmview/routes.ts` (prend le poller).
+
+### Web
+- Monitor nœud : nouvelle section **« Réseau — par interface »** (`node-net-card.tsx`,
+  nouveau) après le graphe Réseau agrégé (gardé, source PVE) — **UN GRAPHIQUE PAR INTERFACE
+  HÔTE** (RX=plein/TX=pointillé, 240 px), timeframe de l'onglet, CSV (t, iface, in_bps,
+  out_bps), états vides lisibles.
+- Monitor VM : nouvelle section **« Réseau — par interface »** (`PerIfaceNetSection` dans
+  `vm-monitor.tsx`) après le graphe Réseau agrégé — **UN GRAPHIQUE PAR NIC** (net0 (vmbr0),
+  net1 (nfs)…) avec note « tap hôte » au survol du titre ; fetch `fetchVmNet` **isolé**
+  (`.catch` → null, comme vm-diskio) ; états lisibles : noMapping / aucune carte / « MAC non
+  trouvée sur l'hôte » (VM arrêtée) / « aucune mesure » (agent en pause).
+- i18n fr/en : `overview.netif.*` (section nœud) + `vm.mon.netPerIface.*` (section VM).
+
+### Déploiement
+- `deploiement/60-telegraf-nodes.sh` : **`[[inputs.net]]`** + 2ᵉ `[[inputs.exec]]` (script
+  `/usr/local/lib/prox4u-telegraf-iface-mac.sh`) + dry-run/verif mis à jour. **Regroupe le
+  redéploiement déjà dû pour `dm_names`** (un seul redéploiement utilisateur sur les 3 nœuds
+  : dm_names + net + net_if_mac).
+
+### Vérifications effectuées
+- shared build → typecheck (3 paquets) → tests (**270 shared + 168 server**, +13 : netRateSql,
+  node-net, vm-net) → `pnpm build` → `./server.sh restart` — tout vert.
+- **API live** (agent non encore redéployé) : `/api/node-net?node=proxmox&timeframe=day` →
+  `insufficientData` ✓ ; `/api/vm-net?endpoint=proxmox&vmid=100&timeframe=day` → `noMapping` ✓ ;
+  400 sans node / 404 endpoint inconnu ✓.
+- **Navigateur fresh** (admin) : Monitor nœud `proxmox` = section « Réseau — par interface »
+  rendue avec l'état « Aucune interface mesurée sur la fenêtre (agent hôte à (re)déployer ?) »
+  ✓ ; Monitor VM `ia-u24-01` (2 NICs) = section rendue avec « Mesure par interface
+  indisponible — redéployer l'agent… » ✓ ; 0 erreur console nouvelle.
+- **À voir après redéploiement** : les vraies séries par interface (vnet/tap + vmbr + NICs
+  physiques) et le joint MAC sur les VMs en marche.
+
+### Pièges rencontrés
+- **`normRate(null)` = 0, pas null** (`Number(null)` = 0) : les mocks de tests qui simulent
+  un reset de counter doivent porter un **nombre négatif** (`out_bps: -1`), pas `null`.
+- **Colonne `interface`** (table `net`) : tag Telegraf → colonne SQL à **guillemets
+  doubles** (`"interface"`), aliasé immédiatement dans `netRateSql`.
+
+---
+
 ## ⏳ À faire
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)

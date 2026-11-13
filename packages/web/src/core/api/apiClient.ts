@@ -2,6 +2,7 @@ import type {
   DatastoreHistoryResponse,
   MetricsTimeframe,
   NodeDiskioResponse,
+  NodeNetResponse,
   NodeSensorsResponse,
   NodeSystemResponse,
   ProxmoxInventoryResponse,
@@ -9,6 +10,7 @@ import type {
   SmartHistoryResponse,
   VmDiskioResponse,
   VmFsResponse,
+  VmNetResponse,
 } from '@prox4u/shared';
 import type {
   CapacityResponse,
@@ -129,5 +131,17 @@ export function fetchNodeDiskio(node: string, timeframe: MetricsTimeframe): Prom
 export function fetchVmDiskio(endpoint: string, vmid: number, timeframe: MetricsTimeframe): Promise<VmDiskioResponse> {
   return getJson<VmDiskioResponse>(
     `/api/vm-diskio?endpoint=${encodeURIComponent(endpoint)}&vmid=${vmid}&timeframe=${timeframe}`,
+  );
+}
+
+/** Trafic réseau PAR INTERFACE d'un nœud hôte (Telegraf net, tap des VMs exclus) — Monitor nœud. */
+export function fetchNodeNet(node: string, timeframe: MetricsTimeframe): Promise<NodeNetResponse> {
+  return getJson<NodeNetResponse>(`/api/node-net?node=${encodeURIComponent(node)}&timeframe=${timeframe}`);
+}
+
+/** Trafic réseau PAR INTERFACE d'une VM (agent hôte + joint MAC → tap) — Monitor VM. */
+export function fetchVmNet(endpoint: string, vmid: number, timeframe: MetricsTimeframe): Promise<VmNetResponse> {
+  return getJson<VmNetResponse>(
+    `/api/vm-net?endpoint=${encodeURIComponent(endpoint)}&vmid=${vmid}&timeframe=${timeframe}`,
   );
 }

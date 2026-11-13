@@ -10,6 +10,8 @@ import type {
   VmFsSeries,
   VmMetricsPoint,
   VmMetricsResponse,
+  VmNetResponse,
+  VmNetSeries,
 } from '@prox4u/shared';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Skeleton } from '../../../components/ui/skeleton';
@@ -18,7 +20,7 @@ import { useOvercommitConfig } from '../../../core/data/use-endpoint';
 import { useTheme } from '../../../store/theme';
 import { chartTheme } from '../../../lib/chart-theme';
 import { pctOption, rateOption, timeLabel, downloadCsvFile } from '../../../lib/monitor-charts';
-import { fetchVmDiskio, fetchVmMetrics, fetchVmFs } from '../../../core/api/apiClient';
+import { fetchVmDiskio, fetchVmMetrics, fetchVmFs, fetchVmNet } from '../../../core/api/apiClient';
 import { formatBps, formatBytes } from '../../../lib/utils';
 
 const TIMEFRAMES: MetricsTimeframe[] = ['hour', 'day', 'week', 'month'];
@@ -53,6 +55,7 @@ export function VmMonitor({ endpointId, vmid, vmName, maxmemBytes, maxdiskBytes 
   const [data, setData] = useState<VmMetricsResponse | null>(null);
   const [fsData, setFsData] = useState<VmFsResponse | null>(null);
   const [diskioData, setDiskioData] = useState<VmDiskioResponse | null>(null);
+  const [netData, setNetData] = useState<VmNetResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
 
@@ -64,7 +67,7 @@ export function VmMonitor({ endpointId, vmid, vmName, maxmemBytes, maxdiskBytes 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    // vm-diskio isolé (.catch → null) : son échec ne doit pas casser le reste du monitor.
+    // vm-diskio et vm-net isolés (.catch → null) : leur échec ne doit pas casser le reste.
     Promise.all([
       fetchVmMetrics(endpointId, vmid, tf),
       fetchVmFs(endpointId, vmid, tf),
@@ -72,11 +75,16 @@ export function VmMonitor({ endpointId, vmid, vmName, maxmemBytes, maxdiskBytes 
         console.warn('chargement vm-diskio en échec', err);
         return null;
       }),
-    ]).then(([d, fs, dio]) => {
+      fetchVmNet(endpointId, vmid, tf).catch((err) => {
+        console.warn('chargement vm-net en échec', err);
+        return null;
+      }),
+    ]).then(([d, fs, dio, net]) => {
       if (!cancelled) {
         setData(d);
         setFsData(fs);
         setDiskioData(dio);
+        setNetData(net);
       }
     })
       .catch((err) => console.warn('chargement métriques VM en échec', err))
@@ -302,6 +310,8 @@ export function VmMonitor({ endpointId, vmid, vmName, maxmemBytes, maxdiskBytes 
           {/* Occupation disque par partition (agent invité QEMU / rootfs LXC). */}
           <FsOccupancySection fsData={fsData} vmName={vmName} tf={tf} loading={loading} hasData={hasData} maxdiskBytes={maxdiskBytes} />
           {chartCard(t('vm.mon.net'), netRef, false, () => downloadCsv('net', ALL_COLS.slice(4)))}
+          {/* Réseau PAR INTERFACE de la VM (agent hôte, joint MAC → tap). */}
+          <PerIfaceNetSection data={netData} tf={tf} loading={loading} vmName={vmName} />
         </div>
       )}
     </div>
@@ -752,6 +762,142 @@ function PerDeviceChart({
             <div ref={rwRef} className={`h-[170px] w-full ${loading ? 'opacity-50' : ''}`} />
             <div ref={busyRef} className={`h-[170px] w-full ${loading ? 'opacity-50' : ''}`} />
           </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Section « Réseau — par interface » : UN GRAPHIQUE PAR CARTE de la VM
+ * (net0, net1…), trafic réel mesuré côté hôte sur le device tap (agent
+ * Telegraf `net`), joint à la config PVE par MAC. Le graphe « Réseau »
+ * ci-dessus reste l'agrégat Proxmox. États dégradés encodés :
+ *  - `noMapping` : agent pas encore (re)déployé (tables net / net_if_mac) ;
+ *  - `insufficientData` : VM absente du snapshot ou config réseau non lue ;
+ *  - carte sans tap (VM arrêtée, SDN/OVS) : graphe vide + libellé explicite.
+ */
+function PerIfaceNetSection({
+  data,
+  tf,
+  loading,
+  vmName,
+}: {
+  data: VmNetResponse | null;
+  tf: MetricsTimeframe;
+  loading: boolean;
+  vmName: string;
+}) {
+  const { t } = useTranslation();
+
+  if (!data) {
+    return (
+      <Card>
+        <CardHeader draggable={false}>
+          <CardTitle>{t('vm.mon.netPerIface')}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading && <Skeleton className="min-h-[260px] w-full" />}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (data.series.length === 0) {
+    const msg = data.source === 'noMapping' ? t('vm.mon.netPerIface.noMapping') : t('vm.mon.netPerIface.none');
+    return (
+      <Card>
+        <CardHeader draggable={false}>
+          <CardTitle title={t('vm.mon.netPerIface.hint')}>{t('vm.mon.netPerIface')}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-lg border px-3 py-6 text-center text-xs text-muted-foreground">{msg}</div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="px-1 text-[11px] text-muted-foreground">{t('vm.mon.netPerIface.hint')}</p>
+      {data.series.map((s) => (
+        <PerIfaceChart key={s.iface} series={s} tf={tf} loading={loading} vmName={vmName} />
+      ))}
+    </div>
+  );
+}
+
+/** Graphe de débit d'UNE carte de la VM : RX (plein) + TX (pointillé), octets/s. */
+function PerIfaceChart({
+  series,
+  tf,
+  loading,
+  vmName,
+}: {
+  series: VmNetSeries;
+  tf: MetricsTimeframe;
+  loading: boolean;
+  vmName: string;
+}) {
+  const { t } = useTranslation();
+  const theme = useTheme((s) => s.theme);
+  const ct = chartTheme(theme);
+
+  const times = useMemo(() => series.points.map((p) => p.t), [series]);
+
+  const option = useMemo(() => {
+    if (times.length === 0) return null;
+    return rateOption(ct, tf, times, [
+      { name: t('network.rx'), data: series.points.map((p) => p.inBps), color: ct.netIn },
+      { name: t('network.tx'), data: series.points.map((p) => p.outBps), color: ct.netOut },
+    ]);
+  }, [series, times, tf, ct, t]);
+
+  const ref = useEChart(option);
+
+  const exportCsv = () => {
+    if (series.points.length === 0) return;
+    const header = ['timestamp', 'in_bps', 'out_bps'];
+    const rows = series.points.map((p) => [
+      new Date(p.t * 1000).toISOString(),
+      p.inBps != null ? String(p.inBps) : '',
+      p.outBps != null ? String(p.outBps) : '',
+    ]);
+    const dev = series.iface.replace(/[^a-zA-Z0-9_-]/g, '_');
+    downloadCsvFile(`vm-net-${vmName}-${dev}-${tf}-${new Date().toISOString().slice(0, 10)}.csv`, header, rows);
+  };
+
+  /** Note d'état dégradé : tap non trouvé (MAC) ou aucune mesure sur la fenêtre. */
+  const note = !series.hostIface
+    ? series.mac
+      ? t('vm.mon.netPerIface.noMac', { mac: series.mac })
+      : t('vm.mon.netPerIface.noData')
+    : series.points.length === 0
+      ? t('vm.mon.netPerIface.noData')
+      : null;
+
+  return (
+    <Card>
+      <CardHeader draggable={false} className="flex-row items-center justify-between gap-2">
+        <CardTitle title={series.hostIface ? `tap hôte : ${series.hostIface}` : undefined}>
+          {t('vm.mon.netPerIface')} — {series.label}
+        </CardTitle>
+        <button
+          onClick={exportCsv}
+          disabled={series.points.length === 0}
+          title={t('vm.mon.export')}
+          className="rounded-md border p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {loading && times.length === 0 ? (
+          <Skeleton className="min-h-[160px] w-full" />
+        ) : note ? (
+          <div className="rounded-lg border px-3 py-4 text-center text-xs text-muted-foreground">{note}</div>
+        ) : (
+          <div ref={ref} className={`h-[170px] w-full ${loading ? 'opacity-50' : ''}`} />
         )}
       </CardContent>
     </Card>

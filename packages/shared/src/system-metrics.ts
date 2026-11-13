@@ -134,6 +134,67 @@ export function mapperLabel(name: string): string {
   return p.kind === 'other' ? p.lv : `${p.lv} (vg ${p.storage})`;
 }
 
+/** Point de débit réseau d'UNE interface (t = seconds depuis epoch, in/out en octets/s). */
+export interface NodeNetRow {
+  t: number;
+  /** interface hôte (vmbr0, enp1s0f0…) — vnet* / tap* / veth* / lo exclus côté requête. */
+  iface: string;
+  inBps: number | null;
+  outBps: number | null;
+}
+
+/**
+ * Trafic réseau PAR INTERFACE d'un nœud hôte (Telegraf `net`, counters
+ * bytes_recv/bytes_sent → débits par delta). `insufficientData` : table
+ * absente (agent pas encore (re)déployé) ou aucune interface sur la fenêtre.
+ */
+export interface NodeNetResponse {
+  timeframe: MetricsTimeframe;
+  node: string;
+  rows: NodeNetRow[];
+  source: 'influx' | 'insufficientData';
+}
+
+/** Point de débit d'UNE carte réseau de VM (in/out en octets/s). */
+export interface VmNetPoint {
+  t: number;
+  inBps: number | null;
+  outBps: number | null;
+}
+
+/**
+ * Série réseau d'UNE interface de VM (net0/net1…) — le trafic est mesuré
+ * côté hôte sur le device tap correspondant (Telegraf `net`), joint à la
+ * config PVE par MAC (l'API PVE n'expose pas le trafic par interface).
+ * `hostIface` = nom du tap hôte trouvé par MAC ; `null` si non trouvé
+ * (VM arrêtée → pas de tap ; SDN/OVS → MAC hôte différente) : les points
+ * restent vides, jamais de valeur inventée.
+ */
+export interface VmNetSeries {
+  /** net0 / net1… (config PVE) */
+  iface: string;
+  bridge: string;
+  mac: string | null;
+  /** tap hôte associé par MAC (vnet* / tap* / veth*) — null si introuvable. */
+  hostIface: string | null;
+  /** libellé UI : `net0 (vmbr0)`. */
+  label: string;
+  points: VmNetPoint[];
+}
+
+/**
+ * Trafic réseau PAR INTERFACE d'une VM (agent hôte + mapping MAC).
+ * `noMapping` : tables `net` / `net_if_mac` absentes (agent pas encore
+ * (re)déployé) ; `insufficientData` : mapping présent mais aucune interface
+ * de la VM résolue (VM sans config réseau lue, ou VM arrêtée).
+ */
+export interface VmNetResponse {
+  timeframe: MetricsTimeframe;
+  vmid: number;
+  series: VmNetSeries[];
+  source: 'influx' | 'insufficientData' | 'noMapping';
+}
+
 /**
  * Disques physiques pour la vue « I/O du nœud » : disques ENTIER seulement
  * (nvme0n1, sda, …). Exclut :

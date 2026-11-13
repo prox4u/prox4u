@@ -54,18 +54,20 @@ base `consolidated` (∞)
 | `packages/server/src/modules/nodesensors/thresholds.ts` | `SensorThresholdStore` — data/sensor-thresholds.json (écriture atomique tmp+rename, chmod 600, fail-fast si corrompu) |
 | `packages/web/src/components/admin/sensor-thresholds.tsx` | Onglet Administration « Seuils capteurs » (tableau nœud/puce/capteur/temp/seuil firmware RO/seuil perso input clampé + reset par ligne + tout) |
 | `packages/web/src/plugins/node-sensors/lib/sensor-thresholds-api.ts` | Client API /api/admin/sensor-thresholds (list/save/resetAll/resetOne) |
-| `packages/shared/src/system-metrics.ts` | Types + fonctions pures testées des métriques système hôte : `NodeSystemRow/Response`, `NodeDiskioRow/Response`, `VmDiskioPoint/Series/Response`, `parsePveMapperName` (LV `vg--vm--101--disk--0` → vmid/ctid, depuis le **suffixe** LV car le VG peut contenir `--`), `mapperLabel`, `isPhysicalDevice` (disques entiers seuls) |
-| `packages/server/src/modules/nodesensors/system-routes.ts` | `GET /api/node-system` (dernier point par nœud : `system`+`mem`+`cpu`, cache 60 s) · `GET /api/node-diskio?node=&timeframe=` (I/O par device physique, SQL `diskioRateSql` = bucket d'abord puis LAG des counters, cache 5 min) — consommés par la Vue d'ensemble (carte Système cross-node) ET le Monitor nœud Vue VM v2 (sections Système / CPU par cœur / I/O disques) |
+| `packages/shared/src/system-metrics.ts` | Types + fonctions pures testées des métriques système hôte : `NodeSystemRow/Response`, `NodeDiskioRow/Response`, `VmDiskioPoint/Series/Response`, `NodeNetRow/Response`, `VmNetPoint/Series/Response`, `parsePveMapperName` (LV `vg--vm--101--disk--0` → vmid/ctid, depuis le **suffixe** LV car le VG peut contenir `--`), `mapperLabel`, `isPhysicalDevice` (disques entiers seuls) |
+| `packages/server/src/modules/nodesensors/system-routes.ts` | `GET /api/node-system` (dernier point par nœud : `system`+`mem`+`cpu`, cache 60 s) · `GET /api/node-diskio?node=&timeframe=` (I/O par device physique, SQL `diskioRateSql` = bucket d'abord puis LAG des counters, cache 5 min) · `GET /api/node-net?node=&timeframe=` (trafic réseau **par interface hôte**, SQL `netRateSql` idem sur `bytes_recv`/`bytes_sent`, **vnet\*/tap\*/veth\*/lo exclus dans le SQL** — double-comptage avec la vue VM, cache 5 min) — consommés par la Vue d'ensemble (carte Système cross-node) ET le Monitor nœud Vue VM v2 (sections Système / CPU par cœur / I/O disques / Réseau par interface) |
 | `packages/server/src/modules/vmview/vm-diskio.ts` | `GET /api/vm-diskio?endpoint=&vmid=&timeframe=` — I/O PAR DISQUE d'une VM : mapping `dm_names` (dernier point par (node, dm), fenêtre 1 h) + `diskioRateSql` sur les dm de la VM ; états `influx` / `noMapping` (table absente) / `insufficientData` (pas de LV dm pour la VM) |
+| `packages/server/src/modules/vmview/vm-net.ts` | `GET /api/vm-net?endpoint=&vmid=&timeframe=` — trafic réseau **PAR INTERFACE d'une VM** (l'API PVE n'expose que l'agrégat : /cluster/resources, rrddata, QGA network-get-interfaces « not implemented ») : snapshot poller → node/type de la VM, `getVmConfig` → cartes (net0/net1, bridge, **MAC**), `net_if_mac` (fenêtre 1 h, `latestIfMacMapping`) → MAC → tap hôte, 1 `netRateSql` sur les tap résolus ; états `influx` / `noMapping` (tables absentes) / `insufficientData` (VM hors snapshot, pas de carte lue) — MAC non trouvée (VM arrêtée, SDN) = série listée `hostIface=null`, points vides |
 | `packages/web/src/plugins/hypervision/components/system-nodes-card.tsx` | Carte Vue d'ensemble « Système — par nœud » (tableau cross-node, pleine largeur) : load 1/5/15 teinté vs nb de cœurs (≥1 warn, ≥2 crit), iowait (≥10 warn, ≥25 crit), swap (≥50 warn, ≥80 crit), uptime |
 | `packages/web/src/plugins/vm-view_v2/components/node-system-card.tsx` | Section Monitor nœud « Système (nœud) » (chips, nœud affiché uniquement) : load 1/5/15 teinté, cœurs, iowait, swap, uptime — mêmes seuils que la carte cross-node |
 | `packages/web/src/plugins/vm-view_v2/components/node-diskio-card.tsx` | Section Monitor nœud « I/O disques (nœud) » : nœud FIXE (prop), timeframe piloté par la barre d'outils de l'onglet (prop), 2 graphes (débits lecture=plein/écriture=pointillé par device ; busy % + IOPS double axe) + export CSV — base de temps commune, trous = null (pas d'interpolation) |
+| `packages/web/src/plugins/vm-view_v2/components/node-net-card.tsx` | Section Monitor nœud « Réseau — par interface » : **UN GRAPHIQUE PAR INTERFACE HÔTE** (vmbr*, NICs physiques) RX=plein/TX=pointillé, nœud FIXE + timeframe de l'onglet (props), export CSV (t, iface, in_bps, out_bps) — tap des VMs exclus (vue VM), trous = null |
 | `packages/web/src/plugins/vm-view_v2/components/cpu-cores-card.tsx` | Section Monitor nœud « CPU par cœur » : barres horizontales usage courant (teinte <70 ok / <90 warn / ≥90 crit), tooltip user/system/iowait, export CSV, **hauteur dynamique** (≥240 px, sinon 18 px/cœur) |
-| `packages/web/src/plugins/vm-view_v2/components/node-monitor.tsx` | Onglet Monitor NŒUD : graphes PVE (CPU/RAM/rootfs/réseau via `/api/metrics?node=`) + sections agent hôte ci-dessus — sources **indépendantes** (si la série PVE est vide, les sections Telegraf restent montées, et inversement) |
-| `packages/web/src/plugins/vm-view_v2/components/vm-monitor.tsx` | Onglet Monitor VM : section « Disques I/O — par device (hôte) » (`PerDeviceDiskSection`) après le graphe disque agrégat — 1 carte par disque (débits + saturation + export CSV), états noMapping/insufficientData lisibles |
+| `packages/web/src/plugins/vm-view_v2/components/node-monitor.tsx` | Onglet Monitor NŒUD : graphes PVE (CPU/RAM/rootfs/réseau via `/api/metrics?node=`) + sections agent hôte ci-dessus (dont « Réseau — par interface » après le graphe Réseau agrégé) — sources **indépendantes** (si la série PVE est vide, les sections Telegraf restent montées, et inversement) |
+| `packages/web/src/plugins/vm-view_v2/components/vm-monitor.tsx` | Onglet Monitor VM : section « Disques I/O — par device (hôte) » (`PerDeviceDiskSection`) après le graphe disque agrégat — 1 carte par disque (débits + saturation + export CSV) ; section « Réseau — par interface » (`PerIfaceNetSection`) après le graphe Réseau agrégat — **1 carte par NIC** (RX/TX, note « MAC non trouvée » si pas de tap), états noMapping/insufficientData/noMac lisibles |
 | `packages/server/src/core/influx-consolidator.ts` | Consolidation 15 min des 4 tables Telegraf (**pas** diskio/mem/cpu/system — counters, cf. §6) |
-| `packages/web/src/core/api/apiClient.ts` | `fetchNodeSensors()` · `fetchSensorHistory(node, chip, feature, range)` · `fetchSmartHistory(node, device, range)` · `fetchNodeSystem()` · `fetchNodeDiskio(node, timeframe)` · `fetchVmDiskio(endpoint, vmid, timeframe)` |
-| `deploiement/60-telegraf-nodes.sh` | Déploiement de l'agent Telegraf sur un nœud (bare-metal, idempotent, `--dry-run`). Inclut le plugin `exec` (script `/usr/local/lib/prox4u-telegraf-dm-names.sh` → table `dm_names`, §4) |
+| `packages/web/src/core/api/apiClient.ts` | `fetchNodeSensors()` · `fetchSensorHistory(node, chip, feature, range)` · `fetchSmartHistory(node, device, range)` · `fetchNodeSystem()` · `fetchNodeDiskio(node, timeframe)` · `fetchVmDiskio(endpoint, vmid, timeframe)` · `fetchNodeNet(node, timeframe)` · `fetchVmNet(endpoint, vmid, timeframe)` |
+| `deploiement/60-telegraf-nodes.sh` | Déploiement de l'agent Telegraf sur un nœud (bare-metal, idempotent, `--dry-run`). Inclut le plugin `exec` (script `/usr/local/lib/prox4u-telegraf-dm-names.sh` → table `dm_names`, §4), le 2ᵉ script exec (`/usr/local/lib/prox4u-telegraf-iface-mac.sh` → table `net_if_mac`, §4) et le plugin `net` (trafic par interface, §4) |
 
 ## 3. Endpoint API
 
@@ -172,7 +174,27 @@ Trois routes de plus, **même source** (tables Telegraf `raw`), dans le même mo
   seulement — les CT `base-<ctid>--` sont parsés mais non demandés). 1 requête `diskioRateSql`
   par nœud (`name IN (…)`). Libellé UI = `mapperLabel` (`vm-100-disk-0 (vg rapide)`).
 
-**SQL d'I/O — `diskioRateSql(where, bucket, bucketSec, window)`** (exportée, testée) :
+ - `GET /api/node-net?node=&timeframe=` → `NodeNetResponse { timeframe, node, rows:
+   NodeNetRow[], source: 'influx'|'insufficientData' }` — trafic réseau **par interface hôte**
+   (table `net`, plugin Telegraf) : NICs physiques + ponts (vmbr*), **vnet\*/tap\*/veth\*/lo
+   exclus dans le SQL** (le trafic des tap est montré dans le Monitor de chaque VM — sinon
+   double-comptage). Même buckets que node-diskio (raw, 31 j), cache 5 min par (node, tf),
+   400 sans `node` ou timeframe invalide. Table absente (agent non (re)déployé) →
+   `insufficientData`, pas une erreur HTTP.
+ - `GET /api/vm-net?endpoint=&vmid=&timeframe=` (module `vmview`) → `VmNetResponse {
+   timeframe, vmid, series: VmNetSeries[], source: 'influx'|'insufficientData'|'noMapping' }` —
+   trafic **PAR INTERFACE d'une VM**. L'API PVE n'expose que l'agrégat (vérifié 9.1/9.2 :
+   /cluster/resources, rrddata ; QGA `network-get-interfaces` « not implemented ») → le trafic
+   est lu côté hôte sur le **device tap** de la carte (plugin `net`), joint à la config PVE par
+   **MAC** (robuste bridge/SDN/OVS/LXC, indépendant du nommage vnet/tap de PVE) : snapshot
+   poller → `vm.node`/`vm.type`, `getVmConfig` (cache 1 h) → cartes `net0`/`net1` (bridge, MAC),
+   `net_if_mac` (fenêtre 1 h) → MAC → tap. 1 requête `netRateSql` sur les tap résolus
+   (`"interface" IN (…)`). `noMapping` = tables absentes (agent à (re)déployer — **pas une
+   erreur HTTP**), `insufficientData` = VM hors snapshot ou aucune carte lue. MAC non trouvée
+   côté hôte (VM arrêtée → pas de tap) : série listée `hostIface=null`, points vides — jamais
+   de valeur inventée.
+
+**SQL de débit — `diskioRateSql` / `netRateSql(where, bucket, bucketSec, window)`** (exportées, testées) :
 `read_bytes`/`write_bytes`/`reads`/`writes`/`io_time` sont des **counters** (reset au reboot) ;
 `io_await` est une jauge (ms). Pattern : **bucket d'abord** (`date_bin` + `MAX` colonaires sur
 les counters — pas de window function sur les ~60k points/device/7 j), **puis `LAG` de bucket en
@@ -194,6 +216,8 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
 | `cpu` | `node`, `cpu` | `cpu` = `cpu-total` ou `cpu0..N` ; `usage_user/nice/system/idle/iowait/irq/softirq/steal` (somme = 100) |
 | `diskio` | `node`, `name` | counters : `read_bytes`, `write_bytes`, `reads`, `writes`, `read_time`, `write_time`, `io_time`, `weighted_io_time` · jauges : `io_await` (ms), `io_svctm`, `io_util` (fraction 0–1, peut **>1**), `iops_in_progress` · `wwid` (NVMe) |
 | `dm_names` | `node`, `dm` | `mapper_name` (LV PVE, ex. `rapide--vm--100--disk--0`), `present` (champ factice — une ligne line-protocol sans champ est invalide). Écrite par le **plugin `exec`** Telegraf (script `/usr/local/lib/prox4u-telegraf-dm-names.sh` → `/sys/block/dm-*/dm/name`) ; quasi statique, relue toutes les 10 s ; **pas consolidée** (dimension, pas une mesure) |
+| `net` | `node`, `"interface"` (colonne à **guillemets doubles** en SQL — tag Telegraf) | counters : `bytes_recv`, `bytes_sent` (+ errin/errout/dropin/dropout) — toutes les interfaces : NICs physiques, ponts vmbr*, **et tap des VMs (vnet*/tap*/veth*)** — source du trafic **par interface** (nœud + VMs, cf. §3.3) ; **pas consolidée** (counters) |
+| `net_if_mac` | `node`, `iface` | `mac` (minuscules), `present`. Écrite par le **plugin `exec`** (script `/usr/local/lib/prox4u-telegraf-iface-mac.sh` → `/sys/class/net/*/address`) ; quasi statique (change au start/stop des VMs) ; joint **carte VM ↔ tap hôte** par MAC pour `/api/vm-net` ; **pas consolidée** (dimension) |
 
 > ⚠️ La table SMART s'appelle **`smart_device`** (pas `smart`) — piège classique, déjà corrigé.
 
@@ -290,6 +314,25 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
     le timeframe de l'I/O disques est piloté par la barre d'outils de l'onglet. `LAYOUT_VERSION`
     bumpé (2→3→4) → layouts persistés antérieurs jetés au rechargement.
 
+- **Réseau par interface** (livré — Monitor nœud + Monitor VM) : l'API PVE n'expose **pas** le
+  trafic par interface d'une VM (vérifié live 9.1/9.2 : `/cluster/resources` + `rrddata` =
+  agrégat par VM, QGA `network-get-interfaces` « not implemented » et sans compteurs de trafic)
+  → source retenue : **côté hôte**, plugin Telegraf `net` (counters `bytes_recv`/`bytes_sent`
+  par interface, 10 s) :
+  - **Joint carte VM ↔ tap hôte par MAC** (pas par nom de device) : `getVmConfig` donne le MAC
+    des `net0`/`net1` (cache 1 h), l'agent écrit `net_if_mac` (iface → MAC, script exec,
+    fenêtre 1 h) — robuste bridge/SDN/OVS/LXC, **indépendant du nommage vnet/tap de PVE**.
+    MACs normalisés **minuscules** des deux côtés.
+  - **`/api/node-net` exclut vnet\*/tap\*/veth\*/lo dans le SQL** : ces tap portent le trafic
+    des VMs, montré dans le Monitor de chaque VM — les inclure au niveau nœud = double-comptage.
+    La vue nœud garde NICs physiques + ponts (vmbr*).
+  - **`net`/`net_if_mac` non consolidées** (counters / dimension) : `raw` seul (31 j), même
+    buckets que diskio ; dégradations identiques (`noMapping` = tables absentes = agent à
+    (re)déployer, pas une erreur HTTP ; MAC non trouvée = série `hostIface=null`, points vides).
+  - **Unités** : PVE `netin`/`netout` = **octets** cumulés depuis le boot (pas bits — confirmé
+    forum PVE) → les débits calculés (octets/s) partagent `formatBps` avec les graphes agrégés
+    existants, pas de facteur 8.
+
 ## 7. Pièges rencontrés (corrigés — ne pas réintroduire)
 
 - **`source: 'empty'` systématique** : les colonnes ZFS s'appellent `arcstats_hits` /
@@ -325,6 +368,13 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
 - **Line protocol Telegraf sans champ** : `dm_names dm="dm-10"` seul est **invalide** (une
   ligne line-protocol doit porter au moins un champ) → le script dm-names écrit toujours un
   champ factice `present=1i`. Oublier ce champ = lignes rejetées silencieusement, table vide.
+- **Colonne `interface` (table `net`)** : le tag Telegraf `interface` devient une colonne SQL
+  à **guillemets doubles** (`SELECT "interface" FROM net`) ; sans quotes, DuckDB/InfluxDB 3
+  peut la refuser. Dans `netRateSql` on l'alias immédiatement (`"interface" AS iface`).
+- **`normRate(null)` vaut 0, pas null** : `Number(null)` = 0 → `0 >= 0` → 0. Dans les tests
+  qui simulent un **reset de counter** (delta négatif), il faut un **nombre négatif** dans la
+  ligne mock (`out_bps: -1`), pas `null` — sinon on teste le chemin « zéro » au lieu du
+  chemin « trou » (test vm-net corrigé).
 
 ## 8. À suivre
 
@@ -338,8 +388,6 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
   consolidée `diskio_rate`) — le min/max actuel n'est pas applicable aux counters.
 - **Tendances load/swap 7 j** dans la vue nœud (capteurs nœuds ou vue nœud PVE) : les tables
   `system`/`mem` sont déjà dans `raw`, un graphe `date_bin(1h)` suffirait.
-- **Plugin `net` par NIC** (débits réseau par interface hôte) — même pattern que `diskio`
-  (counters `rx_bytes`/`tx_bytes`, rate par bucket) ; utile pour distinguer trafic VM vs hôte.
 - **`ping` CAP_NET_RAW** : le plugin `ping` de Telegraf nécessite la capability
   `CAP_NET_RAW` (ou root) ; le service Telegraf tourne non-root → ajouter la capability
   (`setcap`) si on veut la latence vers le cœur de cluster.
