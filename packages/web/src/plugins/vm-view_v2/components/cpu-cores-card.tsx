@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { Download } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { EChartsOption } from 'echarts';
 import type { NodeSystemRow } from '@prox4u/shared';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
+import { Skeleton } from '../../../components/ui/skeleton';
 import { useEChart } from '../../../hooks/use-echart';
 import { useTheme } from '../../../store/theme';
 import { chartTheme } from '../../../lib/chart-theme';
+import { downloadCsvFile } from '../../../lib/monitor-charts';
 
 /** Teinte d'une barre d'usage : < 70 ok, < 90 warn, sinon crit (cœur quasi saturé). */
 function barColor(pct: number): string {
@@ -14,25 +17,20 @@ function barColor(pct: number): string {
   return '#10b981';
 }
 
+/** Hauteur du graphe : au moins 240 px, sinon ~18 px par cœur (barres lisibles jusqu'à 32 cœurs). */
+const chartHeight = (n: number) => Math.max(240, n * 18);
+
 /**
- * Vue d'ensemble — carte « CPU par cœur » : usage courant par cœur (barres
- * horizontales, dernier point de l'agent — 10 s). Sur du vrai matériel, c'est le
- * signal qui révèle un cœur saturé (NUMA, pinning, SMT déséquilibré) invisible
- * dans le % agrégé. Nœud sélectionnable ; les nœuds sans donnée CPU n'apparaissent
- * pas dans la liste.
+ * Monitor nœud (Vue VM v2) — section « CPU par cœur » : usage courant par cœur (barres
+ * horizontales, dernier point de l'agent — 10 s, auto-refresh 60 s côté parent). Sur du
+ * vrai matériel, c'est le signal qui révèle un cœur saturé (NUMA, pinning, SMT
+ * déséquilibré) invisible dans le % agrégé. Nœud fixe (celui affiché).
  */
-export function CpuCoresCard({ rows }: { rows: NodeSystemRow[] }) {
+export function CpuCoresCard({ row, loading }: { row: NodeSystemRow | undefined; loading: boolean }) {
   const { t } = useTranslation();
   const theme = useTheme((s) => s.theme);
   const ct = chartTheme(theme);
 
-  const nodes = useMemo(() => rows.filter((r) => r.cores.length > 0).map((r) => r.node), [rows]);
-  const [node, setNode] = useState('');
-  useEffect(() => {
-    if (!node && nodes.length > 0) setNode(nodes[0]);
-  }, [nodes, node]);
-
-  const row = rows.find((r) => r.node === node);
   const cores = row?.cores ?? [];
 
   const option = useMemo<EChartsOption | null>(() => {
@@ -86,36 +84,45 @@ export function CpuCoresCard({ rows }: { rows: NodeSystemRow[] }) {
 
   const ref = useEChart(option);
 
+  /** Export CSV — une ligne par cœur. */
+  const exportCsv = () => {
+    if (!row || cores.length === 0) return;
+    const header = ['core', 'usage_pct', 'user_pct', 'system_pct', 'iowait_pct'];
+    const rows = cores.map((c) => [
+      c.core,
+      c.usagePct.toFixed(1),
+      c.userPct.toFixed(1),
+      c.systemPct.toFixed(1),
+      c.iowaitPct.toFixed(1),
+    ]);
+    downloadCsvFile(`node-cpu-cores-${row.node}-${new Date().toISOString().slice(0, 10)}.csv`, header, rows);
+  };
+
   return (
     <Card>
-      <CardHeader draggable>
+      <CardHeader className="flex-row items-center justify-between gap-2">
         <CardTitle title={t('overview.cpubars.hint')}>{t('overview.cpubars')}</CardTitle>
+        <button
+          onClick={exportCsv}
+          disabled={cores.length === 0}
+          title={t('vm.mon.export')}
+          className="rounded-md border p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
       </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-2">
-        {nodes.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center px-3 text-center text-xs text-muted-foreground">
-            {t('overview.cpubars.none')}
-          </div>
+      <CardContent className="flex flex-col gap-2">
+        {loading && cores.length === 0 ? (
+          <Skeleton className="w-full" style={{ height: chartHeight(0) }} />
         ) : (
-          <>
-            <div className="flex justify-end">
-              <select
-                value={node}
-                onChange={(e) => setNode(e.target.value)}
-                className="rounded-md border bg-transparent px-1.5 py-0.5 text-[11px] text-foreground"
-              >
-                {nodes.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div ref={ref} className="min-h-0 w-full flex-1" />
+          <div className="relative">
+            <div ref={ref} style={{ height: chartHeight(cores.length) }} className="w-full" />
             {cores.length === 0 && (
-              <div className="pb-1 text-center text-[11px] text-muted-foreground">{t('overview.cpubars.none')}</div>
+              <div className="absolute inset-0 flex items-center justify-center px-3 text-center text-xs text-muted-foreground">
+                {t('overview.cpubars.none')}
+              </div>
             )}
-          </>
+          </div>
         )}
       </CardContent>
     </Card>

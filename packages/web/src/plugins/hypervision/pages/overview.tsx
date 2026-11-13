@@ -18,8 +18,6 @@ import { useDashboard } from '../../../core/data/dashboard';
 import { fetchNodeSystem } from '../../../core/api/apiClient';
 import { ResourceChart } from '../components/resource-chart';
 import { SystemNodesCard } from '../components/system-nodes-card';
-import { NodeDiskioCard } from '../components/node-diskio-card';
-import { CpuCoresCard } from '../components/cpu-cores-card';
 import { useLayout } from '../../../store/layout';
 import { Badge } from '../../../components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
@@ -31,8 +29,9 @@ const BREAKPOINT_COLS: Breakpoints = { lg: 12, md: 8, sm: 4 };
 
 /**
  * Layout par défaut de la vue d'ensemble : graphes ressources en tête, rangée de KPIs,
- * rangée système (Système par nœud / I/O disques / CPU par cœur — h=5, graphes +
- * sélecteurs), cartes endpoints (3/rangée), puis alertes + table. Les positions
+ * rangée système (Système par nœud — tableau cross-node agent hôte, pleine largeur, h=5),
+ * cartes endpoints (3/rangée), puis alertes + table. I/O disques par device et CPU par
+ * cœur vivent dans le Monitor du nœud (Vue VM v2) — drill-down d'un nœud. Les positions
  * persistées (drag/resize utilisateur) priment ; les nouveaux endpoints reprennent
  * leur emplacement calculé ici.
  */
@@ -56,9 +55,7 @@ function overviewDefaultLayout(eps: EndpointSnapshot[]): Layout {
     { i: 'kpi-cpu', x: 3, y: 3, w: 3, h: 2 },
     { i: 'kpi-storage', x: 6, y: 3, w: 3, h: 2 },
     { i: 'kpi-vms', x: 9, y: 3, w: 3, h: 2 },
-    { i: 'sys-nodes', x: 0, y: SYS_ROW_Y, w: 4, h: SYS_ROW_H },
-    { i: 'diskio', x: 4, y: SYS_ROW_Y, w: 4, h: SYS_ROW_H },
-    { i: 'cpu-cores', x: 8, y: SYS_ROW_Y, w: 4, h: SYS_ROW_H },
+    { i: 'sys-nodes', x: 0, y: SYS_ROW_Y, w: 12, h: SYS_ROW_H },
     ...epItems,
     { i: 'alerts', x: 0, y: bottomY, w: 5, h: 3 },
     { i: 'table', x: 5, y: bottomY, w: 7, h: 3 },
@@ -296,8 +293,9 @@ function OverviewAlerts({ eps }: { eps: EndpointSnapshot[] }) {
 }
 
 /**
- * Dernier point système par nœud (Telegraf) — UNE seule requête partagée par les
- * trois cartes système (Système / I/O disques / CPU par cœur), tick 60 s.
+ * Dernier point système par nœud (Telegraf) — alimente la carte « Système » cross-node
+ * (tick 60 s, cache serveur 60 s). La même route sert aussi le Monitor du nœud (Vue VM
+ * v2 : sections Système / CPU par cœur) avec un fetch indépendant de chaque vue.
  */
 function useNodeSystem(): { rows: NodeSystemRow[]; loading: boolean } {
   const [rows, setRows] = useState<NodeSystemRow[]>([]);
@@ -414,15 +412,10 @@ export function OverviewPage() {
           <KpiVmsCard kpis={kpis} spark={[]} />
         </div>
 
-        {/* Rangée système (agent hôte — non fourni par l'API PVE) */}
+        {/* Rangée système (agent hôte — non fourni par l'API PVE). I/O disques par device
+            et CPU par cœur : dans le Monitor du nœud (Vue VM v2). */}
         <div key="sys-nodes" className="h-full">
           <SystemNodesCard rows={sysRows} loading={sysLoading} />
-        </div>
-        <div key="diskio" className="h-full">
-          <NodeDiskioCard nodes={sysRows.map((r) => r.node)} />
-        </div>
-        <div key="cpu-cores" className="h-full">
-          <CpuCoresCard rows={sysRows} />
         </div>
 
         {multi.endpoints.map((ep) => (
