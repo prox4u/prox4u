@@ -7,6 +7,7 @@
 # dans l'InfluxDB 3 Core de prox4u (base `raw`) :
 #   smart_device (attributs SMART prédictifs) · sensors (températures) · zfs (ARC/pools)
 #   systemd_units (état des unités) · disk/diskio/mem/cpu/system
+#   dm_names (mapping device-mapper → LV PVE, pour l'I/O disque PAR DISQUE des VM)
 #
 # Consolidation : le consolidateur prox4u agrège ces tables de `raw` (31 j) vers
 # `consolidated` (rétention ∞) en buckets 15 min — historique SMART/capteurs/ZFS
@@ -167,6 +168,34 @@ else
   SMART_DEVICES='"/dev/sda","/dev/nvme0n1"'  # fallback générique (dry-run / pas de smartctl)
 fi
 
+# ── 5b. Script de mapping device-mapper → LV (consommé par le plugin exec) ──
+# Les disques PVE (LVM-thin) sont des LV device-mapper : côté hôte, /proc/diskstats
+# les liste comme `dm-N` SANS NOM. L'API PVE n'expose pas le mapping dm-N ↔ LV —
+# seul le nœud le connaît (/sys/block/dm-N/dm/name). Le plugin exec exécute ce
+# script à chaque cycle et écrit la table quasi statique `dm_names` (dm → LV,
+# ex. dm-10 → local--vm--100--disk--0) : prox4u l'utilise pour l'I/O disque
+# PAR DISQUE de chaque VM (Vue VM → Monitor → « Disques I/O — par device »).
+DM_NAMES_SCRIPT=/usr/local/lib/prox4u-telegraf-dm-names.sh
+if [[ $DRY_RUN -eq 0 ]]; then
+  cat > "$DM_NAMES_SCRIPT" <<'EOS'
+#!/usr/bin/env bash
+# Prox4u — mapping device-mapper → LV PVE (table dm_names pour Telegraf).
+# Sortie : line protocol InfluxDB (tags dm + mapper_name). Le champ présent=1i
+# est obligatoire : une ligne line-protocol sans champ n'est pas valide.
+set -euo pipefail
+for d in /sys/block/dm-*; do
+  [[ -e "$d/dm/name" ]] || continue
+  name="$(cat "$d/dm/name" 2>/dev/null)" || continue
+  [[ -n "$name" ]] || continue
+  printf 'dm_names dm="%s" mapper_name="%s" present=1i\n' "$(basename "$d")" "$name"
+done
+EOS
+  chmod 755 "$DM_NAMES_SCRIPT"
+  ok "script mapping dm → LV installé → $DM_NAMES_SCRIPT"
+else
+  echo "[dry-run] installerait le script $DM_NAMES_SCRIPT (mapping device-mapper → LV)"
+fi
+
 if [[ $DRY_RUN -eq 1 ]]; then
   # Aperçu sans écrire (et sans exposer le token en clair sur la console).
   cat <<EOF
@@ -174,7 +203,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   agent         : interval=10s, hostname=$NODE_TAG
   global_tags   : node=$NODE_TAG, node_source=telegraf
   outputs.influxdb_v2 : $INFLUX_URL (bucket=$INFLUX_BUCKET, org=$INFLUX_ORG, insecure_skip_verify=true)
-  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system
+  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system, exec (dm_names)
   (token masqué)
 EOF
 else
@@ -223,6 +252,15 @@ cat > "$CONF" <<EOF
 #   urls = ["$PING_TARGET"]
 #   count = 1
 #   timeout = "2s"
+
+# ── Mapping device-mapper → LV PVE (table dm_names) — I/O disque par VM ──
+# Le script écrit du line protocol : dm-N → nom du LV (vg--vm--<vmid>--disk--<n>).
+# Quasi statique (change à la création/suppression de disques) ; prox4u lit le
+# dernier point par (node, dm) sur une fenêtre de 1 h.
+[[inputs.exec]]
+  commands = ["/usr/local/lib/prox4u-telegraf-dm-names.sh"]
+  data_format = "influx"
+  timeout = "10s"
 
 # ── Complément local exact (recoupe l'API PVE, mais au niveau host) ──
 [[inputs.disk]]
@@ -278,5 +316,5 @@ echo "→ Prochaine étape (depuis le serveur prox4u) : valider que les mesures 
 echo "    cd prox4u && TOK=\$(grep '^INFLUX_TOKEN=' .env | cut -d= -f2)"
 echo "    curl -sk https://localhost:8181/api/v3/query_sql -H \"Authorization: Bearer \$TOK\" \\"
 echo "      -H 'Content-Type: application/json' \\"
-echo "      -d '{\"db\":\"raw\",\"q\":\"SELECT table_name FROM information_schema.tables WHERE table_name IN ('\''smart_device'\'','\''sensors'\'','\''zfs'\'','\''systemd_units'\'','\''disk'\'','\''cpu'\'','\''mem'\'')\"}'"
+echo "      -d '{\"db\":\"raw\",\"q\":\"SELECT table_name FROM information_schema.tables WHERE table_name IN ('\''smart_device'\'','\''sensors'\'','\''zfs'\'','\''systemd_units'\'','\''disk'\'','\''diskio'\'','\''cpu'\'','\''mem'\'','\''dm_names'\'')\"}'"
 [[ $DRY_RUN -eq 1 ]] && echo "(--dry-run : service non démarré, config non écrite)"

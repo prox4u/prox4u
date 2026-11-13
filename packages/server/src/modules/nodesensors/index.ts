@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { AppContext, Poller } from '../../core/poller.js';
 import { registerNodeSensors, registerSensorHistoryRoute, registerSensorThresholdRoutes, registerSmartHistoryRoute } from './routes.js';
+import { registerNodeSystemRoutes } from './system-routes.js';
 import { SensorThresholdStore } from './thresholds.js';
 
 /**
@@ -15,6 +16,9 @@ import { SensorThresholdStore } from './thresholds.js';
  *    disque SMART — table smart_device, pas de seuil, 0 °C = pas de lecture).
  *  - registerSensorThresholdRoutes : GET/PUT/DELETE /api/admin/sensor-thresholds
  *    (onglet Administration « Seuils capteurs » — guard rôle admin).
+ *  - registerNodeSystemRoutes : GET /api/node-system (load/swap/usage par cœur,
+ *    dernier point par nœud) + GET /api/node-diskio (I/O par device physique) —
+ *    Vue d'ensemble. Même source Telegraf raw, mêmes pièges (counters, trous).
  */
 export function registerNodeSensorsModule(app: FastifyInstance, ctx: AppContext, _poller: Poller): void {
   const dataDir = path.dirname(ctx.config.authFile);
@@ -24,4 +28,5 @@ export function registerNodeSensorsModule(app: FastifyInstance, ctx: AppContext,
   registerSensorHistoryRoute(app, ctx, store);
   registerSmartHistoryRoute(app, ctx);
   registerSensorThresholdRoutes(app, ctx, store);
+  registerNodeSystemRoutes(app, ctx);
 }

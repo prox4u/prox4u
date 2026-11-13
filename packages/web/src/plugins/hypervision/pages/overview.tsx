@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, OctagonAlert } from 'lucide-react';
@@ -6,6 +6,7 @@ import { ResponsiveGridLayout, useContainerWidth, type Breakpoints, type Layout 
 import type {
   EndpointSnapshot,
   KpiSummary,
+  NodeSystemRow,
   OvercommitConfig,
   OvercommitMetric,
   OvercommitRiskResponse,
@@ -14,7 +15,11 @@ import type {
 import { computeOvercommit, usageSeverity } from '@prox4u/shared';
 import { useMulti, useOvercommitConfig } from '../../../core/data/use-endpoint';
 import { useDashboard } from '../../../core/data/dashboard';
+import { fetchNodeSystem } from '../../../core/api/apiClient';
 import { ResourceChart } from '../components/resource-chart';
+import { SystemNodesCard } from '../components/system-nodes-card';
+import { NodeDiskioCard } from '../components/node-diskio-card';
+import { CpuCoresCard } from '../components/cpu-cores-card';
 import { useLayout } from '../../../store/layout';
 import { Badge } from '../../../components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
@@ -26,19 +31,23 @@ const BREAKPOINT_COLS: Breakpoints = { lg: 12, md: 8, sm: 4 };
 
 /**
  * Layout par défaut de la vue d'ensemble : graphes ressources en tête, rangée de KPIs,
- * cartes endpoints (3/rangée), puis alertes + table. Les positions persistées
- * (drag/resize utilisateur) priment ; les nouveaux endpoints reprennent leur emplacement
- * calculé ici.
+ * rangée système (Système par nœud / I/O disques / CPU par cœur — h=5, graphes +
+ * sélecteurs), cartes endpoints (3/rangée), puis alertes + table. Les positions
+ * persistées (drag/resize utilisateur) priment ; les nouveaux endpoints reprennent
+ * leur emplacement calculé ici.
  */
 function overviewDefaultLayout(eps: EndpointSnapshot[]): Layout {
+  const SYS_ROW_Y = 5;
+  const SYS_ROW_H = 5;
+  const epY = SYS_ROW_Y + SYS_ROW_H;
   const epItems = eps.map((ep, i) => ({
     i: `ep-${ep.id}`,
     x: (i % 3) * 4,
-    y: 5 + Math.floor(i / 3) * 3,
+    y: epY + Math.floor(i / 3) * 3,
     w: 4,
     h: 3,
   }));
-  const bottomY = 5 + Math.ceil(eps.length / 3) * 3;
+  const bottomY = epY + Math.ceil(eps.length / 3) * 3;
   return [
     { i: 'res-cpu', x: 0, y: 0, w: 4, h: 3 },
     { i: 'res-ram', x: 4, y: 0, w: 4, h: 3 },
@@ -47,6 +56,9 @@ function overviewDefaultLayout(eps: EndpointSnapshot[]): Layout {
     { i: 'kpi-cpu', x: 3, y: 3, w: 3, h: 2 },
     { i: 'kpi-storage', x: 6, y: 3, w: 3, h: 2 },
     { i: 'kpi-vms', x: 9, y: 3, w: 3, h: 2 },
+    { i: 'sys-nodes', x: 0, y: SYS_ROW_Y, w: 4, h: SYS_ROW_H },
+    { i: 'diskio', x: 4, y: SYS_ROW_Y, w: 4, h: SYS_ROW_H },
+    { i: 'cpu-cores', x: 8, y: SYS_ROW_Y, w: 4, h: SYS_ROW_H },
     ...epItems,
     { i: 'alerts', x: 0, y: bottomY, w: 5, h: 3 },
     { i: 'table', x: 5, y: bottomY, w: 7, h: 3 },
@@ -283,6 +295,35 @@ function OverviewAlerts({ eps }: { eps: EndpointSnapshot[] }) {
   );
 }
 
+/**
+ * Dernier point système par nœud (Telegraf) — UNE seule requête partagée par les
+ * trois cartes système (Système / I/O disques / CPU par cœur), tick 60 s.
+ */
+function useNodeSystem(): { rows: NodeSystemRow[]; loading: boolean } {
+  const [rows, setRows] = useState<NodeSystemRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetchNodeSystem()
+        .then((r) => {
+          if (!cancelled) setRows(r.nodes);
+        })
+        .catch((err) => console.warn('chargement node-system en échec', err))
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    };
+    load();
+    const id = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+  return { rows, loading };
+}
+
 export function OverviewPage() {
   const { t } = useTranslation();
   const multi = useMulti();
@@ -290,6 +331,7 @@ export function OverviewPage() {
   const setOverviewLayouts = useLayout((s) => s.setOverviewLayouts);
   const gridVersion = useLayout((s) => s.version);
   const { width, containerRef } = useContainerWidth({ initialWidth: 1280 });
+  const { rows: sysRows, loading: sysLoading } = useNodeSystem();
 
   const eps = multi?.endpoints ?? [];
   // Layout effectif : positions persistées (drag/resize) + défauts calculés pour les
@@ -370,6 +412,17 @@ export function OverviewPage() {
         </div>
         <div key="kpi-vms" className="h-full">
           <KpiVmsCard kpis={kpis} spark={[]} />
+        </div>
+
+        {/* Rangée système (agent hôte — non fourni par l'API PVE) */}
+        <div key="sys-nodes" className="h-full">
+          <SystemNodesCard rows={sysRows} loading={sysLoading} />
+        </div>
+        <div key="diskio" className="h-full">
+          <NodeDiskioCard nodes={sysRows.map((r) => r.node)} />
+        </div>
+        <div key="cpu-cores" className="h-full">
+          <CpuCoresCard rows={sysRows} />
         </div>
 
         {multi.endpoints.map((ep) => (

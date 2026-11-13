@@ -1311,6 +1311,95 @@ InfluxDB) puis correction du filtre (choix utilisateur : vraies alertes seulemen
 
 ---
 
+## ✅ Fait — Vue d'ensemble P0+P1+P2 (système/I/O disques/CPU par cœur) + Monitor VM P0 (I/O par disque) (livré, validé API + navigateur — **commité**)
+
+Question utilisateur (2026-11-13) : la Vue d'ensemble affichait **zéro** métrique Telegraf
+(100 % PVE) alors que l'agent collectait 32 tables dans `raw`. Périmètre validé : Vue
+d'ensemble **P0** (carte Système par nœud : load 1/5/15 teinté vs cœurs, swap, iowait,
+uptime) + **P1** (I/O disques par device physique) + **P2** (CPU par cœur) et Monitor VM
+**P0** (I/O **par disque** de la VM, via mapping dm-N ↔ LV PVE).
+
+### Shared (`system-metrics.ts` + 11 tests)
+- Types `NodeSystemRow/Response`, `NodeDiskioRow/Response`, `VmDiskioPoint/Series/Response`.
+- Pures testées : `parsePveMapperName` (LV `vg--vm--100--disk--0` → vmid/ctid, décodé depuis
+  le **suffixe LV** car le VG peut contenir `--`), `mapperLabel`, `isPhysicalDevice`.
+- i18n fr/en : `overview.system.*`, `overview.diskio.*`, `overview.cpubars.*` (+`.usage`),
+  `vm.mon.perDevice.*` (+`.noData`), `vm.mon.busy/iops/await`.
+
+### Serveur (`nodesensors/system-routes.ts` + `vmview/vm-diskio.ts`, 11 tests)
+- `GET /api/node-system` — dernier point par nœud (fenêtre 10 min) sur `system`+`mem`+`cpu`
+  (load, nCpus, uptime, iowait/user/system, swap total−free, usage par cœur = 100−idle−iowait)
+  ; **cache 60 s** (données 10 s).
+- `GET /api/node-diskio?node=&timeframe=` — I/O **par device physique** ; **SQL
+  `diskioRateSql`** (exportée, testée) : counters Telegraf → **bucket d'abord**
+  (`date_bin` + `MAX` colonaires) **puis `LAG`** de bucket en bucket ; débits = Δ/durée ;
+  **delta négatif (reboot) → NULL** (`normRate`) ; **busy % = Δ`io_time`/durée (0–100,
+  iostat)** — PAS `io_util` Telegraf (weighted_io_time, **observé 233 %** sur sda) ;
+  dm-/loop-/md-/sr-/ram exclus SQL, **partitions (sda1, nvme0n1p1) filtrées côté TS**
+  (double-comptage) ; 4 timeframes (hour 1min/1h · day 5min/24h · week 1h/7j · month
+  1d/30j) **tous sur `raw`** (rétention 31 j) — diskio/mem/cpu/system non consolidées
+  (consolidateur 15 min = jauges) ; **cache 5 min/(node,tf)** ; 400 `node`/`timeframe`.
+- `GET /api/vm-diskio?endpoint=&vmid=&timeframe=` — I/O **PAR DISQUE d'une VM** : mapping
+  `dm-N` → LV depuis **`dm_names`** (plugin **`exec` Telegraf**, quasi statique, lu fenêtre
+  1 h, dernier point par (node, dm)) — l'API PVE ne l'expose pas ; filtre
+  `kind==='vm' && id===vmid` (QEMU ; CT `base-` parsés non demandés) ; 1 requête
+  `diskioRateSql` par nœud ; **cache 5 min/(ep,vmid,tf)** ; dégradations encodées, jamais
+  comblées : `noMapping` (table absente = agent à (re)déployer — message lisible en UI, pas
+  une erreur HTTP ; regex réelle `/cannot find table|not found|does not exist/i` car le
+  message InfluxDB est `table 'public.iox.dm_names' not found`), `insufficientData`
+  (mapping présent, aucun LV dm pour la VM / InfluxDB KO).
+
+### Déploiement (`deploiement/60-telegraf-nodes.sh`)
+- Header + dry-run (plugin list) ; **§5b** : installe `/usr/local/lib/prox4u-telegraf-dm-names.sh`
+  (chmod 755) → line protocol `dm_names dm="dm-10" mapper_name="…" present=1i` (le champ
+  `present` est **obligatoire** — une ligne sans champ est invalide) ; `[[inputs.exec]]` dans
+  le conf généré ; requête finale de vérif étendue (`diskio`, `dm_names`). Idempotent,
+  backupe le conf — **à relancer sur les 3 nœuds** pour activer le mapping (pas de SSH
+  depuis le conteneur → fait par l'utilisateur).
+
+### Web
+- `apiClient.ts` : `fetchNodeSystem` / `fetchNodeDiskio` / `fetchVmDiskio`.
+- **3 cartes Vue d'ensemble** : `system-nodes-card.tsx` (load teinté vs cœurs ≥1 warn ≥2
+  crit, iowait ≥10/≥25, swap ≥50/≥80, uptime) · `node-diskio-card.tsx` (sélecteur nœud +
+  tf, 2 graphes : débits lecture=plein/écriture=pointillé par device ; busy % + IOPS
+  double axe, tooltip custom, **base de temps commune**, trous=null) · `cpu-cores-card.tsx`
+  (barres horizontales <70 ok/<90 warn/≥90 crit, tooltip user/system/iowait).
+- `overview.tsx` : rangée grid `y=5 h=5` (3 cartes w=4), epItems à y=10,
+  `bottomY = 10+ceil(n/3)*3` ; **une seule fetch** `/api/node-system` (hook
+  `useNodeSystem`, tick 60 s) passée aux 3 cartes.
+- `store/layout.ts` : **`LAYOUT_VERSION` 2→3** (layouts persistés antérieurs jetés).
+- `vm-monitor.tsx` : `PerDeviceDiskSection` après le graphe disque agrégat (1
+  carte/device : débits + saturation + export CSV) ; `fetchVmDiskio` **isolé par
+  `.catch`** dans le `Promise.all` (son échec ne casse pas le monitor).
+
+### Vérifications effectuées
+- shared build → typecheck (3 paquets) → **tests : 270 shared + 155 server** (11 + 11
+  nouveaux) → `pnpm build` → `./server.sh restart` — tout vert.
+- **API live** : `/api/node-system` (3 nœuds : proxmox 24 cœurs load ~5, ProxSite1/2
+  6 cœurs, swap, iowait, uptime) · `/api/node-diskio?node=proxmox&timeframe=day`
+  (nvme0n1/nvme1n1/sda uniquement, 201 points, busy 0.2–0.7 %, pas de dm/partitions) ·
+  `/api/vm-diskio?endpoint=proxmox&vmid=100&timeframe=day` → `noMapping` (table absente,
+  **attendu** tant que le re-déploiement Telegraf n'est pas fait).
+- **Navigateur fresh** (admin) : vue d'ensemble = 3 cartes rendues avec vraies données,
+  6 instances ECharts à taille réelle, **0 erreur console nouvelle** (2× 401 pré-login
+  `/api/auth/me` + `/api/auth/catalog-sync` = pré-existant) ; VM `ia-u24-01` (#100) →
+  Monitor = section « Disques I/O — par device (hôte) » rendue avec le message
+  noMapping, 6 graphes monitor OK.
+- Note : **deux VMs portent le vmid 100** (debian13 sur ProxSite1 arrêtée, ia-u24-01 sur
+  proxmox) — la route ne filtre que par vmid, sans ambiguïté car le mapping dm est lu sur
+  le nœud de la VM (1 VM = 1 nœud).
+
+### Pièges rencontrés (corrigés — ne pas réintroduire)
+- `dm-*/` dans un **commentaire bloc** TS = fermeture prématurée `*/` → esbuild fail
+  (cf. skill `node-sensors` §7).
+- Le message d'erreur InfluxDB 3 Core table absente est `Error during planning: table
+  'public.iox.<name>' not found` (HTTP 400) — un regex `cannot find table` seul ne matche
+  pas (cf. skill `node-sensors` §7).
+- `io_util` Telegraf peut **dépasser 100 %** (weighted_io_time) — jamais de busy % depuis
+  cette colonne ; partitions + dm + disque = **même I/O** (double-comptage).
+
+---
+
 ## ⏳ À faire
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
