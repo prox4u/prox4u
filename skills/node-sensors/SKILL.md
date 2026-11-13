@@ -55,13 +55,13 @@ base `consolidated` (∞)
 | `packages/web/src/components/admin/sensor-thresholds.tsx` | Onglet Administration « Seuils capteurs » (tableau nœud/puce/capteur/temp/seuil firmware RO/seuil perso input clampé + reset par ligne + tout) |
 | `packages/web/src/plugins/node-sensors/lib/sensor-thresholds-api.ts` | Client API /api/admin/sensor-thresholds (list/save/resetAll/resetOne) |
 | `packages/shared/src/system-metrics.ts` | Types + fonctions pures testées des métriques système hôte : `NodeSystemRow/Response`, `NodeDiskioRow/Response`, `VmDiskioPoint/Series/Response`, `NodeNetRow/Response`, `VmNetPoint/Series/Response`, `parsePveMapperName` (LV `vg--vm--101--disk--0` → vmid/ctid, depuis le **suffixe** LV car le VG peut contenir `--`), `mapperLabel`, `isPhysicalDevice` (disques entiers seuls) |
-| `packages/server/src/modules/nodesensors/system-routes.ts` | `registerNodeSystemRoutes(app, ctx, poller)` — `GET /api/node-system` (dernier point par nœud : `system`+`mem`+`cpu`, cache 60 s) · `GET /api/node-diskio?node=&timeframe=` (I/O par device physique, SQL `diskioRateSql` = bucket d'abord puis LAG des counters, cache 5 min) · `GET /api/node-net?node=&timeframe=` (trafic réseau **par interface hôte** : SQL `netRateSql` idem sur `bytes_recv`/`bytes_sent`, **vnet\*/tap\*/veth\*/lo exclus dans le SQL** — double-comptage avec la vue VM — **+ `interfaces: NodeNetIface[]` = liste des interfaces du nœud depuis l'API PVE** `GET /nodes/{n}/network` via `nodeEndpoint(ctx, poller, node)` → endpoint du snapshot → `ep.source.getNetwork()` ; joint nom PVE ↔ noyau en **candidats** `kernels = [name, ...altnames]` ; helper pur exporté `buildNodeNetIfaces(net, rows)` testé, cache 5 min) — consommés par la Vue d'ensemble (carte Système cross-node) ET le Monitor nœud Vue VM v2 (sections Système / CPU par cœur / I/O disques / Réseau par interface) |
+| `packages/server/src/modules/nodesensors/system-routes.ts` | `registerNodeSystemRoutes(app, ctx, poller)` — `GET /api/node-system` (dernier point par nœud : `system`+`mem`+`cpu`, cache 60 s) · `GET /api/node-diskio?node=&timeframe=` (I/O par device physique, SQL `diskioRateSql` = bucket d'abord puis LAG des counters, cache 5 min) · `GET /api/node-net?node=&timeframe=` (trafic réseau **par interface hôte** : SQL `netRateSql` idem sur `bytes_recv`/`bytes_sent`, **vnet\*/tap\*/veth\*/lo exclus dans le SQL** — double-comptage avec la vue VM — **+ `interfaces: NodeNetIface[]` = liste des interfaces du nœud depuis l'API PVE** `GET /nodes/{n}/network` via `nodeEndpoint(ctx, poller, node)` → endpoint du snapshot → `ep.source.getNetwork()` ; joint nom PVE ↔ noyau en **candidats** `kernels = [name, ...altnames]` ; helper pur exporté `buildNodeNetIfaces(net, rows)` testé (+ `parsePveFwIface` — décryptage des interfaces pare-feu PVE `fw*`, cf. §6), cache 5 min) — consommés par la Vue d'ensemble (carte Système cross-node) ET le Monitor nœud Vue VM v2 (sections Système / CPU par cœur / I/O disques / Réseau par interface) |
 | `packages/server/src/modules/vmview/vm-diskio.ts` | `GET /api/vm-diskio?endpoint=&vmid=&timeframe=` — I/O PAR DISQUE d'une VM : mapping `dm_names` (dernier point par (node, dm), fenêtre 1 h) + `diskioRateSql` sur les dm de la VM ; états `influx` / `noMapping` (table absente) / `insufficientData` (pas de LV dm pour la VM) |
 | `packages/server/src/modules/vmview/vm-net.ts` | `GET /api/vm-net?endpoint=&vmid=&timeframe=` — trafic réseau **PAR INTERFACE d'une VM** (l'API PVE n'expose que l'agrégat : /cluster/resources, rrddata, QGA network-get-interfaces « not implemented ») : snapshot poller → node/type de la VM, `getVmConfig` → cartes (net0/net1, bridge, **MAC**), `net_if_mac` (fenêtre 1 h, `latestIfMacMapping`) → MAC → tap hôte, 1 `netRateSql` sur les tap résolus ; états `influx` / `noMapping` (tables absentes) / `insufficientData` (VM hors snapshot, pas de carte lue) — MAC non trouvée (VM arrêtée, SDN) = série listée `hostIface=null`, points vides |
 | `packages/web/src/plugins/hypervision/components/system-nodes-card.tsx` | Carte Vue d'ensemble « Système — par nœud » (tableau cross-node, pleine largeur) : load 1/5/15 teinté vs nb de cœurs (≥1 warn, ≥2 crit), iowait (≥10 warn, ≥25 crit), swap (≥50 warn, ≥80 crit), uptime |
 | `packages/web/src/plugins/vm-view_v2/components/node-system-card.tsx` | Section Monitor nœud « Système (nœud) » (chips, nœud affiché uniquement) : load 1/5/15 teinté, cœurs, iowait, swap, uptime — mêmes seuils que la carte cross-node |
 | `packages/web/src/plugins/vm-view_v2/components/node-diskio-card.tsx` | Section Monitor nœud « I/O disques (nœud) » : nœud FIXE (prop), timeframe piloté par la barre d'outils de l'onglet (prop), 2 graphes (débits lecture=plein/écriture=pointillé par device ; busy % + IOPS double axe) + export CSV — base de temps commune, trous = null (pas d'interpolation) |
-| `packages/web/src/plugins/vm-view_v2/components/node-net-card.tsx` | Section Monitor nœud « Réseau — par interface » : **UNE CARTE GRAPHIQUE PAR INTERFACE DU NŒUD** (même liste que la page Réseau de Proxmox — source API PVE, dispo AVANT le redéploiement de l'agent) : titre = nom PVE + badge type (pont/carte réseau/interface) + actif, joint des mesures sur `iface.kernels` (nom PVE + altnames), 1 graphe RX=plein/TX=pointillé par carte, export CSV par carte (timestamp, in_bps, out_bps), état vide **par carte** (`overview.netif.ifaceNone` si d'autres interfaces mesurées, `overview.netif.none` si rien) — tap des VMs exclus (vue VM), trous = null |
+| `packages/web/src/plugins/vm-view_v2/components/node-net-card.tsx` | Section Monitor nœud « Réseau — par interface » : **UNE CARTE GRAPHIQUE PAR INTERFACE DU NŒUD** (même liste que la page Réseau de Proxmox — source API PVE, dispo AVANT le redéploiement de l'agent) : titre = nom PVE + badge type (pont/carte réseau/interface) + actif, joint des mesures sur `iface.kernels` (nom PVE + altnames), 1 graphe RX=plein/TX=pointillé par carte, export CSV par carte (timestamp, in_bps, out_bps), état vide **par carte** (`overview.netif.ifaceNone` si d'autres interfaces mesurées, `overview.netif.none` si rien) ; interfaces pare-feu PVE `fw*` **décryptées** (badge « pare-feu PVE · machine 102 · net0 · pont (fwbr) », infobulle = trajet paquet, bloc dépliable `FwDecodeBlock` si des fw* existent — cf. §6) — tap des VMs exclus (vue VM), trous = null |
 | `packages/web/src/plugins/vm-view_v2/components/cpu-cores-card.tsx` | Section Monitor nœud « CPU par cœur » : barres horizontales usage courant (teinte <70 ok / <90 warn / ≥90 crit), tooltip user/system/iowait, export CSV, **hauteur dynamique** (≥240 px, sinon 18 px/cœur) |
 | `packages/web/src/plugins/vm-view_v2/components/node-monitor.tsx` | Onglet Monitor NŒUD : graphes PVE (CPU/RAM/rootfs/réseau via `/api/metrics?node=`) + sections agent hôte ci-dessus (dont « Réseau — par interface » après le graphe Réseau agrégé) — sources **indépendantes** (si la série PVE est vide, les sections Telegraf restent montées, et inversement) |
 | `packages/web/src/plugins/vm-view_v2/components/vm-monitor.tsx` | Onglet Monitor VM : section « Disques I/O — par device (hôte) » (`PerDeviceDiskSection`) après le graphe disque agrégat — 1 carte par disque (débits + saturation + export CSV) ; section « Réseau — par interface » (`PerIfaceNetSection`) après le graphe Réseau agrégat — **1 carte par NIC** (RX/TX, note « MAC non trouvée » si pas de tap), états noMapping/insufficientData/noMac lisibles |
@@ -180,10 +180,14 @@ Trois routes de plus, **même source** (tables Telegraf `raw`), dans le même mo
    **vnet\*/tap\*/veth\*/lo exclus dans le SQL** (le trafic des tap est montré dans le Monitor
    de chaque VM — sinon double-comptage). **`interfaces`** = liste des interfaces du nœud
    (API PVE `GET /nodes/{n}/network` — dispo même si `rows` est vide, agent non déployé) :
-   `NodeNetIface { name (nom PVE), kernels: string[] (candidats noyau = [name, ...altnames]),
-   kind: 'bridge'|'nic'|'other', active: boolean|null }` ; les devices noyau vus seulement dans
-   les mesures (ex. `fw*` internes au firewall PVE) sont ajoutés en `kind:'other'`
-   (`buildNodeNetIfaces`, helper pur exporté). Joint des mesures : `rows[].iface` ∈ `kernels`
+    `NodeNetIface { name (nom PVE), kernels: string[] (candidats noyau = [name, ...altnames]),
+    kind: 'bridge'|'nic'|'other'|'firewall', active: boolean|null,
+    firewall?: NodeNetFwInfo { vmid, ifIndex, role:'bridge'|'line'|'port' } }` ; les
+    devices noyau vus seulement dans les mesures (ex. `fw*` internes au firewall PVE)
+    sont ajoutés par `buildNodeNetIfaces` (helper pur exporté) — les `fw*` qui matchent
+    `parsePveFwIface` reçoivent `kind:'firewall'` + métadonnées `firewall` (décodage
+    VMID / index d'interface / rôle), les autres `kind:'other'` (dégradation douce,
+    jamais de faux décodage). Joint des mesures : `rows[].iface` ∈ `kernels`
    (sur un nœud PVE le device noyau est renommé selon /etc/network/interfaces → le nom PVE est
    le cas courant, vérifié live ; `altnames` = noms dérivés du MAC en secours). Même buckets
    que node-diskio (raw, 31 j), cache 5 min par (node, tf), 400 sans `node` ou timeframe
@@ -352,10 +356,33 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
     (candidats, le joint passe sur n‧importe lequel). Pont : kernel = nom du pont. PVE
     `active` présent seulement si UP (absent sinon → null, l’UI n’affiche « inactif » que sur
     explicite). `buildNodeNetIfaces(net, rows)` (pur, exporté, testé) : union des kernels vus
-    seulement dans les mesures (ex. `fw*` internes au firewall PVE) en `kind:'other'` — rien
-    n’est perdu. Web : 1 `Card` par interface (titre = nom PVE + badge kind/actif, CSV par
-    carte, état vide par carte ; i18n `overview.netif.{ifaceNone,kind.*,active,inactive}`).
-    Les mesures restent dispo même si la liste PVE échoue (nœud hors ligne → `kind:'other'`).
+    seulement dans les mesures (ex. `fw*` internes au firewall PVE) — décodées si le nom
+    matche la nomenclature pare-feu (`parsePveFwIface`), sinon `kind:'other'` — rien n'est
+    perdu, jamais de faux décodage. Web : 1 `Card` par interface (titre = nom PVE + badge
+    kind/actif, CSV par carte, état vide par carte ; i18n
+    `overview.netif.{ifaceNone,kind.*,active,inactive}`). Les mesures restent dispo même si
+    la liste PVE échoue (nœud hors ligne → `kind:'other'`).
+  - **Décryptage des interfaces pare-feu PVE `fw*`** (demande user 2026-11-13 — « ces noms
+    ne veulent rien dire » + texte de décryptage fourni par l'user) : PVE ne peut pas
+    appliquer le pare-feu sur le pont principal (vmbr*) — les règles toucheraient toutes
+    les machines du pont ; il crée donc par interface de machine une chaîne
+    `fwbr<vmid>i<n>` (pont du pare-feu, le tap de la machine y est connecté, c'est ici que
+    les règles s'appliquent) → `fwln<vmid>i<n>` (extrémité interne de la paire veth) →
+    `fwpr<vmid>p<n>` (extrémité externe, connectée au vmbr*). **Règle générique et
+    défensive** : regex `/^fw(br|ln|pr)(\d+)([ip])(\d+)$/` (`parsePveFwIface`, exportée,
+    testée — br/ln/pr × i/p × vmid multi-chiffres × ifIndex > 9 + non-matches → null) : le
+    rôle vient du **préfixe** br/ln/pr (la lettre i/p n'est qu'un séparateur à consommer —
+    robuste si PVE la change) ; n'importe quel nombre de chiffres (VM **et** LXC,
+    net0…net12+). Tout non-match → `kind:'other'` (libellé générique « interface ») : pas
+    de faux positif, pas de crash, pas de valeur inventée ; si PVE change la nomenclature
+    dans une future version, dégradation douce (données gardées, seul le libellé
+    explicatif est perdu). Appliquée **uniquement** à l'union des mesures (jamais à la
+    config PVE). **Web** : carte pare-feu = titre « pare-feu PVE · machine 102 · net0 ·
+    pont (fwbr) » (calculé depuis le parse, aucun durcissement) + infobulle du titre =
+    trajet du paquet (interpolé `{{vmid}}`/`{{n}}`) + bloc dépliable `FwDecodeBlock`
+    (`<details>`) affiché **seulement si des fw\* existent** sur le nœud : nomenclature
+    (avec la liste des machines **réellement présentes** — dynamique), les 3 rôles, le
+    trajet. i18n `overview.netif.kind.firewall` + `overview.netif.fw.*` (fr/en).
 
 ## 7. Pièges rencontrés (corrigés — ne pas réintroduire)
 
@@ -385,10 +412,12 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
 - **Double-comptage I/O** : dm-N (LV) + partitions + disque physique portent la **même** I/O.
   Une carte « disques » ne doit contenir que les disques entiers (SQL : exclusion
   `dm-/loop-/md-/sr-/ram` ; TS : `isPhysicalDevice` pour les partitions).
-- **`*/` dans un commentaire bloc TypeScript** : un `dm-*/` dans un commentaire `/* … */`
-  (ex. « disques dm-*/loop */md… ») **fermait le commentaire prématurément** → esbuild
+- **`*/` dans un commentaire bloc TypeScript** (touché 2× : `dm-*/`, puis
+  `(fwbr*/fwln*/fwpr*)` dans system-metrics.ts) : un `dm-*/` dans un commentaire `/* … */`
+  (ex. « disques dm-*/loop */md… ») **ferme le commentaire prématurément** → esbuild
   « Unexpected token » au build, sans message pointant la cause. Dans un commentaire bloc,
-  éviter `*/` même en apparence (écrire `dm-x/` ou passer en commentaire ligne).
+  éviter `*/` même en apparence (écrire `dm-x/`, `(fwbr, fwln, fwpr)`, ou passer en
+  commentaire ligne).
 - **Line protocol Telegraf sans champ** : `dm_names dm="dm-10"` seul est **invalide** (une
   ligne line-protocol doit porter au moins un champ) → le script dm-names écrit toujours un
   champ factice `present=1i`. Oublier ce champ = lignes rejetées silencieusement, table vide.
@@ -399,6 +428,19 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
   qui simulent un **reset de counter** (delta négatif), il faut un **nombre négatif** dans la
   ligne mock (`out_bps: -1`), pas `null` — sinon on teste le chemin « zéro » au lieu du
   chemin « trou » (test vm-net corrigé).
+- **`{{x}}` → `{x}` en f-string Python lors d'une injection i18n** : un script qui ajoute
+  des clés i18n en f-strings écrit les accolades **simples** (`{vmid}`) dans fr.ts/en.ts —
+  i18next n'interpole que `{{vmid}}` → le `{vmid}` brut s'affiche en UI. Le bug est
+  **silencieux** (aucune erreur de build) : vérifier le texte rendu dans le navigateur.
+  Injecter l'i18n en strings non-f (ou échapper `{{{{vmid}}}}`) — touché sur
+  `overview.netif.fw.tooltip`/`.fw.naming`.
+- **`formatBps` arrondissait les o/s à l'entier** : sur un graphe dont toute l'échelle est
+  sous 1 o/s (ex. pont `nfs` au repos), tous les libellés d'axe Y affichaient « 0 o/s » —
+  les données étaient réelles (~0,9 o/s) mais l'échelle illisible (question user « c'est 0
+  ? »). Règle désormais : 2 décimales sous 1, 1 décimale sous 100, sinon entier
+  (cohérent avec Ko/s/Mo/s). Note : le `smooth` ECharts + l'axe auto (max = max des
+  données) font paraître gros un petit pic — c'est l'axe lisible qui fait foi, pas la
+  forme de la courbe.
 
 ## 8. À suivre
 

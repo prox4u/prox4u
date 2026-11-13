@@ -155,6 +155,26 @@ export function diskioRowsToDevices(rows: InfluxRow[]): NodeDiskioRow[] {
 }
 
 /**
+ * Nom d'interface interne au **pare-feu PVE** : `fw(br|ln|pr)<vmid>(i|p)<n>` —
+ * `fwbr102i0` = pont du pare-feu de la machine 102 (interface net0, où les
+ * règles sont appliquées), `fwln102i0` = extrémité interne de la paire veth,
+ * `fwpr102p0` = extrémité externe (suffixe `p` côté port, `i` ailleurs — noms
+ * réels vérifiés en live). Ces devices ne sont PAS dans la config PVE
+ * (/etc/network/interfaces) : ils n'arrivent que via l'union des mesures.
+ */
+export function parsePveFwIface(
+  name: string,
+): { vmid: number; ifIndex: number; role: 'bridge' | 'line' | 'port' } | null {
+  const m = /^fw(br|ln|pr)(\d+)([ip])(\d+)$/.exec(name);
+  if (!m) return null;
+  return {
+    vmid: Number(m[2]),
+    ifIndex: Number(m[4]),
+    role: m[1] === 'br' ? 'bridge' : m[1] === 'ln' ? 'line' : 'port',
+  };
+}
+
+/**
  * Liste des interfaces d'un nœud pour la vue « 1 carte graphique par
  * interface » (même liste que la page Réseau de Proxmox) :
  *  - source : `GET /nodes/{n}/network` (noms PVE + `altnames` = noms
@@ -166,8 +186,9 @@ export function diskioRowsToDevices(rows: InfluxRow[]): NodeDiskioRow[] {
  *    `kernels = [name, ...altnames]` — les mesures se joignent sur n'importe
  *    lequel ;
  *  - union : les devices noyau vus seulement dans les mesures `rows` mais
- *    absents de la config PVE (ex. fw* internes au firewall PVE) sont ajoutés
- *    en `kind:'other'` (rien n'est perdu) ;
+ *    absents de la config PVE sont ajoutés en `kind:'other'` (rien n'est
+ *    perdu) — sauf si le nom matche la nomenclature du pare-feu PVE
+ *    (`parsePveFwIface`) → `kind:'firewall'` + `firewall: { vmid, ifIndex, role }` ;
  *  - tri par nom (ordre numérique — nic0 < nic1 < … < nic10).
  */
 export function buildNodeNetIfaces(net: NodeNetwork | null, rows: Array<{ iface?: unknown }>): NodeNetIface[] {
@@ -185,7 +206,10 @@ export function buildNodeNetIfaces(net: NodeNetwork | null, rows: Array<{ iface?
     const k = String(r.iface ?? '');
     if (k && !covered.has(k)) {
       covered.add(k);
-      out.push({ name: k, kernels: [k], kind: 'other', active: null });
+      const fw = parsePveFwIface(k);
+      out.push(
+        fw ? { name: k, kernels: [k], kind: 'firewall', firewall: fw, active: null } : { name: k, kernels: [k], kind: 'other', active: null },
+      );
     }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));

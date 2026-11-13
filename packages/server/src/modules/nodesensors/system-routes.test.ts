@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { NodeDiskioResponse, NodeNetResponse, NodeSystemResponse } from '@prox4u/shared';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
-import { buildNodeNetIfaces, diskioRateSql, diskioRowsToDevices, netRateSql, nodeEndpoint, registerNodeSystemRoutes } from './system-routes.js';
+import { buildNodeNetIfaces, diskioRateSql, diskioRowsToDevices, netRateSql, nodeEndpoint, parsePveFwIface, registerNodeSystemRoutes } from './system-routes.js';
 
 const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
@@ -159,6 +159,32 @@ describe('buildNodeNetIfaces', () => {
       { name: 'nic2', kernels: ['nic2', 'enx9c6b00dd220c'], kind: 'nic', active: true },
     ]);
   });
+
+  it('fw* (pare-feu PVE) → kind firewall + vmid/ifIndex/role ; les autres restent other', () => {
+    const out = buildNodeNetIfaces(null, [{ iface: 'fwbr102i0' }, { iface: 'fwln106i1' }, { iface: 'fwpr102p0' }, { iface: 'dock0' }]);
+    expect(out).toEqual([
+      { name: 'dock0', kernels: ['dock0'], kind: 'other', active: null },
+      { name: 'fwbr102i0', kernels: ['fwbr102i0'], kind: 'firewall', firewall: { vmid: 102, ifIndex: 0, role: 'bridge' }, active: null },
+      { name: 'fwln106i1', kernels: ['fwln106i1'], kind: 'firewall', firewall: { vmid: 106, ifIndex: 1, role: 'line' }, active: null },
+      { name: 'fwpr102p0', kernels: ['fwpr102p0'], kind: 'firewall', firewall: { vmid: 102, ifIndex: 0, role: 'port' }, active: null },
+    ]);
+  });
+});
+
+describe('parsePveFwIface', () => {
+  it('décompose fw(br|ln|pr)<vmid>(i|p)<n> (suffixe i OU p)', () => {
+    expect(parsePveFwIface('fwbr102i0')).toEqual({ vmid: 102, ifIndex: 0, role: 'bridge' });
+    expect(parsePveFwIface('fwln106i0')).toEqual({ vmid: 106, ifIndex: 0, role: 'line' });
+    expect(parsePveFwIface('fwpr102p0')).toEqual({ vmid: 102, ifIndex: 0, role: 'port' });
+    expect(parsePveFwIface('fwpr102i0')).toEqual({ vmid: 102, ifIndex: 0, role: 'port' });
+    expect(parsePveFwIface('fwbr102i12')).toEqual({ vmid: 102, ifIndex: 12, role: 'bridge' });
+  });
+
+  it('null si le nom ne matche pas la nomenclature', () => {
+    for (const name of ['vmbr0', 'nic2', 'nfs', 'fwbr102', 'fwbr102i', 'fwxx102i0', 'fwbrX102i0', '', 'fwbr102i0 ']) {
+      expect(parsePveFwIface(name), name).toBeNull();
+    }
+  });
 });
 
 // --- GET /api/node-system -----------------------------------------------------------------
@@ -293,6 +319,7 @@ describe('GET /api/node-net', () => {
     { t: '2026-11-13T12:00:00Z', iface: 'vmbr0', in_bps: 1e7, out_bps: 2e7 },
     { t: '2026-11-13T12:00:00Z', iface: 'enp1s0f0', in_bps: 5e6, out_bps: -1 }, // delta négatif → null
     { t: '2026-11-13T12:00:00Z', iface: 'dock0', in_bps: 1, out_bps: 2 }, // kernel absent de la config PVE
+    { t: '2026-11-13T12:00:00Z', iface: 'fwbr102i0', in_bps: 10, out_bps: 20 }, // pare-feu PVE (machine 102, net0)
   ];
 
   /** Endpoint mock dont la source renvoie le réseau PVE du nœud `proxmox`. */
@@ -337,6 +364,7 @@ describe('GET /api/node-net', () => {
     expect(body.rows).toEqual([
       { t: 1794571200, iface: 'dock0', inBps: 1, outBps: 2 },
       { t: 1794571200, iface: 'enp1s0f0', inBps: 5e6, outBps: null },
+      { t: 1794571200, iface: 'fwbr102i0', inBps: 10, outBps: 20 },
       { t: 1794571200, iface: 'vmbr0', inBps: 1e7, outBps: 2e7 },
     ]);
     const sql = sqlLog.find((s) => s.includes('FROM net'));
@@ -355,6 +383,7 @@ describe('GET /api/node-net', () => {
     const body = res.json() as NodeNetResponse;
     expect(body.interfaces).toEqual([
       { name: 'dock0', kernels: ['dock0'], kind: 'other', active: null }, // seulement dans les mesures
+      { name: 'fwbr102i0', kernels: ['fwbr102i0'], kind: 'firewall', firewall: { vmid: 102, ifIndex: 0, role: 'bridge' }, active: null }, // pare-feu PVE
       { name: 'nic2', kernels: ['nic2', 'enp1s0f0'], kind: 'nic', active: true }, // nom PVE + altnames
       { name: 'vmbr0', kernels: ['vmbr0'], kind: 'bridge', active: true }, // pont : nom = noyau
     ]);
@@ -369,6 +398,7 @@ describe('GET /api/node-net', () => {
     expect(body.interfaces).toEqual([
       { name: 'dock0', kernels: ['dock0'], kind: 'other', active: null },
       { name: 'enp1s0f0', kernels: ['enp1s0f0'], kind: 'other', active: null },
+      { name: 'fwbr102i0', kernels: ['fwbr102i0'], kind: 'firewall', firewall: { vmid: 102, ifIndex: 0, role: 'bridge' }, active: null },
       { name: 'vmbr0', kernels: ['vmbr0'], kind: 'other', active: null },
     ]);
     expect(body.source).toBe('influx');
