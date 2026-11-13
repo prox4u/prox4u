@@ -1,6 +1,6 @@
 ---
 name: node-sensors
-description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds), ET historique des valeurs d'un capteur OU d'un disque SMART (GET /api/node-sensors-history, GET /api/smart-device-history, fenêtre modal « Historique des valeurs » avec graphe ECharts depuis l'icône des tables capteurs et SMART). Use when working on the node-sensors plugin, the /api/node-sensors, /api/node-sensors-history or /api/smart-device-history routes, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, the value-history dialog (sensors & SMART disks), custom sensor thresholds, or the « Seuils capteurs » admin tab.
+description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds), ET historique des valeurs d'un capteur OU d'un disque SMART (GET /api/node-sensors-history, GET /api/smart-device-history, fenêtre modal « Historique des valeurs » avec graphe ECharts depuis l'icône des tables capteurs et SMART), ET métriques système hôte (GET /api/node-system : load/swap/iowait/usage par cœur ; GET /api/node-diskio : I/O par device physique — consommées par la Vue d'ensemble), ET mapping device-mapper → LV PVE (table dm_names écrite par le plugin exec Telegraf, consommée par GET /api/vm-diskio de la vue VM). Use when working on the node-sensors plugin, the /api/node-sensors, /api/node-sensors-history, /api/smart-device-history, /api/node-system or /api/node-diskio routes, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, the value-history dialog (sensors & SMART disks), custom sensor thresholds, the « Seuils capteurs » admin tab, the overview system cards (load/swap/disk I/O/per-core CPU), or the dm_names Telegraf mapping.
 ---
 
 # Node Sensors — métriques locales Telegraf
@@ -54,9 +54,16 @@ base `consolidated` (∞)
 | `packages/server/src/modules/nodesensors/thresholds.ts` | `SensorThresholdStore` — data/sensor-thresholds.json (écriture atomique tmp+rename, chmod 600, fail-fast si corrompu) |
 | `packages/web/src/components/admin/sensor-thresholds.tsx` | Onglet Administration « Seuils capteurs » (tableau nœud/puce/capteur/temp/seuil firmware RO/seuil perso input clampé + reset par ligne + tout) |
 | `packages/web/src/plugins/node-sensors/lib/sensor-thresholds-api.ts` | Client API /api/admin/sensor-thresholds (list/save/resetAll/resetOne) |
-| `packages/server/src/core/influx-consolidator.ts` | Consolidation 15 min des 4 tables Telegraf |
-| `packages/web/src/core/api/apiClient.ts` | `fetchNodeSensors()` · `fetchSensorHistory(node, chip, feature, range)` · `fetchSmartHistory(node, device, range)` |
-| `deploiement/60-telegraf-nodes.sh` | Déploiement de l'agent Telegraf sur un nœud (bare-metal, idempotent, `--dry-run`) |
+| `packages/shared/src/system-metrics.ts` | Types + fonctions pures testées des métriques système hôte : `NodeSystemRow/Response`, `NodeDiskioRow/Response`, `VmDiskioPoint/Series/Response`, `parsePveMapperName` (LV `vg--vm--101--disk--0` → vmid/ctid, depuis le **suffixe** LV car le VG peut contenir `--`), `mapperLabel`, `isPhysicalDevice` (disques entiers seuls) |
+| `packages/server/src/modules/nodesensors/system-routes.ts` | `GET /api/node-system` (dernier point par nœud : `system`+`mem`+`cpu`, cache 60 s) · `GET /api/node-diskio?node=&timeframe=` (I/O par device physique, SQL `diskioRateSql` = bucket d'abord puis LAG des counters, cache 5 min) — consommés par la Vue d'ensemble (3 cartes) |
+| `packages/server/src/modules/vmview/vm-diskio.ts` | `GET /api/vm-diskio?endpoint=&vmid=&timeframe=` — I/O PAR DISQUE d'une VM : mapping `dm_names` (dernier point par (node, dm), fenêtre 1 h) + `diskioRateSql` sur les dm de la VM ; états `influx` / `noMapping` (table absente) / `insufficientData` (pas de LV dm pour la VM) |
+| `packages/web/src/plugins/hypervision/components/system-nodes-card.tsx` | Carte Vue d'ensemble « Système — par nœud » : load 1/5/15 teinté vs nb de cœurs (≥1 warn, ≥2 crit), iowait (≥10 warn, ≥25 crit), swap (≥50 warn, ≥80 crit), uptime |
+| `packages/web/src/plugins/hypervision/components/node-diskio-card.tsx` | Carte Vue d'ensemble « I/O disques (nœud) » : sélecteur nœud + timeframe 1h/24h/7j/30j, 2 graphes (débits lecture=plein/écriture=pointillé par device ; busy % + IOPS double axe) — base de temps commune, trous = null (pas d'interpolation) |
+| `packages/web/src/plugins/hypervision/components/cpu-cores-card.tsx` | Carte Vue d'ensemble « CPU par cœur » : barres horizontales usage courant (teinte <70 ok / <90 warn / ≥90 crit), tooltip user/system/iowait, sélecteur nœud |
+| `packages/web/src/plugins/vm-view_v2/components/vm-monitor.tsx` | Onglet Monitor VM : section « Disques I/O — par device (hôte) » (`PerDeviceDiskSection`) après le graphe disque agrégat — 1 carte par disque (débits + saturation + export CSV), états noMapping/insufficientData lisibles |
+| `packages/server/src/core/influx-consolidator.ts` | Consolidation 15 min des 4 tables Telegraf (**pas** diskio/mem/cpu/system — counters, cf. §6) |
+| `packages/web/src/core/api/apiClient.ts` | `fetchNodeSensors()` · `fetchSensorHistory(node, chip, feature, range)` · `fetchSmartHistory(node, device, range)` · `fetchNodeSystem()` · `fetchNodeDiskio(node, timeframe)` · `fetchVmDiskio(endpoint, vmid, timeframe)` |
+| `deploiement/60-telegraf-nodes.sh` | Déploiement de l'agent Telegraf sur un nœud (bare-metal, idempotent, `--dry-run`). Inclut le plugin `exec` (script `/usr/local/lib/prox4u-telegraf-dm-names.sh` → table `dm_names`, §4) |
 
 ## 3. Endpoint API
 
@@ -133,6 +140,42 @@ Deux endpoints, **même pattern** (helper partagé `mergedTempBuckets` dans `rou
   `poolAllocated`/`poolFree` (pools, null dans v1).
 - `FailedUnit` : `name`, `active`, `sub`, `load`.
 
+### 3.3 Métriques système hôte (Vue d'ensemble) + I/O par device
+
+Trois routes de plus, **même source** (tables Telegraf `raw`), dans le même module
+(`system-routes.ts`, enregistrement dans `index.ts`) :
+
+- `GET /api/node-system` → `NodeSystemResponse { nodes: NodeSystemRow[], source: 'influx'|'empty' }` —
+  **dernier point par nœud** (fenêtre 10 min, `ORDER BY time DESC`, premier par clé) sur 3 tables
+  jointes en TS : `system` (load1/5/15, n_cpus, uptime), `mem` (swap_total/swap_free → used =
+  total−free), `cpu` (cpu-total → iowait/user/system ; `cpu0..N` → usage par cœur =
+  100 − idle − iowait). Cache 60 s (données 10 s). L'API PVE donne loadavg/swap **en instantané**
+  (vue nœud) mais **ni historique, ni iowait, ni par cœur** — d'où la source agent.
+- `GET /api/node-diskio?node=&timeframe=` → `NodeDiskioResponse { timeframe, node, devices:
+  NodeDiskioRow[], source: 'influx'|'insufficientData' }` — I/O **par device physique**
+  (nvme0n1, sda… ; dm-N/loop/md/sr/ram exclus **dans le SQL**, **partitions** sda1/nvme0n1p1
+  filtrées **côté TS** par `isPhysicalDevice`). `timeframe ∈ hour|day|week|month` → buckets
+  1 min/1 h, 5 min/24 h, 1 h/7 j, 1 j/30 j, **tous sur `raw`** (rétention 31 j couvre 30 j —
+  diskio n'est pas consolidée, cf. §6). Cache 5 min par (node, timeframe). 400 sans `node` ou
+  timeframe invalide.
+- `GET /api/vm-diskio?endpoint=&vmid=&timeframe=` (module `vmview`) → `VmDiskioResponse {
+  timeframe, vmid, series: VmDiskioSeries[], source: 'influx'|'insufficientData'|'noMapping' }` —
+  I/O **PAR DISQUE d'une VM** : les disques PVE (LVM-thin) sont des LV device-mapper vus comme
+  `dm-N` côté hôte ; le mapping dm-N → LV (`vg--vm--<vmid>--disk--<n>`) vient de la table
+  `dm_names` (plugin `exec` Telegraf, §4) — **l'API PVE ne l'expose pas**. Sélection : dernier
+  point par (node, dm) sur 1 h, `parsePveMapperName` filtre `kind==='vm' && id===vmid` (QEMU
+  seulement — les CT `base-<ctid>--` sont parsés mais non demandés). 1 requête `diskioRateSql`
+  par nœud (`name IN (…)`). Libellé UI = `mapperLabel` (`vm-100-disk-0 (vg rapide)`).
+
+**SQL d'I/O — `diskioRateSql(where, bucket, bucketSec, window)`** (exportée, testée) :
+`read_bytes`/`write_bytes`/`reads`/`writes`/`io_time` sont des **counters** (reset au reboot) ;
+`io_await` est une jauge (ms). Pattern : **bucket d'abord** (`date_bin` + `MAX` colonaires sur
+les counters — pas de window function sur les ~60k points/device/7 j), **puis `LAG` de bucket en
+bucket** (`WINDOW w AS (PARTITION BY name ORDER BY t)`) ; débits = Δ(counter) / durée de bucket ;
+**delta négatif (reboot) → NULL via `normRate`, jamais un pic faux** ; `busy_pct` =
+Δ(`io_time`, ms d'occupation réelle) / durée — 0–100, **convention iostat** (PAS `io_util`
+Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % avec du parallélisme).
+
 ## 4. Mesures InfluxDB (tables Telegraf)
 
 | Table | Clé d'unicité | Colonnes clés |
@@ -141,6 +184,11 @@ Deux endpoints, **même pattern** (helper partagé `mergedTempBuckets` dans `rou
 | `sensors` | `node`, `chip`, `feature` | `temp_input`, `temp_crit`, `fan_input`, `in_input` |
 | `zfs` | `node` | `arcstats_hits`, `arcstats_misses`, `arcstats_size` |
 | `systemd_units` | `node`, `name` | `active`, `sub`, `load` (filtré `active='failed' OR load='error'` — **vraies alertes seulement**) |
+| `system` | `node` | `load1`, `load5`, `load15`, `n_cpus`, `uptime` |
+| `mem` | `node` | `swap_total`, `swap_free` (PAS de `swap_used` — calculé total−free), `used`, `available_percent` |
+| `cpu` | `node`, `cpu` | `cpu` = `cpu-total` ou `cpu0..N` ; `usage_user/nice/system/idle/iowait/irq/softirq/steal` (somme = 100) |
+| `diskio` | `node`, `name` | counters : `read_bytes`, `write_bytes`, `reads`, `writes`, `read_time`, `write_time`, `io_time`, `weighted_io_time` · jauges : `io_await` (ms), `io_svctm`, `io_util` (fraction 0–1, peut **>1**), `iops_in_progress` · `wwid` (NVMe) |
+| `dm_names` | `node`, `dm` | `mapper_name` (LV PVE, ex. `rapide--vm--100--disk--0`), `present` (champ factice — une ligne line-protocol sans champ est invalide). Écrite par le **plugin `exec`** Telegraf (script `/usr/local/lib/prox4u-telegraf-dm-names.sh` → `/sys/block/dm-*/dm/name`) ; quasi statique, relue toutes les 10 s ; **pas consolidée** (dimension, pas une mesure) |
 
 > ⚠️ La table SMART s'appelle **`smart_device`** (pas `smart`) — piège classique, déjà corrigé.
 
@@ -207,6 +255,32 @@ Deux endpoints, **même pattern** (helper partagé `mergedTempBuckets` dans `rou
   données** (nœud éteint = pas de mesure) : la série est sparse, `connectNulls: false`, **aucune
   complétion / interpolation** (anticiper du vrai matériel : un nœud éteint pendant des jours n'est
   pas une panne de l'app). `max(temp_input)` par bucket (cohérent avec le consolidateur).
+- **Métriques système hôte + I/O disques** (livré — Vue d'ensemble P0/P1/P2 + Monitor VM P0) :
+  la Vue d'ensemble consommait **zéro** métrique Telegraf (100 % PVE) ; 3 cartes ajoutées
+  (Système par nœud / I/O disques par device physique / CPU par cœur) + section Monitor VM
+  « I/O par device ». Décisions :
+  - **Busy % depuis le counter `io_time`** (occupation réelle, 0–100, iostat) — PAS `io_util`
+    Telegraf (basé sur `weighted_io_time`, fraction 0–1 **observée > 1** : 233 % sur sda avec
+    du parallélisme NCQ).
+  - **Bucket d'abord, LAG ensuite** (`date_bin` + `MAX` colonaires, puis `LAG` de bucket en
+    bucket) — pas de window function ligne à ligne sur ~1,5 M points / 7 j ; delta négatif
+    (reset counter au reboot) → **NULL** (`normRate`), jamais un pic faux.
+  - **`diskio`/`mem`/`cpu`/`system` non consolidées** : les 4 timeframes lisent `raw` (rétention
+    31 j couvre `month` = 30 j) ; le consolidateur (15 min, min/max) est réservé aux tables de
+    jauges — pour des counters, il faudrait pré-calculer des **taux** par bucket (extension).
+  - **Mapping dm-N ↔ LV par l'agent** (plugin `exec` Telegraf → table `dm_names`) : l'API PVE ne
+    l'expose pas (`/nodes/{n}/disks/list` = disques physiques seulement) ; le script lit
+    `/sys/block/dm-*/dm/name` (l'agent tourne en root, tourne au même rythme que le reste).
+    Quasi statique → lu sur une **fenêtre 1 h** (dernier point par (node, dm)), pas consolidée.
+  - **Dégradations encodées, jamais comblées** : `noMapping` (table absente = agent pas encore
+    (re)déployé — message lisible dans l'UI, pas une erreur HTTP), `insufficientData` (mapping
+    présent mais aucun LV dm pour la VM — stockage ZFS/dir), holes visibles dans les séries.
+  - **Devices physiques = disques entiers seuls** : dm-N exclus dans le SQL (ce sont les LV —
+    I/O double-comptée avec le disque sous-jacent), **partitions** (sda1, nvme0n1p1) filtrées
+    côté TS (`isPhysicalDevice`) — le disque entier porte déjà toute l'I/O.
+  - Vue d'ensemble : **une seule fetch** `/api/node-system` (tick 60 s) partagée par les 3
+    cartes (hook `useNodeSystem` dans `overview.tsx`) ; rangée de grid `y=5 h=5`, `LAYOUT_VERSION`
+    bumpé (2→3) → layouts persistés antérieurs jetés au rechargement.
 
 ## 7. Pièges rencontrés (corrigés — ne pas réintroduire)
 
@@ -225,6 +299,24 @@ Deux endpoints, **même pattern** (helper partagé `mergedTempBuckets` dans `rou
 - **400 « silencieux » (Fastify 5)** : `return { statusCode: 400, … }` depuis un handler async
   **ne set pas le code HTTP** (renvoyé tel quel dans le body, status 200) — utiliser
   `reply.code(400).send(…)` comme partout ailleurs dans le codebase (vérifié test + live).
+- **Message réel InfluxDB 3 Core, table absente** : `Error during planning: table
+  'public.iox.dm_names' not found` (HTTP 400). La détection `noMapping` de `vm-diskio` doit
+  matcher **`not found`** (regex `/cannot find table|not found|does not exist/i`) — un regex
+  qui attend `cannot find table` seul (SQLx v1) échoue sur la formulation réelle. Les tests
+  mockent le message **exact** de l'API, pas une approximation.
+- **`io_util` > 100 %** : Telegraf expose `weighted_io_time` comme `io_util` (fraction 0–1,
+  **peut dépasser 1** — observé 233 % sur sda, parallélisme NCQ). Jamais de « busy % » depuis
+  `io_util` : le busy est le Δ du counter `io_time` (0–100, convention iostat).
+- **Double-comptage I/O** : dm-N (LV) + partitions + disque physique portent la **même** I/O.
+  Une carte « disques » ne doit contenir que les disques entiers (SQL : exclusion
+  `dm-/loop-/md-/sr-/ram` ; TS : `isPhysicalDevice` pour les partitions).
+- **`*/` dans un commentaire bloc TypeScript** : un `dm-*/` dans un commentaire `/* … */`
+  (ex. « disques dm-*/loop */md… ») **fermait le commentaire prématurément** → esbuild
+  « Unexpected token » au build, sans message pointant la cause. Dans un commentaire bloc,
+  éviter `*/` même en apparence (écrire `dm-x/` ou passer en commentaire ligne).
+- **Line protocol Telegraf sans champ** : `dm_names dm="dm-10"` seul est **invalide** (une
+  ligne line-protocol doit porter au moins un champ) → le script dm-names écrit toujours un
+  champ factice `present=1i`. Oublier ce champ = lignes rejetées silencieusement, table vide.
 
 ## 8. À suivre
 
@@ -233,3 +325,13 @@ Deux endpoints, **même pattern** (helper partagé `mergedTempBuckets` dans `rou
   (livrés, §3.1/§6) : le moteur d'alarmes lira `sensorThresholds` + `effectiveSensorThreshold`.
 - **Pools ZFS** (nom/état/taille) : les colonnes `pool*` existent dans le type mais ne sont pas
   encore alimentées (la table `zfs` n'expose que l'ARC dans la config Telegraf actuelle).
+- **I/O disques > 31 j** : les 4 timeframes lisent `raw` (rétention 31 j). Pour de l'historique
+  longue durée, il faudra un consolidateur **de taux** (Δ counter / 15 min écrit dans une table
+  consolidée `diskio_rate`) — le min/max actuel n'est pas applicable aux counters.
+- **Tendances load/swap 7 j** dans la vue nœud (capteurs nœuds ou vue nœud PVE) : les tables
+  `system`/`mem` sont déjà dans `raw`, un graphe `date_bin(1h)` suffirait.
+- **Plugin `net` par NIC** (débits réseau par interface hôte) — même pattern que `diskio`
+  (counters `rx_bytes`/`tx_bytes`, rate par bucket) ; utile pour distinguer trafic VM vs hôte.
+- **`ping` CAP_NET_RAW** : le plugin `ping` de Telegraf nécessite la capability
+  `CAP_NET_RAW` (ou root) ; le service Telegraf tourne non-root → ajouter la capability
+  (`setcap`) si on veut la latence vers le cœur de cluster.

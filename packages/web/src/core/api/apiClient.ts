@@ -1,4 +1,15 @@
-import type { DatastoreHistoryResponse, MetricsTimeframe, NodeSensorsResponse, ProxmoxInventoryResponse, SensorHistoryResponse, SmartHistoryResponse, VmFsResponse } from '@prox4u/shared';
+import type {
+  DatastoreHistoryResponse,
+  MetricsTimeframe,
+  NodeDiskioResponse,
+  NodeSensorsResponse,
+  NodeSystemResponse,
+  ProxmoxInventoryResponse,
+  SensorHistoryResponse,
+  SmartHistoryResponse,
+  VmDiskioResponse,
+  VmFsResponse,
+} from '@prox4u/shared';
 import type {
   CapacityResponse,
   MetricsResponse,
@@ -102,4 +113,21 @@ export function fetchProxmoxInventory(): Promise<ProxmoxInventoryResponse> {
 /** Métriques locales Telegraf (SMART, capteurs, ZFS, unités systemd) — plugin node-sensors. */
 export function fetchNodeSensors(): Promise<NodeSensorsResponse> {
   return getJson<NodeSensorsResponse>('/api/node-sensors');
+}
+
+/** Métriques système hôte (load / iowait / swap / usage par cœur) — dernier point par nœud, Vue d'ensemble. */
+export function fetchNodeSystem(): Promise<NodeSystemResponse> {
+  return getJson<NodeSystemResponse>('/api/node-system');
+}
+
+/** I/O disque par device PHYSIQUE d'un nœud (counters diskio → débits, buckets) — Vue d'ensemble. */
+export function fetchNodeDiskio(node: string, timeframe: MetricsTimeframe): Promise<NodeDiskioResponse> {
+  return getJson<NodeDiskioResponse>(`/api/node-diskio?node=${encodeURIComponent(node)}&timeframe=${timeframe}`);
+}
+
+/** I/O disque PAR DISQUE d'une VM (agent hôte + mapping device-mapper) — Monitor VM. */
+export function fetchVmDiskio(endpoint: string, vmid: number, timeframe: MetricsTimeframe): Promise<VmDiskioResponse> {
+  return getJson<VmDiskioResponse>(
+    `/api/vm-diskio?endpoint=${encodeURIComponent(endpoint)}&vmid=${vmid}&timeframe=${timeframe}`,
+  );
 }

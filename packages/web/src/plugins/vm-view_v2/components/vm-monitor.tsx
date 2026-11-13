@@ -2,7 +2,15 @@ import { useEffect, useMemo, useState, type RefObject } from 'react';
 import { Download } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { EChartsOption } from 'echarts';
-import type { MetricsTimeframe, VmFsResponse, VmFsSeries, VmMetricsPoint, VmMetricsResponse } from '@prox4u/shared';
+import type {
+  MetricsTimeframe,
+  VmDiskioResponse,
+  VmDiskioSeries,
+  VmFsResponse,
+  VmFsSeries,
+  VmMetricsPoint,
+  VmMetricsResponse,
+} from '@prox4u/shared';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Skeleton } from '../../../components/ui/skeleton';
 import { useEChart } from '../../../hooks/use-echart';
@@ -10,8 +18,8 @@ import { useOvercommitConfig } from '../../../core/data/use-endpoint';
 import { useTheme } from '../../../store/theme';
 import { chartTheme } from '../../../lib/chart-theme';
 import { pctOption, rateOption, timeLabel, downloadCsvFile } from '../../../lib/monitor-charts';
-import { fetchVmMetrics, fetchVmFs } from '../../../core/api/apiClient';
-import { formatBytes } from '../../../lib/utils';
+import { fetchVmDiskio, fetchVmMetrics, fetchVmFs } from '../../../core/api/apiClient';
+import { formatBps, formatBytes } from '../../../lib/utils';
 
 const TIMEFRAMES: MetricsTimeframe[] = ['hour', 'day', 'week', 'month'];
 /** Auto-refresh pendant que l'onglet est ouvert (données pushées toutes les 5 s côté serveur). */
@@ -44,6 +52,7 @@ export function VmMonitor({ endpointId, vmid, vmName, maxmemBytes, maxdiskBytes 
   const [tf, setTf] = useState<MetricsTimeframe>('day');
   const [data, setData] = useState<VmMetricsResponse | null>(null);
   const [fsData, setFsData] = useState<VmFsResponse | null>(null);
+  const [diskioData, setDiskioData] = useState<VmDiskioResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
 
@@ -55,13 +64,21 @@ export function VmMonitor({ endpointId, vmid, vmName, maxmemBytes, maxdiskBytes 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([fetchVmMetrics(endpointId, vmid, tf), fetchVmFs(endpointId, vmid, tf)])
-      .then(([d, fs]) => {
-        if (!cancelled) {
-          setData(d);
-          setFsData(fs);
-        }
-      })
+    // vm-diskio isolé (.catch → null) : son échec ne doit pas casser le reste du monitor.
+    Promise.all([
+      fetchVmMetrics(endpointId, vmid, tf),
+      fetchVmFs(endpointId, vmid, tf),
+      fetchVmDiskio(endpointId, vmid, tf).catch((err) => {
+        console.warn('chargement vm-diskio en échec', err);
+        return null;
+      }),
+    ]).then(([d, fs, dio]) => {
+      if (!cancelled) {
+        setData(d);
+        setFsData(fs);
+        setDiskioData(dio);
+      }
+    })
       .catch((err) => console.warn('chargement métriques VM en échec', err))
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -280,6 +297,8 @@ export function VmMonitor({ endpointId, vmid, vmName, maxmemBytes, maxdiskBytes 
           {chartCard(t('vm.mon.cpu'), cpuRef, true, () => downloadCsv('cpu', ALL_COLS.slice(0, 1)))}
           {chartCard(t('vm.mon.mem'), memRef, false, () => downloadCsv('mem', ALL_COLS.slice(1, 2)))}
           {chartCard(t('metrics.disk'), diskRef, false, () => downloadCsv('disk', ALL_COLS.slice(2, 4)))}
+          {/* I/O PAR DISQUE de la VM (agent hôte + mapping device-mapper). */}
+          <PerDeviceDiskSection data={diskioData} tf={tf} loading={loading} vmName={vmName} />
           {/* Occupation disque par partition (agent invité QEMU / rootfs LXC). */}
           <FsOccupancySection fsData={fsData} vmName={vmName} tf={tf} loading={loading} hasData={hasData} maxdiskBytes={maxdiskBytes} />
           {chartCard(t('vm.mon.net'), netRef, false, () => downloadCsv('net', ALL_COLS.slice(4)))}
@@ -448,6 +467,291 @@ function FsUsageChart({ series, vmName, tf, loading, hasData }: { series: VmFsSe
           <Skeleton className="min-h-[260px] w-full flex-1" />
         ) : (
           <div ref={ref} className={`min-h-[260px] w-full flex-1 ${loading ? 'opacity-50' : ''}`} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Section « Disques I/O — par device (hôte) » : I/O réelle par disque de la VM,
+ * depuis le nœud hôte (Telegraf diskio + mapping dm-N → LV PVE via dm_names).
+ * États dégradés encodés, pas de pic faux :
+ *  - `noMapping` : agent pas encore (re)déployé (table dm_names absente) ;
+ *  - `insufficientData` : mapping présent mais aucun LV dm pour cette VM
+ *    (stockage non LVM-thin — ZFS/dir — ou VM sans volume).
+ */
+function PerDeviceDiskSection({
+  data,
+  tf,
+  loading,
+  vmName,
+}: {
+  data: VmDiskioResponse | null;
+  tf: MetricsTimeframe;
+  loading: boolean;
+  vmName: string;
+}) {
+  const { t } = useTranslation();
+
+  if (!data) {
+    return (
+      <Card>
+        <CardHeader draggable={false}>
+          <CardTitle>{t('vm.mon.perDevice')}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading && <Skeleton className="min-h-[260px] w-full" />}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (data.series.length === 0) {
+    const msg = data.source === 'noMapping' ? t('vm.mon.perDevice.noMapping') : t('vm.mon.perDevice.none');
+    return (
+      <Card>
+        <CardHeader draggable={false}>
+          <CardTitle title={t('vm.mon.perDevice.hint')}>{t('vm.mon.perDevice')}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-lg border px-3 py-6 text-center text-xs text-muted-foreground">{msg}</div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="px-1 text-[11px] text-muted-foreground">{t('vm.mon.perDevice.hint')}</p>
+      {data.series.map((s) => (
+        <PerDeviceChart key={`${s.node}-${s.device}`} series={s} tf={tf} loading={loading} vmName={vmName} />
+      ))}
+    </div>
+  );
+}
+
+/** Graphe d'UN disque de la VM : débits (lecture/écriture) + saturation (busy % + IOPS) + export CSV. */
+function PerDeviceChart({
+  series,
+  tf,
+  loading,
+  vmName,
+}: {
+  series: VmDiskioSeries;
+  tf: MetricsTimeframe;
+  loading: boolean;
+  vmName: string;
+}) {
+  const { t } = useTranslation();
+  const theme = useTheme((s) => s.theme);
+  const ct = chartTheme(theme);
+
+  const times = useMemo(() => series.points.map((p) => p.t), [series]);
+
+  /** Débits : lecture (trait plein) + écriture (pointillé), octets/s. */
+  const rwOption = useMemo<EChartsOption | null>(() => {
+    if (times.length === 0) return null;
+    return {
+      animation: false,
+      grid: { top: 32, right: 16, bottom: 20, left: 56 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: ct.tooltipBg,
+        borderColor: ct.tooltipBorder,
+        textStyle: { color: ct.tooltipText, fontSize: 11 },
+        axisPointer: { type: 'line', lineStyle: { color: ct.axisLine } },
+        valueFormatter: (v) => (typeof v === 'number' ? formatBps(v) : String(v)),
+      },
+      legend: {
+        top: 0,
+        right: 0,
+        itemWidth: 12,
+        itemHeight: 3,
+        textStyle: { color: ct.legend, fontSize: 11 },
+        data: [t('vm.mon.disk.read'), t('vm.mon.disk.write')],
+      },
+      xAxis: {
+        type: 'category',
+        boundaryGap: false,
+        data: times,
+        axisLine: { lineStyle: { color: ct.axisLine } },
+        axisTick: { show: false },
+        axisLabel: { color: ct.axisLabel, fontSize: 10, formatter: (v: string) => timeLabel(Number(v), tf) },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: ct.axisLabel, fontSize: 10, formatter: (v: number) => formatBps(v) },
+        splitLine: { lineStyle: { color: ct.splitLine } },
+      },
+      series: [
+        {
+          name: t('vm.mon.disk.read'),
+          type: 'line',
+          smooth: true,
+          symbol: 'none',
+          data: series.points.map((p) => p.readBps),
+          lineStyle: { width: 2, color: ct.diskRead },
+          itemStyle: { color: ct.diskRead },
+          areaStyle: {
+            color: {
+              type: 'linear',
+              x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: `${ct.diskRead}44` },
+                { offset: 1, color: `${ct.diskRead}00` },
+              ],
+            },
+          },
+        },
+        {
+          name: t('vm.mon.disk.write'),
+          type: 'line',
+          smooth: true,
+          symbol: 'none',
+          data: series.points.map((p) => p.writeBps),
+          lineStyle: { width: 2, type: 'dashed', color: ct.diskWrite },
+          itemStyle: { color: ct.diskWrite },
+        },
+      ],
+    };
+  }, [series, times, tf, ct, t]);
+
+  /** Saturation : busy % (Δ io_time, 0–100, convention iostat) + IOPS (2ᵉ axe). */
+  const busyOption = useMemo<EChartsOption | null>(() => {
+    if (times.length === 0) return null;
+    return {
+      animation: false,
+      grid: { top: 32, right: 40, bottom: 20, left: 36 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: ct.tooltipBg,
+        borderColor: ct.tooltipBorder,
+        textStyle: { color: ct.tooltipText, fontSize: 11 },
+        axisPointer: { type: 'line', lineStyle: { color: ct.axisLine } },
+        formatter: (params: unknown) => {
+          const arr = params as Array<{ axisValue: string | number; seriesName: string; value: number | null; marker: string }>;
+          if (!Array.isArray(arr) || arr.length === 0) return '';
+          const head = timeLabel(Number(arr[0].axisValue), tf);
+          const lines = arr.map((p) => {
+            const v = typeof p.value === 'number' ? p.value.toFixed(1) : '—';
+            const unit = p.seriesName === t('vm.mon.busy') ? ' %' : '';
+            return `${p.marker} ${p.seriesName} : ${v}${unit}`;
+          });
+          return `${head}<br/>${lines.join('<br/>')}`;
+        },
+      },
+      legend: {
+        top: 0,
+        right: 0,
+        itemWidth: 12,
+        itemHeight: 3,
+        textStyle: { color: ct.legend, fontSize: 11 },
+        data: [t('vm.mon.busy'), t('vm.mon.iops')],
+      },
+      xAxis: {
+        type: 'category',
+        boundaryGap: false,
+        data: times,
+        axisLine: { lineStyle: { color: ct.axisLine } },
+        axisTick: { show: false },
+        axisLabel: { color: ct.axisLabel, fontSize: 10, formatter: (v: string) => timeLabel(Number(v), tf) },
+      },
+      yAxis: [
+        {
+          type: 'value',
+          min: 0,
+          max: 100,
+          axisLabel: { color: ct.axisLabel, fontSize: 10, formatter: '{value} %' },
+          splitLine: { lineStyle: { color: ct.splitLine } },
+        },
+        {
+          type: 'value',
+          position: 'right',
+          axisLabel: { color: ct.axisLabel, fontSize: 10 },
+          splitLine: { show: false },
+        },
+      ],
+      series: [
+        {
+          name: t('vm.mon.busy'),
+          type: 'line',
+          yAxisIndex: 0,
+          smooth: true,
+          symbol: 'none',
+          data: series.points.map((p) => p.busyPct),
+          lineStyle: { width: 2, color: ct.disk },
+          itemStyle: { color: ct.disk },
+          areaStyle: {
+            color: {
+              type: 'linear',
+              x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: `${ct.disk}44` },
+                { offset: 1, color: `${ct.disk}00` },
+              ],
+            },
+          },
+        },
+        {
+          name: t('vm.mon.iops'),
+          type: 'line',
+          yAxisIndex: 1,
+          smooth: true,
+          symbol: 'none',
+          data: series.points.map((p) => p.iops),
+          lineStyle: { width: 1.5, type: 'dashed', color: ct.cpu },
+          itemStyle: { color: ct.cpu },
+        },
+      ],
+    };
+  }, [series, times, tf, ct, t]);
+
+  const rwRef = useEChart(rwOption);
+  const busyRef = useEChart(busyOption);
+
+  const exportCsv = () => {
+    if (series.points.length === 0) return;
+    const header = ['timestamp', 'read_bps', 'write_bps', 'iops', 'busy_pct', 'await_ms'];
+    const rows = series.points.map((p) => [
+      new Date(p.t * 1000).toISOString(),
+      p.readBps != null ? String(p.readBps) : '',
+      p.writeBps != null ? String(p.writeBps) : '',
+      p.iops != null ? String(p.iops) : '',
+      p.busyPct != null ? String(p.busyPct) : '',
+      p.awaitMs != null ? String(p.awaitMs) : '',
+    ]);
+    const dev = series.label.replace(/[^a-zA-Z0-9_-]/g, '_');
+    downloadCsvFile(`vm-diskio-${vmName}-${dev}-${tf}-${new Date().toISOString().slice(0, 10)}.csv`, header, rows);
+  };
+
+  const title = `${t('vm.mon.perDevice')} — ${series.label}`;
+
+  return (
+    <Card>
+      <CardHeader draggable={false} className="flex-row items-center justify-between gap-2">
+        <CardTitle>{title}</CardTitle>
+        <button
+          onClick={exportCsv}
+          disabled={series.points.length === 0}
+          title={t('vm.mon.export')}
+          className="rounded-md border p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {loading && times.length === 0 ? (
+          <Skeleton className="min-h-[160px] w-full" />
+        ) : times.length === 0 ? (
+          <div className="rounded-lg border px-3 py-4 text-center text-xs text-muted-foreground">
+            {t('vm.mon.perDevice.noData')}
+          </div>
+        ) : (
+          <>
+            <div ref={rwRef} className={`h-[170px] w-full ${loading ? 'opacity-50' : ''}`} />
+            <div ref={busyRef} className={`h-[170px] w-full ${loading ? 'opacity-50' : ''}`} />
+          </>
         )}
       </CardContent>
     </Card>

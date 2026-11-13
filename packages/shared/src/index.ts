@@ -109,3 +109,5 @@ export { resources, DEFAULT_LANG } from './i18n/index.js';
 export type { Lang } from './i18n/index.js';
 export type { SmartDevice, SensorReading, ZfsStatus, FailedUnit, NodeSensorsResponse, SensorThresholds, SensorThresholdEntry, SensorThresholdsResponse, SensorHistoryPoint, SensorHistoryResponse, SmartHistoryResponse } from './node-sensors.js';
 export { sensorKey, effectiveSensorThreshold, tempTone, smartHealthTone, smartTempDisplay } from './node-sensors.js';
+export type { NodeCpuCore, NodeSystemRow, NodeSystemResponse, NodeDiskioRow, NodeDiskioResponse, VmDiskioPoint, VmDiskioSeries, VmDiskioResponse, PveMapperParse } from './system-metrics.js';
+export { parsePveMapperName, mapperLabel, isPhysicalDevice } from './system-metrics.js';

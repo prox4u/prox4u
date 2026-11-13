@@ -9,7 +9,7 @@ export type { Layout, LayoutItem };
  * DEFAULT_LAYOUT (nouveaux blocs, restructuration). Les layouts persistés d'une
  * version antérieure sont alors jetés au rechargement (retour aux défauts).
  */
-export const LAYOUT_VERSION = 2;
+export const LAYOUT_VERSION = 3;
 
 /** Layout initial = design validé (graphes ressources en tête, grille 12 colonnes). */
 export const DEFAULT_LAYOUT: Layout = [
