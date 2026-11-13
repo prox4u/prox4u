@@ -7,6 +7,8 @@ import type {
   FailedUnit,
   SensorThresholds,
   SensorThresholdEntry,
+  SensorHistoryPoint,
+  SensorHistoryResponse,
 } from '@prox4u/shared';
 import { sensorKey } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
@@ -22,6 +24,13 @@ interface CacheEntry {
 
 function influxReady(ctx: AppContext): boolean {
   return !!ctx.influx && ctx.influx.enabled;
+}
+
+/** Literal SQL (DuckDB) : échappe les guillemets simples — les noms de capteurs
+ *  viennent de Telegraf, mais la requête passe par des query string : on n'ouvre
+ *  jamais de SQL injection. */
+function sqlStr(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`;
 }
 
 /**
@@ -210,6 +219,156 @@ export function registerNodeSensors(app: FastifyInstance, ctx: AppContext, store
     };
     cache.set('all', { at: Date.now(), value: body });
     reply.send(body);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Historique des valeurs d'un capteur — fenêtre « historique » de la page
+// ---------------------------------------------------------------------------
+//
+// GET /api/node-sensors-history?node=&chip=&feature=&range=month|year
+//
+// Série de température d'UN capteur, pour le graphe « Historique des valeurs »
+// ouvert depuis l'icône de la table « Capteurs ». Pattern du
+// /api/storage-datastore-history : double source (raw haute résolution /
+// consolidated long terme), fusion dédoublonnée, cache 5 min.
+//
+// Résolution : la table `sensors` raw reçoit un point toutes les 10 s —
+// ~270k points sur 31 j par capteur, trop pour un graphe navigateur. On
+// bucket donc en **10 min** côté raw (le consolidated est déjà en buckets
+// 15 min, écrit par le consolidator) : ~2900 points sur 31 j, ~8900 sur 1 an.
+// Les TROUS (nœud éteint / sans mesure) sont réels : ils ne sont pas comblés,
+// la série est sparse et le front les affiche tels quels.
+
+type SensorHistoryRange = 'month' | 'year';
+const SENSOR_HISTORY_CACHE_TTL_MS = 5 * 60_000; // 5 min
+
+interface SensorHistoryCacheEntry {
+  at: number;
+  value: SensorHistoryResponse;
+}
+
+/** Lit un champ string d'un SqlRow de DuckDB (InfluxDB 3 renvoie string|number|null). */
+function rowStr(r: Record<string, string | number | null | boolean | undefined>, key: string): string {
+  const v = r[key];
+  return typeof v === 'string' ? v : v == null ? '' : String(v);
+}
+
+/**
+ * Historique de température d'un capteur (table `sensors`).
+ *
+ * Double source (pattern datastore-history) :
+ *  - **raw** (rétention 31 j, points 10 s) → bucket **10 min** : la période récente en fine résolution ;
+ *  - **consolidated** (rétention ∞, buckets 15 min écrits par le consolidator) : l'historique long terme.
+ * Fusion : au même horodatage, le point **raw prime** (plus fin) ; le consolidated
+ * n'écrase jamais un point raw déjà présent.
+ */
+async function computeSensorHistory(
+  ctx: AppContext,
+  node: string,
+  chip: string,
+  feature: string,
+  range: SensorHistoryRange,
+  thresholds: SensorThresholds,
+): Promise<SensorHistoryResponse> {
+  const empty: SensorHistoryResponse = { node, chip, feature, range, points: [], threshold: null, thresholdCustom: false, thresholdFirmware: null, source: 'empty' };
+  const window = range === 'month' ? '31 days' : '365 days';
+  const where = `node = ${sqlStr(node)} AND chip = ${sqlStr(chip)} AND feature = ${sqlStr(feature)}`;
+
+  const [rawRows, aggRows] = await Promise.all([
+    // raw : buckets 10 min (les points 10 s seraient ~270k sur 31 j).
+    ctx.influx!.querySql<Record<string, string | number | null>>(
+      ctx.influx.rawDb,
+      `SELECT date_bin(INTERVAL '10 minutes', time) AS t, max(temp_input) AS temp
+       FROM sensors WHERE ${where} AND time >= now() - INTERVAL '${window}'
+         AND temp_input IS NOT NULL
+       GROUP BY t ORDER BY t`,
+    ),
+    // consolidated : buckets 15 min (rétention illimitée) — l'année.
+    ctx.influx!.querySql<Record<string, string | number | null>>(
+      ctx.influx.aggDb,
+      `SELECT date_bin(INTERVAL '15 minutes', time) AS t, max(temp_input) AS temp
+       FROM sensors WHERE ${where} AND time >= now() - INTERVAL '${window}'
+         AND temp_input IS NOT NULL
+       GROUP BY t ORDER BY t`,
+    ),
+  ]);
+
+  // Fusion dédoublonnée par horodatage : le point raw (10 min) prime sur le
+  // point consolidé (15 min) au même `t` ; le consolidé ne remplace jamais un raw.
+  const byTime = new Map<number, number>();
+  for (const r of aggRows) {
+    const temp = Number(r.temp);
+    if (Number.isFinite(temp)) byTime.set(influxTsToUnix(rowStr(r, 't')), temp);
+  }
+  for (const r of rawRows) {
+    const temp = Number(r.temp);
+    if (Number.isFinite(temp)) byTime.set(influxTsToUnix(rowStr(r, 't')), temp);
+  }
+  const points: SensorHistoryPoint[] = [...byTime.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([time, temp]) => ({ time, temp }));
+  if (points.length === 0) return empty;
+
+  // Seuil effectif (ligne de référence du graphe) : perso si défini, sinon
+  // firmware (dernier `temp_crit` connu, fenêtre 1 h — le firmware ne bouge pas).
+  const custom = thresholds[sensorKey({ node, chip, feature })] ?? null;
+  let firmware: number | null = null;
+  try {
+    const fwRows = await ctx.influx!.querySql<Record<string, string | number | null>>(
+      ctx.influx.rawDb,
+      `SELECT max(temp_crit) AS temp_crit
+       FROM sensors WHERE ${where} AND time >= now() - INTERVAL '1h'`,
+    );
+    const v = Number(fwRows[0]?.temp_crit);
+    firmware = Number.isFinite(v) ? v : null;
+  } catch (err) {
+    ctx.logger.warn(`node-sensors-history : seuil firmware inconnu (${(err as Error).message})`);
+  }
+
+  return {
+    ...empty,
+    points,
+    threshold: custom ?? firmware,
+    thresholdCustom: custom !== null,
+    thresholdFirmware: firmware,
+    source: 'influx',
+  };
+}
+
+export function registerSensorHistoryRoute(app: FastifyInstance, ctx: AppContext, store: SensorThresholdStore): void {
+  const historyCache = new Map<string, SensorHistoryCacheEntry>();
+
+  app.get('/api/node-sensors-history', async (req, reply) => {
+    const q = req.query as { node?: string; chip?: string; feature?: string; range?: string };
+    const node = typeof q.node === 'string' ? q.node.trim() : '';
+    const chip = typeof q.chip === 'string' ? q.chip.trim() : '';
+    const feature = typeof q.feature === 'string' ? q.feature.trim() : '';
+    // Identité de capteur requise (clé = node/chip/feature) + longueur bornée
+    // (les noms Telegraf sont courts ; au-delà = requête malformée, pas de SQL ouvert).
+    if (!node || !chip || !feature || node.length > 128 || chip.length > 128 || feature.length > 128) {
+      reply.code(400).send({ error: 'invalid', code: 'bad-sensor', message: 'node, chip et feature sont requis' });
+      return;
+    }
+    const range: SensorHistoryRange = q.range === 'month' ? 'month' : 'year';
+    const cacheKey = `${node}/${chip}/${feature}:${range}`;
+    const cached = historyCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < SENSOR_HISTORY_CACHE_TTL_MS) return cached.value;
+
+    let value: SensorHistoryResponse;
+    if (influxReady(ctx)) {
+      try {
+        // Les seuils perso sont relus ici (rarement modifiés) — pas de cache dédié.
+        value = await computeSensorHistory(ctx, node, chip, feature, range, store.getThresholds());
+      } catch (err) {
+        ctx.logger.warn(`node-sensors-history(${node}/${chip}/${feature}) : InfluxDB indisponible (${(err as Error).message})`);
+        value = { node, chip, feature, range, points: [], threshold: null, thresholdCustom: false, thresholdFirmware: null, source: 'empty' };
+      }
+    } else {
+      value = { node, chip, feature, range, points: [], threshold: null, thresholdCustom: false, thresholdFirmware: null, source: 'empty' };
+    }
+    historyCache.set(cacheKey, { at: Date.now(), value });
+    return value;
   });
 }
 

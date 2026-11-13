@@ -1,4 +1,4 @@
-import type { DatastoreHistoryResponse, MetricsTimeframe, NodeSensorsResponse, ProxmoxInventoryResponse, VmFsResponse } from '@prox4u/shared';
+import type { DatastoreHistoryResponse, MetricsTimeframe, NodeSensorsResponse, ProxmoxInventoryResponse, SensorHistoryResponse, VmFsResponse } from '@prox4u/shared';
 import type {
   CapacityResponse,
   MetricsResponse,
@@ -52,6 +52,16 @@ export function fetchStorageInventory(): Promise<StorageInventoryResponse> {
 /** Historique d'occupation + capacity planning par datastore d'un endpoint. */
 export function fetchStorageDatastoreHistory(endpoint: string, range: 'year' | 'month' = 'year'): Promise<DatastoreHistoryResponse> {
   return getJson<DatastoreHistoryResponse>(`/api/storage-datastore-history?endpoint=${encodeURIComponent(endpoint)}&range=${range}`);
+}
+
+/**
+ * Historique des valeurs d'un capteur (température, °C) — fenêtre « historique »
+ * de la page Capteurs. Les trous de la série = nœud sans mesure (éteint).
+ */
+export function fetchSensorHistory(node: string, chip: string, feature: string, range: 'year' | 'month' = 'month'): Promise<SensorHistoryResponse> {
+  return getJson<SensorHistoryResponse>(
+    `/api/node-sensors-history?node=${encodeURIComponent(node)}&chip=${encodeURIComponent(chip)}&feature=${encodeURIComponent(feature)}&range=${range}`,
+  );
 }
 
 /** Détail d'une VM (live + config + snapshots) — plugin vm-view. */

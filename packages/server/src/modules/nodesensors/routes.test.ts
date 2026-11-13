@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { NodeSensorsResponse, SensorThresholdsResponse } from '@prox4u/shared';
+import type { NodeSensorsResponse, SensorHistoryResponse, SensorThresholdsResponse } from '@prox4u/shared';
+import { influxTsToUnix } from '../../core/influx.js';
 import type { AppContext } from '../../core/poller.js';
-import { registerNodeSensors, registerSensorThresholdRoutes } from './routes.js';
+import { registerNodeSensors, registerSensorHistoryRoute, registerSensorThresholdRoutes } from './routes.js';
 import { SensorThresholdStore } from './thresholds.js';
 
 const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
@@ -186,5 +187,115 @@ describe('registerNodeSensors — parsing SMART tri-state (vrai matériel)', () 
   it('temp_c 0 (disque virtuel) conservé à 0 côté API (affichage « — » géré au front)', async () => {
     const smart = await getSmart([qemuRow]);
     expect(byDevice(smart, 'sda').tempC).toBe(0);
+  });
+});
+
+describe('registerSensorHistoryRoute — historique des valeurs capteur', () => {
+  // raw (buckets 10 min) et consolidated (buckets 15 min) : au MÊME horodatage,
+  // le point raw doit primer (résolution plus fine) — pas de double comptage.
+  const rawRows = [
+    { t: '2026-11-10T00:00:00Z', temp: 50 },
+    { t: '2026-11-10T00:10:00Z', temp: 55 },
+    { t: '2026-11-10T00:20:00Z', temp: 60 },
+  ];
+  const aggRows = [
+    { t: '2026-11-10T00:00:00Z', temp: 42 }, // écrasé par le raw au même `t`
+    { t: '2026-11-10T00:15:00Z', temp: 58 }, // uniquement consolidated
+    { t: '2026-11-10T00:30:00Z', temp: 62 },
+  ];
+  const fwRows = [{ temp_crit: 110 }];
+
+  /** AppContext mock : route la réponse selon le SQL (raw 10 min / agg 15 min / seuil firmware). */
+  function makeHistoryCtx(
+    dir: string,
+    raw: Record<string, string | number | null>[],
+    agg: Record<string, string | number | null>[],
+    fw: Record<string, string | number | null>[],
+  ): AppContext {
+    return {
+      config: { authFile: path.join(dir, 'auth.json') } as AppContext['config'],
+      endpoints: [],
+      logger,
+      influx: {
+        enabled: true,
+        rawDb: 'raw',
+        aggDb: 'consolidated',
+        querySql: async (_db: string, sql: string) => {
+          if (sql.includes('max(temp_crit)')) return fw;
+          if (sql.includes("INTERVAL '10 minutes'")) return raw;
+          if (sql.includes("INTERVAL '15 minutes'")) return agg;
+          return [];
+        },
+      } as unknown as AppContext['influx'],
+      auth: {} as AppContext['auth'],
+      hub: {} as AppContext['hub'],
+    };
+  }
+
+  async function boot(
+    raw: Record<string, string | number | null>[] = rawRows,
+    agg: Record<string, string | number | null>[] = aggRows,
+    fw: Record<string, string | number | null>[] = fwRows,
+  ) {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sensor-history-'));
+    const store = new SensorThresholdStore(path.join(dir, 'sensor-thresholds.json'), logger);
+    store.init();
+    const app = Fastify();
+    registerSensorHistoryRoute(app, makeHistoryCtx(dir, raw, agg, fw), store);
+    await app.ready();
+    return { app, store, dir };
+  }
+
+  it('merge raw + consolidated : le raw prime à t égal, série triée, seuil firmware', async () => {
+    const { app, dir } = await boot();
+    const res = await app.inject({ method: 'GET', url: '/api/node-sensors-history?node=proxmox&chip=k10temp-pci-00c3&feature=tctl&range=month' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as SensorHistoryResponse;
+    expect(body.source).toBe('influx');
+    expect(body.points).toEqual([
+      { time: influxTsToUnix('2026-11-10T00:00:00Z'), temp: 50 }, // raw écrase l'agg (42)
+      { time: influxTsToUnix('2026-11-10T00:10:00Z'), temp: 55 },
+      { time: influxTsToUnix('2026-11-10T00:15:00Z'), temp: 58 }, // consolidated seul
+      { time: influxTsToUnix('2026-11-10T00:20:00Z'), temp: 60 },
+      { time: influxTsToUnix('2026-11-10T00:30:00Z'), temp: 62 },
+    ]);
+    expect(body.threshold).toBe(110); // firmware (pas de perso)
+    expect(body.thresholdCustom).toBe(false);
+    expect(body.thresholdFirmware).toBe(110);
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('seuil perso : threshold = perso, firmware exposé pour la 2ᵉ ligne du graphe', async () => {
+    const { app, store, dir } = await boot();
+    store.setThresholds({ 'proxmox/k10temp-pci-00c3/tctl': 90 });
+    const res = await app.inject({ method: 'GET', url: '/api/node-sensors-history?node=proxmox&chip=k10temp-pci-00c3&feature=tctl' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as SensorHistoryResponse;
+    expect(body.threshold).toBe(90);
+    expect(body.thresholdCustom).toBe(true);
+    expect(body.thresholdFirmware).toBe(110);
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('identité capteur incomplète (feature absent) → 400', async () => {
+    const { app, dir } = await boot();
+    const res = await app.inject({ method: 'GET', url: '/api/node-sensors-history?node=proxmox&chip=k10temp-pci-00c3' });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('aucun point → source empty (nœud éteint / jamais vu), seuil null', async () => {
+    const { app, dir } = await boot([], [], []);
+    const res = await app.inject({ method: 'GET', url: '/api/node-sensors-history?node=proxmox&chip=absent&feature=tctl' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as SensorHistoryResponse;
+    expect(body.source).toBe('empty');
+    expect(body.points).toEqual([]);
+    expect(body.threshold).toBe(null);
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

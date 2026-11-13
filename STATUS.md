@@ -1193,6 +1193,55 @@ des VG enfants (engagé)**, pas les données du VG (cas 600 Go LUN / 100 Go VG �
 
 ---
 
+## ✅ Fait — Historique des valeurs des capteurs (icône graphique + fenêtre) (livré, **non commité**)
+
+Demande utilisateur : dans « Capteurs nœuds — métriques locales Telegraf », une **icône graphique
+à côté des températures** qui ouvre une **nouvelle fenêtre** avec l'historique de valeur. Rappel
+utilisateur : l'environnement de test vient d'être ouvert → **des trous dans les métriques sont
+attendus** (nœuds éteints) — le graphe les montre tels quels, jamais comblés.
+
+### Correction
+- **`GET /api/node-sensors-history?node=&chip=&feature=&range=month|year`** (`modules/nodesensors/
+  routes.ts`, `registerSensorHistoryRoute`) : série de température d'UN capteur. Pattern du
+  `/api/storage-datastore-history` : **double source** — `raw` (rétention 31 j, points 10 s)
+  bucketé en **10 min** + `consolidated` (rétention ∞, buckets 15 min du consolidateur) ; fusion
+  dédoublonnée (le raw prime à `t` égal) ; **cache 5 min** par `node/chip/feature:range`.
+  Identité requise (400 via `reply.code(400).send` — piège Fastify 5 : `return { statusCode }` ne
+  set pas le code) + échappement SQL `sqlStr` (query string). `range` : `month` (31 j, défaut) /
+  `year` (1 an). ~2900 pts / 31 j, ~8900 / 1 an (jamais les ~270k points 10 s bruts).
+- **`SensorHistoryResponse`** (shared) : `points[{time,temp}]` **sparse** (les trous = données),
+  `threshold` (seuil effectif perso ≤ firmware), `thresholdCustom`, `thresholdFirmware` (2ᵉ ligne
+  du graphe si perso), `source`. Capteur sans `temp_crit` (ex. `tctl`) → `threshold: null`.
+- **Web** : icône `Activity` à côté de chaque température de la table « Capteurs » →
+  `SensorHistoryDialog` (nouveau `components/ui/dialog.tsx`, modal léger zéro-dépendance : overlay,
+  X/Échap, scroll gelé) — identité `node/chip/feature`, dernière mesure, toggle **31 j / 1 an**
+  (style range stockage), graphe ECharts (couleur thème `ct.temp` ajoutée à `chart-theme.ts`,
+  `connectNulls: false` → **les trous restent visibles**, `markLine` seuil effectif rouge +
+  firmware gris si perso, note explicative des trous), états loading/erreur/vide. i18n
+  `nodeSensors.history.*` + `nodeSensors.range.*` (fr/en). `fetchSensorHistory` dans l'apiClient.
+
+### Vérifications effectuées
+- `pnpm --filter @prox4u/shared build` → typecheck (shared/server/web) → tests (**140 server** dont
+  4 nouveaux `registerSensorHistoryRoute` : merge raw/consolidé + seuil perso + 400 + empty ;
+  **259 shared** verts) → `pnpm build` → `./server.sh restart` : OK.
+- **API réelle** : `k10temp-pci-00c3/tctl` (nœud `proxmox`) → 128 points sur 7 jours
+  (2026-11-06 13:50 → 2026-11-13 11:20) — **~15 h de mesures réelles sur 7 j = les trous
+  annoncés** (nœud de test éteint), série sparse non comblée. `tctl` sans `temp_crit` →
+  `threshold: null` (pas de faux seuil). 400 si identité incomplète.
+- **Navigateur** : 17 icônes dans la table Capteurs ; clic → fenêtre « Historique des valeurs »
+  (identité, dernière mesure 37.85 °C, toggle 31 j/1 an, canvas ECharts 714×288, note des trous) ;
+  switch « 1 an » → refetch + rendu ; Échap → fermeture. **0 erreur console.**
+
+### Pièges corrigés
+- **Fastify 5 — `return { statusCode: 400 }` ≠ HTTP 400** : renvoyé dans le body, status 200.
+  `reply.code(400).send(…)` (convention du codebase). Test + vérification live.
+- **~270k points par graphe** : les points Telegraf (10 s) bucketés en 10 min côté requête
+  (`date_bin`) — jamais de série brute au navigateur (270k pts / 31 j / capteur).
+- **Trous ≠ bug** : environnement de test jeune, nœuds éteints → la série est sparse ;
+  `connectNulls: false` et **aucune interpolation** (anticiper du vrai matériel).
+
+---
+
 ## ⏳ À faire
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
