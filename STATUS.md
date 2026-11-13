@@ -1193,12 +1193,13 @@ des VG enfants (engagé)**, pas les données du VG (cas 600 Go LUN / 100 Go VG �
 
 ---
 
-## ✅ Fait — Historique des valeurs des capteurs (icône graphique + fenêtre) (livré, **non commité**)
+## ✅ Fait — Historique des valeurs des capteurs ET des disques SMART (icône graphique + fenêtre)
 
 Demande utilisateur : dans « Capteurs nœuds — métriques locales Telegraf », une **icône graphique
-à côté des températures** qui ouvre une **nouvelle fenêtre** avec l'historique de valeur. Rappel
-utilisateur : l'environnement de test vient d'être ouvert → **des trous dans les métriques sont
-attendus** (nœuds éteints) — le graphe les montre tels quels, jamais comblés.
+à côté des températures** qui ouvre une **nouvelle fenêtre** avec l'historique de valeur — d'abord
+pour la table « Capteurs » (commit `792c449`), puis « **idem pour Santé disques (SMART)** ».
+Rappel utilisateur : l'environnement de test vient d'être ouvert → **des trous dans les métriques
+sont attendus** (nœuds éteints) — le graphe les montre tels quels, jamais comblés.
 
 ### Correction
 - **`GET /api/node-sensors-history?node=&chip=&feature=&range=month|year`** (`modules/nodesensors/
@@ -1212,29 +1213,48 @@ attendus** (nœuds éteints) — le graphe les montre tels quels, jamais comblé
 - **`SensorHistoryResponse`** (shared) : `points[{time,temp}]` **sparse** (les trous = données),
   `threshold` (seuil effectif perso ≤ firmware), `thresholdCustom`, `thresholdFirmware` (2ᵉ ligne
   du graphe si perso), `source`. Capteur sans `temp_crit` (ex. `tctl`) → `threshold: null`.
-- **Web** : icône `Activity` à côté de chaque température de la table « Capteurs » →
-  `SensorHistoryDialog` (nouveau `components/ui/dialog.tsx`, modal léger zéro-dépendance : overlay,
-  X/Échap, scroll gelé) — identité `node/chip/feature`, dernière mesure, toggle **31 j / 1 an**
-  (style range stockage), graphe ECharts (couleur thème `ct.temp` ajoutée à `chart-theme.ts`,
-  `connectNulls: false` → **les trous restent visibles**, `markLine` seuil effectif rouge +
-  firmware gris si perso, note explicative des trous), états loading/erreur/vide. i18n
-  `nodeSensors.history.*` + `nodeSensors.range.*` (fr/en). `fetchSensorHistory` dans l'apiClient.
+- **`GET /api/smart-device-history?node=&device=&range=month|year`** (`registerSmartHistoryRoute`) :
+  même pattern pour un DISQUE (table `smart_device`, colonne `temp_c`) — la logique de fusion est
+  extraite dans le helper partagé `mergedTempBuckets(ctx, table, where, window, tempField, keep)`.
+  **Sans seuil** (les disques n'ont pas de `temp_crit`) → `SmartHistoryResponse { node, device,
+  range, points, source }`. **0 °C exclus** (prédicat `keep(t) => t > 0` — 0 = pas de sonde, cf.
+  `smartTempDisplay`) : un disque sans capteur ne doit pas tracer une ligne plate à 0 °C.
+  400 `bad-device` si `node`/`device` absent.
+- **Web** : icône `Activity` à côté de chaque température de la table « Capteurs » **ET** de la
+  table « Santé disques (SMART) » (SMART : seulement s'il y a une lecture — 0 °C = pas de sonde) →
+  `HistoryDialog` (refonte `SensorHistoryDialog` → `components/history-dialog.tsx`, **générique** :
+  `HistoryTarget = { kind:'sensor'; sensor } | { kind:'smart'; device }`, fetch normalisé
+  `fetchSensorHistory` / `fetchSmartHistory`, `markLine` — capteur : seuil effectif rouge +
+  firmware gris si perso, SMART : ligne critique fixe **80 °C** (clé
+  `nodeSensors.history.smartThreshold`) ; modal `components/ui/dialog.tsx` léger zéro-dépendance :
+  overlay, X/Échap, scroll gelé) — identité, dernière mesure, toggle **31 j / 1 an** (style range
+  stockage), graphe ECharts (couleur thème `ct.temp`, `connectNulls: false` → **les trous restent
+  visibles**, note explicative des trous), états loading/erreur/vide. i18n `nodeSensors.history.*`
+  + `nodeSensors.range.*` (fr/en, état vide généralisé). `fetchSmartHistory` dans l'apiClient.
 
 ### Vérifications effectuées
-- `pnpm --filter @prox4u/shared build` → typecheck (shared/server/web) → tests (**140 server** dont
-  4 nouveaux `registerSensorHistoryRoute` : merge raw/consolidé + seuil perso + 400 + empty ;
-  **259 shared** verts) → `pnpm build` → `./server.sh restart` : OK.
-- **API réelle** : `k10temp-pci-00c3/tctl` (nœud `proxmox`) → 128 points sur 7 jours
-  (2026-11-06 13:50 → 2026-11-13 11:20) — **~15 h de mesures réelles sur 7 j = les trous
-  annoncés** (nœud de test éteint), série sparse non comblée. `tctl` sans `temp_crit` →
-  `threshold: null` (pas de faux seuil). 400 si identité incomplète.
-- **Navigateur** : 17 icônes dans la table Capteurs ; clic → fenêtre « Historique des valeurs »
-  (identité, dernière mesure 37.85 °C, toggle 31 j/1 an, canvas ECharts 714×288, note des trous) ;
-  switch « 1 an » → refetch + rendu ; Échap → fermeture. **0 erreur console.**
+- `pnpm --filter @prox4u/shared build` → typecheck (shared/server/web) → tests (**143 server** dont
+  4 `registerSensorHistoryRoute` + 3 `registerSmartHistoryRoute` : merge raw/consolidé, seuil
+  perso, **exclusion 0 °C**, 400, empty ; **259 shared** verts) → `pnpm build` → `./server.sh
+  restart` : OK.
+- **API réelle** : capteurs inchangés — `k10temp-pci-00c3/tctl` (nœud `proxmox`) → 128 points sur
+  7 jours, **~15 h de mesures réelles sur 7 j = les trous annoncés** (nœud de test éteint), série
+  sparse non comblée, `threshold: null` (sans `temp_crit`). SMART : `nvme0n1` (proxmox) →
+  **129 points** sur 31 j et 1 an (environnement jeune — données des derniers jours, trous réels),
+  valeurs 29–37 °C, `source: influx` ; 400 `bad-device` sans `device`.
+- **Navigateur** (fresh) : 17 icônes dans la table Capteurs + **3 dans SMART** (les 4 autres
+  disques n'ont pas de sonde → « — », pas d'icône) ; clic icône SMART → fenêtre
+  `proxmox/nvme0n1` (dernière mesure 37 °C, canvas ECharts, **1 seule requête** par période) ;
+  switch « 1 an » → 2ᵉ requête + rendu ; Échap → fermeture ; icône capteur (régression) →
+  fenêtre + graphe. **0 erreur console.**
 
 ### Pièges corrigés
 - **Fastify 5 — `return { statusCode: 400 }` ≠ HTTP 400** : renvoyé dans le body, status 200.
   `reply.code(400).send(…)` (convention du codebase). Test + vérification live.
+- **`chartTheme()` dans les deps d'un effet = boucle de re-fetch infinie** : la fonction renvoie
+  un objet **nouveau** à chaque appel — dépendre de l'objet `ct` (plutôt que de `theme`, string
+  stable) relance l'effet à chaque rendu (≈200 requêtes observées, fenêtre bloquée « loading »).
+  Fix : deps `[target, range, t, theme]` (documenté dans le skill `node-sensors`).
 - **~270k points par graphe** : les points Telegraf (10 s) bucketés en 10 min côté requête
   (`date_bin`) — jamais de série brute au navigateur (270k pts / 31 j / capteur).
 - **Trous ≠ bug** : environnement de test jeune, nœuds éteints → la série est sparse ;

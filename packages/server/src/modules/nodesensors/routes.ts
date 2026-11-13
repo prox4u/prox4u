@@ -9,6 +9,7 @@ import type {
   SensorThresholdEntry,
   SensorHistoryPoint,
   SensorHistoryResponse,
+  SmartHistoryResponse,
 } from '@prox4u/shared';
 import { sensorKey } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
@@ -223,22 +224,26 @@ export function registerNodeSensors(app: FastifyInstance, ctx: AppContext, store
 }
 
 // ---------------------------------------------------------------------------
-// Historique des valeurs d'un capteur — fenêtre « historique » de la page
+// Historique des valeurs — fenêtres « historique » de la page
 // ---------------------------------------------------------------------------
 //
-// GET /api/node-sensors-history?node=&chip=&feature=&range=month|year
+// GET /api/node-sensors-history?node=&chip=&feature=&range=month|year  (table `sensors`)
+// GET /api/smart-device-history?node=&device=&range=month|year         (table `smart_device`)
 //
-// Série de température d'UN capteur, pour le graphe « Historique des valeurs »
-// ouvert depuis l'icône de la table « Capteurs ». Pattern du
-// /api/storage-datastore-history : double source (raw haute résolution /
-// consolidated long terme), fusion dédoublonnée, cache 5 min.
+// Série de température d'UN capteur / d'UN disque, pour le graphe « Historique
+// des valeurs » ouvert depuis l'icône des tables « Capteurs » et « Santé
+// disques (SMART) ». Pattern du /api/storage-datastore-history : double source
+// (raw haute résolution / consolidated long terme), fusion dédoublonnée,
+// cache 5 min.
 //
-// Résolution : la table `sensors` raw reçoit un point toutes les 10 s —
+// Résolution : les tables Telegraf raw reçoivent un point toutes les 10 s —
 // ~270k points sur 31 j par capteur, trop pour un graphe navigateur. On
 // bucket donc en **10 min** côté raw (le consolidated est déjà en buckets
 // 15 min, écrit par le consolidator) : ~2900 points sur 31 j, ~8900 sur 1 an.
 // Les TROUS (nœud éteint / sans mesure) sont réels : ils ne sont pas comblés,
 // la série est sparse et le front les affiche tels quels.
+// Les disques à `temp_c = 0` (pas de capteur, cf. smartTempDisplay) sont
+// exclus de la série — sinon un disque sans sonde tracerait une ligne à 0 °C.
 
 type SensorHistoryRange = 'month' | 'year';
 const SENSOR_HISTORY_CACHE_TTL_MS = 5 * 60_000; // 5 min
@@ -248,10 +253,59 @@ interface SensorHistoryCacheEntry {
   value: SensorHistoryResponse;
 }
 
+interface SmartHistoryCacheEntry {
+  at: number;
+  value: SmartHistoryResponse;
+}
+
 /** Lit un champ string d'un SqlRow de DuckDB (InfluxDB 3 renvoie string|number|null). */
 function rowStr(r: Record<string, string | number | null | boolean | undefined>, key: string): string {
   const v = r[key];
   return typeof v === 'string' ? v : v == null ? '' : String(v);
+}
+
+/**
+ * Série de température fusionnée (raw buckets 10 min + consolidated buckets 15 min)
+ * pour une table + une identité. Au même horodatage, le **raw prime** (plus fin) ;
+ * le consolidé n'écrase jamais un point raw. `keep` filtre les valeurs
+ * (ex. disque 0 °C = pas de lecture). Triée par temps croissant.
+ */
+async function mergedTempBuckets(
+  ctx: AppContext,
+  table: string,
+  where: string,
+  window: string,
+  tempField: string,
+  keep: (temp: number) => boolean,
+): Promise<SensorHistoryPoint[]> {
+  const [rawRows, aggRows] = await Promise.all([
+    // raw : buckets 10 min (les points 10 s seraient ~270k sur 31 j).
+    ctx.influx!.querySql<Record<string, string | number | null>>(
+      ctx.influx.rawDb,
+      `SELECT date_bin(INTERVAL '10 minutes', time) AS t, max(${tempField}) AS temp
+       FROM ${table} WHERE ${where} AND time >= now() - INTERVAL '${window}'
+         AND ${tempField} IS NOT NULL
+       GROUP BY t ORDER BY t`,
+    ),
+    // consolidated : buckets 15 min (rétention illimitée) — l'année.
+    ctx.influx!.querySql<Record<string, string | number | null>>(
+      ctx.influx.aggDb,
+      `SELECT date_bin(INTERVAL '15 minutes', time) AS t, max(${tempField}) AS temp
+       FROM ${table} WHERE ${where} AND time >= now() - INTERVAL '${window}'
+         AND ${tempField} IS NOT NULL
+       GROUP BY t ORDER BY t`,
+    ),
+  ]);
+  const byTime = new Map<number, number>();
+  for (const r of aggRows) {
+    const temp = Number(r.temp);
+    if (Number.isFinite(temp) && keep(temp)) byTime.set(influxTsToUnix(rowStr(r, 't')), temp);
+  }
+  for (const r of rawRows) {
+    const temp = Number(r.temp);
+    if (Number.isFinite(temp) && keep(temp)) byTime.set(influxTsToUnix(rowStr(r, 't')), temp);
+  }
+  return [...byTime.entries()].sort((a, b) => a[0] - b[0]).map(([time, temp]) => ({ time, temp }));
 }
 
 /**
@@ -275,39 +329,7 @@ async function computeSensorHistory(
   const window = range === 'month' ? '31 days' : '365 days';
   const where = `node = ${sqlStr(node)} AND chip = ${sqlStr(chip)} AND feature = ${sqlStr(feature)}`;
 
-  const [rawRows, aggRows] = await Promise.all([
-    // raw : buckets 10 min (les points 10 s seraient ~270k sur 31 j).
-    ctx.influx!.querySql<Record<string, string | number | null>>(
-      ctx.influx.rawDb,
-      `SELECT date_bin(INTERVAL '10 minutes', time) AS t, max(temp_input) AS temp
-       FROM sensors WHERE ${where} AND time >= now() - INTERVAL '${window}'
-         AND temp_input IS NOT NULL
-       GROUP BY t ORDER BY t`,
-    ),
-    // consolidated : buckets 15 min (rétention illimitée) — l'année.
-    ctx.influx!.querySql<Record<string, string | number | null>>(
-      ctx.influx.aggDb,
-      `SELECT date_bin(INTERVAL '15 minutes', time) AS t, max(temp_input) AS temp
-       FROM sensors WHERE ${where} AND time >= now() - INTERVAL '${window}'
-         AND temp_input IS NOT NULL
-       GROUP BY t ORDER BY t`,
-    ),
-  ]);
-
-  // Fusion dédoublonnée par horodatage : le point raw (10 min) prime sur le
-  // point consolidé (15 min) au même `t` ; le consolidé ne remplace jamais un raw.
-  const byTime = new Map<number, number>();
-  for (const r of aggRows) {
-    const temp = Number(r.temp);
-    if (Number.isFinite(temp)) byTime.set(influxTsToUnix(rowStr(r, 't')), temp);
-  }
-  for (const r of rawRows) {
-    const temp = Number(r.temp);
-    if (Number.isFinite(temp)) byTime.set(influxTsToUnix(rowStr(r, 't')), temp);
-  }
-  const points: SensorHistoryPoint[] = [...byTime.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([time, temp]) => ({ time, temp }));
+  const points = await mergedTempBuckets(ctx, 'sensors', where, window, 'temp_input', () => true);
   if (points.length === 0) return empty;
 
   // Seuil effectif (ligne de référence du graphe) : perso si défini, sinon
@@ -366,6 +388,60 @@ export function registerSensorHistoryRoute(app: FastifyInstance, ctx: AppContext
       }
     } else {
       value = { node, chip, feature, range, points: [], threshold: null, thresholdCustom: false, thresholdFirmware: null, source: 'empty' };
+    }
+    historyCache.set(cacheKey, { at: Date.now(), value });
+    return value;
+  });
+}
+
+/**
+ * Historique de température d'un DISQUE (table `smart_device`, colonne `temp_c`).
+ * Même pattern que l'historique capteur (double source, fusion, cache 5 min),
+ * sans seuil : les disques n'exposent pas de `temp_crit` — le front trace la
+ * référence fixe de la table SMART (80 °C). Les points à 0 °C (pas de capteur)
+ * sont exclus — sinon un disque sans sonde tracerait une ligne plate à 0 °C.
+ */
+async function computeSmartHistory(
+  ctx: AppContext,
+  node: string,
+  device: string,
+  range: SensorHistoryRange,
+): Promise<SmartHistoryResponse> {
+  const empty: SmartHistoryResponse = { node, device, range, points: [], source: 'empty' };
+  const window = range === 'month' ? '31 days' : '365 days';
+  const where = `node = ${sqlStr(node)} AND device = ${sqlStr(device)}`;
+  const points = await mergedTempBuckets(ctx, 'smart_device', where, window, 'temp_c', (t) => t > 0);
+  if (points.length === 0) return empty;
+  return { ...empty, points, source: 'influx' };
+}
+
+export function registerSmartHistoryRoute(app: FastifyInstance, ctx: AppContext): void {
+  const historyCache = new Map<string, SmartHistoryCacheEntry>();
+
+  app.get('/api/smart-device-history', async (req, reply) => {
+    const q = req.query as { node?: string; device?: string; range?: string };
+    const node = typeof q.node === 'string' ? q.node.trim() : '';
+    const device = typeof q.device === 'string' ? q.device.trim() : '';
+    // Identité disque requise (clé = node/device) + longueur bornée.
+    if (!node || !device || node.length > 128 || device.length > 128) {
+      reply.code(400).send({ error: 'invalid', code: 'bad-device', message: 'node et device sont requis' });
+      return;
+    }
+    const range: SensorHistoryRange = q.range === 'month' ? 'month' : 'year';
+    const cacheKey = `${node}/${device}:${range}`;
+    const cached = historyCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < SENSOR_HISTORY_CACHE_TTL_MS) return cached.value;
+
+    let value: SmartHistoryResponse;
+    if (influxReady(ctx)) {
+      try {
+        value = await computeSmartHistory(ctx, node, device, range);
+      } catch (err) {
+        ctx.logger.warn(`smart-device-history(${node}/${device}) : InfluxDB indisponible (${(err as Error).message})`);
+        value = { node, device, range, points: [], source: 'empty' };
+      }
+    } else {
+      value = { node, device, range, points: [], source: 'empty' };
     }
     historyCache.set(cacheKey, { at: Date.now(), value });
     return value;

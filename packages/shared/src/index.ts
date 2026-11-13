@@ -107,5 +107,5 @@ export type {
 } from './network.js';
 export { resources, DEFAULT_LANG } from './i18n/index.js';
 export type { Lang } from './i18n/index.js';
-export type { SmartDevice, SensorReading, ZfsStatus, FailedUnit, NodeSensorsResponse, SensorThresholds, SensorThresholdEntry, SensorThresholdsResponse, SensorHistoryPoint, SensorHistoryResponse } from './node-sensors.js';
+export type { SmartDevice, SensorReading, ZfsStatus, FailedUnit, NodeSensorsResponse, SensorThresholds, SensorThresholdEntry, SensorThresholdsResponse, SensorHistoryPoint, SensorHistoryResponse, SmartHistoryResponse } from './node-sensors.js';
 export { sensorKey, effectiveSensorThreshold, tempTone, smartHealthTone, smartTempDisplay } from './node-sensors.js';
