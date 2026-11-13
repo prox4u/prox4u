@@ -1563,6 +1563,83 @@ graphique** — pas un seul bloc générique « Réseau — par interface ».
 
 ---
 
+## ✅ Fait — Décryptage des interfaces pare-feu PVE `fw*` + échelle Y lisible des graphes < 1 o/s (livré, validé API + navigateur — **commité**)
+
+Demande utilisateur (2026-11-13) : sur le réseau par interface, les interfaces du pare-feu
+PVE (`fwbr102i0`, `fwln102i0`, `fwpr102p0`…) s'affichaient « interface » sans signification —
+**libellé explicatif par carte + infobulle + bloc de décryptage dépliable** (texte de
+décryptage fourni par l'user). Puis question avec capture du graphe `nfs` : « problème de
+génération de graphique, c'est 0 ou problème ? » — courbe ondulée mais **tous les libellés
+d'axe Y « 0 o/s »**.
+
+### Décryptage pare-feu PVE `fw*`
+- **Nomenclature PVE** : PVE ne peut pas appliquer le pare-feu sur le pont principal
+  (vmbr* — les règles toucheraient toutes les machines du pont) : il crée par interface de
+  machine une chaîne `fwbr<vmid>i<n>` (pont du pare-feu, le tap de la machine y est
+  connecté, c'est ici que les règles s'appliquent) → `fwln<vmid>i<n>` (extrémité interne de
+  la paire veth) → `fwpr<vmid>p<n>` (extrémité externe, connectée au vmbr*).
+- **`parsePveFwIface(name)`** (serveur, system-routes.ts, exporté, testé) : regex
+  `/^fw(br|ln|pr)(\d+)([ip])(\d+)$/` → `{ vmid, ifIndex, role:'bridge'|'line'|'port' }`,
+  non-match → `null`. Le rôle vient du **préfixe** br/ln/pr (la lettre i/p n'est qu'un
+  séparateur à consommer — robuste si PVE la change) ; n'importe quel nombre de chiffres
+  (VM **et** LXC, net0…net12+).
+- **`buildNodeNetIfaces`** : les devices noyau vus seulement dans les mesures (l'union) —
+  fw* matchant → `kind:'firewall'` + `firewall: NodeNetFwInfo { vmid, ifIndex, role }`
+  (type dans shared/system-metrics.ts, exporté) ; non-match → `kind:'other'` comme avant.
+  **Défensif** : pas de faux positif (seule la signature exacte est décodée), pas de crash,
+  pas de valeur inventée ; si PVE change la nomenclature dans une future version, les fw*
+  repassent en « interface » générique (données gardées, seul le libellé explicatif est
+  perdu). Le parse est appliqué **uniquement** à l'union des mesures, jamais à la config PVE.
+- **Web** (`node-net-card.tsx`) : carte pare-feu = « pare-feu PVE · machine 102 · net0 ·
+  pont (fwbr) » (calculé depuis le parse — aucun durcissement) + infobulle du titre =
+  trajet du paquet (interpolé `{{vmid}}`/`{{n}}`) + `FwDecodeBlock` (`<details>`) affiché
+  **seulement si des fw\* existent** sur le nœud : nomenclature (avec la liste des machines
+  **réellement présentes** — dynamique), les 3 rôles, le trajet.
+- **i18n** fr/en : `overview.netif.kind.firewall` + `overview.netif.fw.{machine,tooltip,
+  naming,roles,roles.bridge,roles.line,roles.port}`.
+
+### Axe Y « 0 o/s » (graphes sous 1 o/s)
+- **Diagnostic** (capture `nfs`) : les données sont **réelles mais quasi nulles** (fenêtre
+  1 h : max ~0,9 o/s, ~4 points non nuls) — **pas un bug de génération**. Mais
+  (a) `formatBps` (web/lib/utils.ts) arrondissait les o/s à l'entier → tous les ticks <
+  1 o/s affichaient « 0 o/s » (échelle illisible) ; (b) le `smooth` ECharts + l'axe auto
+  (max = max des données) donnent l'aspect « grosse vague » à un pic minuscule.
+- **Fix** : `formatBps` — 2 décimales sous 1, 1 décimale sous 100, sinon entier (cohérent
+  avec Ko/s/Mo/s ; la base zéro reste « 0 o/s ») → l'axe `nfs` affiche désormais « 0.05 /
+  0.10 / 0.15 / 0.20 / 0.25 o/s » (tous les libellés distincts, pic ~0.25 o/s lisible).
+  S'applique au Monitor nœud, au Monitor VM et à l'I/O disques par device (`rateOption`
+  partagée).
+- **Conservé** : `smooth: true` (langage visuel établi des graphes) — c'est l'axe lisible
+  qui fait foi, pas la forme de la courbe.
+
+### Vérifications effectuées
+- shared build → typecheck (3 paquets) → tests (**270 shared + 180 server**, +3 :
+  `parsePveFwIface` ×2 + fw* dans `buildNodeNetIfaces`) → `pnpm build` → `./server.sh
+  restart` — tout vert.
+- **API live** : `/api/node-net?node=proxmox&timeframe=day` → 6/13 interfaces
+  `kind:'firewall'` avec les métadonnées exactes (vmid 102/106, ifIndex 0, rôles
+  bridge/line/port — les machines en pare-feu actives sur le cluster).
+- **Navigateur** (fresh, re-login après restart) : 6 cartes « fwbr102i0 — pare-feu PVE ·
+  machine 102 · net0 · pont (fwbr) » etc. ✓ ; bloc de décryptage déplié (nomenclature +
+  rôles + trajet, machines 102/106) ✓ ; infobulle interpolée (« tap102i0 (machine 102) →
+  fwbr102i0 (pare-feu) → … ») ✓ ; graphe `nfs` à l'axe lisible (0.05→0.25 o/s, pics ~0.25
+  o/s = trafic réel quasi nul) ✓ ; 0 erreur console nouvelle.
+
+### Pièges rencontrés (corrigés — ne pas réintroduire)
+- **`*/` dans un commentaire bloc** — touché encore : `(fwbr*/fwln*/fwpr*)` dans un
+  commentaire de system-metrics.ts cassait le build shared (2ᵉ fois après `dm-*/`) →
+  écrire `(fwbr, fwln, fwpr)` (cf. skill `node-sensors` §7).
+- **`{{x}}` → `{x}` en f-string Python lors de l'injection i18n** : les clés
+  fw.tooltip/fw.naming étaient injectées en f-strings → accolades simples dans le fichier →
+  i18next ne les interpolait pas (affichait `{vmid}` littéral). Injecter l'i18n en strings
+  non-f (ou `{{{{x}}}}`) et vérifier le texte rendu dans le navigateur (bug silencieux au
+  build).
+- **Échelle sous 1 o/s** : ne jamais arrondir les o/s à l'entier dans `formatBps` — sur un
+  pont au repos tous les libellés devenaient « 0 o/s » (diagnostic user : « c'est 0 ? »).
+  2 décimales sous 1 o/s.
+
+---
+
 ## ⏳ À faire
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)

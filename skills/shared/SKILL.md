@@ -25,6 +25,7 @@ Package TypeScript **pur** (aucune dépendance runtime) : source unique de véri
 | `network-inventory.ts` | `segmentImpact(topo, bridge, vlan)`, `buildNetworkInventory(topo)`, `buildNetworkInventoryAll(…)`, `filterNetworkRows(rows, query, multiFilter?)`, `encodeNetSel/decodeNetSel` + types (`NetworkRow(All)`, `NetworkVmRef`, `InventoryFilter`) | Inventaire réseaux→VMs (groupement côté client à partir de la topologie) |
 | `storage-inventory.ts` | `buildStorageInventory(storages, vms)`, `buildStorageInventoryAll(…)`, `filterStorageRows(rows, query, filter?)`, `storageSeverity(row, config)`, `sortStorageRows(rows, config, sort)` + types (`StorageRow(All)`, `StorageVmRef`, `StorageKind='shared'\|'local'`, `StorageSort*`) | Inventaire datastores→VMs (groupement côté client à partir de `/api/storage-inventory`) |
 | `vm-inventory.ts` | `filterVmRows(vms, query, filter)`, `sortVmRows(vms, key, dir)`, `buildVmTree(rootLabel, endpoints, vmsByEndpoint)` + types (`VmInventoryFilter`, `DEFAULT_VM_FILTER`, `VmSortKey/Dir`, `VmTreeNode`) | Inventaire VMs (plugin vm-inventory) : recherche nom/vmid exact + filtres nœud/statut/type ; tri 8 clés (diskBytes null → fin de liste quel que soit le sens) ; tree Datacenter→endpoints→nœuds avec compteurs en marche/total |
+| `system-metrics.ts` | `parsePveMapperName(name)` (LV `vg--vm--<vmid>--disk--<n>` → vmid/ctid), `mapperLabel(name)`, `isPhysicalDevice(name)` + types (`NodeSystemRow/Response`, `NodeDiskioRow/Response`, `VmDiskioPoint/Series/Response`, `PveMapperParse`, `NodeNetIface` (+ `NodeNetFwInfo`), `NodeNetRow/Response`, `VmNetPoint/Series/Response`) | Métriques nœud/VM (Telegraf) : types des routes node-system/node-diskio/node-net/vm-net + helpers purs (mapper LVM, device physique) — le décodage des `fw*` pare-feu PVE (`parsePveFwIface`) est côté **serveur** (system-routes.ts — skill `node-sensors` §6) |
 | `i18n/` | `resources` (fr/en), `DEFAULT_LANG='fr'`, `Lang` | Source unique des clés i18n (§4) |
 
 ## 3. THRESHOLDS (`types.ts`) — fixes vs configurables
@@ -41,4 +42,4 @@ THRESHOLDS = { warn: 70, crit: 90, praWarn: 70, praCrit: 100, healthNominal: 80,
 - Alertes : le serveur calcule `messageKey` + `params`, le client traduit.
 
 ## 5. Tests
-Colocalisés : `pra.test.ts`, `overcommit.test.ts`, `network.test.ts`, `storage-inventory.test.ts`, `network-inventory.test.ts`, `vm-inventory.test.ts`, `health.test.ts`, `capacity.test.ts`. Exécution : `pnpm test` à la racine (vitest).
+Colocalisés : `pra.test.ts`, `overcommit.test.ts`, `network.test.ts`, `storage-inventory.test.ts`, `network-inventory.test.ts`, `vm-inventory.test.ts`, `health.test.ts`, `capacity.test.ts`, `system-metrics.test.ts`. Exécution : `pnpm test` à la racine (vitest).

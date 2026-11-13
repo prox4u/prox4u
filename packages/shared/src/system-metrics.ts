@@ -147,12 +147,25 @@ export interface NodeNetRow {
  * Interface d'un nœud vue par l'UI PVE (`GET /nodes/{n}/network`) — la
  * liste servie par `/api/node-net` (1 carte graphique par interface).
  */
+/** Décomposition du nom d'une interface interne au pare-feu PVE (ex. `fwbr102i0` = pont du pare-feu de la machine 102, interface 0). */
+export interface NodeNetFwInfo {
+  /** ID de la machine (VM/LXC) concernée. */
+  vmid: number;
+  /** index de l'interface réseau de la machine (net{ifIndex}). */
+  ifIndex: number;
+  /** maillon de la chaîne pare-feu : pont (fwbr) / extrémité interne veth (fwln) / extrémité externe veth (fwpr). */
+  role: 'bridge' | 'line' | 'port';
+}
+
 export interface NodeNetIface {
   /** nom PVE (fichier /etc/network/interfaces — ex. `nic0`, `nfs`, `vmbr0`) — titre de la carte graphique. */
   name: string;
   /** noms candidats du device noyau rapporté par Telegraf : le nom PVE (sur un nœud PVE, le device noyau est renommé selon /etc/network/interfaces — c'est le cas courant) + `altnames` (noms alternatifs du noyau, ex. le nom dérivé du MAC `enx9c6b00dd220c`) — les mesures se joignent sur n'importe lequel. Vide = aucun nom connu. */
   kernels: string[];
-  kind: 'bridge' | 'nic' | 'other';
+  /** `firewall` = interface interne au pare-feu PVE (fwbr, fwln, fwpr — pas dans la config, vue seulement dans les mesures), détail dans `firewall`. */
+  kind: 'bridge' | 'nic' | 'other' | 'firewall';
+  /** renseignée si `kind === 'firewall'` (nom `fw(br|ln|pr)<vmid>(i|p)<n>`). */
+  firewall?: NodeNetFwInfo;
   /** UP/DOWN côté PVE — null si inconnu (PVE ne renvoie `active` que pour les interfaces UP, ou interface trouvée seulement dans les mesures). */
   active: boolean | null;
 }
@@ -161,8 +174,10 @@ export interface NodeNetIface {
  * Trafic réseau PAR INTERFACE d'un nœud hôte (Telegraf `net`, counters
  * bytes_recv/bytes_sent → débits par delta). `interfaces` = liste des
  * interfaces du nœud (source API PVE, ordre d'affichage ; les devices noyau
- * vus seulement dans les mesures sont ajoutés en `kind:'other'` — rien n'est
- * perdu) ; `rows` = mesures, jointes à `interfaces[].kernel` côté UI.
+ * vus seulement dans les mesures sont ajoutés — `kind:'other'`, ou
+ * `kind:'firewall'` + `firewall` si le nom matche la nomenclature du
+ * pare-feu PVE (fwbr, fwln, fwpr) — rien n'est perdu) ; `rows` = mesures,
+ * jointes à `interfaces[].kernels` côté UI.
  * `insufficientData` : aucune mesure sur la fenêtre (agent pas encore
  * (re)déployé ou interfaces inactives) — `interfaces` reste renseigné.
  */

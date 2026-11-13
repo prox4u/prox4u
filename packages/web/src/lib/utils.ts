@@ -41,5 +41,7 @@ export function formatBps(bits: number | null | undefined): string {
     v /= 1e3;
     i++;
   }
-  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
+  // lisibilité des petites échelles : 2 décimales sous 1 o/s, 1 décimale sous 100, sinon entier
+  const digits = v === 0 ? 0 : v < 1 ? 2 : v >= 100 ? 0 : 1;
+  return `${v.toFixed(digits)} ${units[i]}`;
 }

@@ -56,9 +56,25 @@ export function NodeNetCard({ node, timeframe }: { node: string; timeframe: Metr
   const ifaces = data?.interfaces ?? [];
   const hasAnyPoints = (data?.rows.length ?? 0) > 0;
 
+  /** Machines concernées par les interfaces fw\* (pare-feu PVE) — liste pour le
+   * bloc « Décryptage » ; vide si aucune interface fw\* sur le nœud. */
+  const fwMachines = useMemo(() => {
+    const seen = new Set<string>();
+    const parts: string[] = [];
+    for (const i of ifaces) {
+      if (i.kind !== 'firewall' || !i.firewall) continue;
+      const k = `${i.firewall.vmid}/${i.firewall.ifIndex}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      parts.push(`${t('overview.netif.fw.machine', { id: i.firewall.vmid })} (net${i.firewall.ifIndex})`);
+    }
+    return parts.join(' \u00b7 ');
+  }, [ifaces, t]);
+
   return (
     <div className="flex flex-col gap-3">
       <p className="px-1 text-[11px] text-muted-foreground">{t('overview.netif.hint')}</p>
+      {fwMachines.length > 0 && <FwDecodeBlock list={fwMachines} />}
       {loading && ifaces.length === 0 ? (
         <Skeleton className="w-full" style={{ height: CHART_H }} />
       ) : (
@@ -122,9 +138,16 @@ function NodeNetIfaceCard({
 
   const ref = useEChart(option);
 
-  const kind = t(`overview.netif.kind.${iface.kind}`);
-  const up = iface.active == null ? null : t(iface.active ? 'overview.netif.active' : 'overview.netif.inactive');
-  const subtitle = [kind, up].filter(Boolean).join(' \u00b7 ');
+  /** fw\* (pare-feu PVE) : libellé explicite (machine · netN · rôle) + infobulle
+   * avec le trajet du paquet ; sinon type PVE + état actif. */
+  const fw = iface.kind === 'firewall' ? iface.firewall : null;
+  const tooltip = fw != null ? t('overview.netif.fw.tooltip', { vmid: fw.vmid, n: fw.ifIndex }) : t('overview.netif.hint');
+  const parts: string[] =
+    fw != null
+      ? [t('overview.netif.kind.firewall'), t('overview.netif.fw.machine', { id: fw.vmid }), `net${fw.ifIndex}`, t(`overview.netif.fw.role.${fw.role}`)]
+      : [t(`overview.netif.kind.${iface.kind}`)];
+  if (iface.active != null) parts.push(t(iface.active ? 'overview.netif.active' : 'overview.netif.inactive'));
+  const subtitle = parts.join(' \u00b7 ');
 
   /** Export CSV de cette interface sur le timeframe affiché. */
   const exportCsv = () => {
@@ -142,7 +165,7 @@ function NodeNetIfaceCard({
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-2">
-        <CardTitle title={t('overview.netif.hint')}>
+        <CardTitle title={tooltip}>
           {iface.name}
           {subtitle ? <span className="ml-2 text-[11px] font-normal text-muted-foreground">{subtitle}</span> : null}
         </CardTitle>
@@ -165,5 +188,29 @@ function NodeNetIfaceCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Bloc dépliable « Décryptage des noms d’interfaces (fw*) » — affiché seulement
+ * si le nœud a des interfaces internes au pare-feu PVE. `list` = machines
+ * concernées (ex. « machine 102 (net0) · machine 106 (net0) »), dynamique.
+ */
+function FwDecodeBlock({ list }: { list: string }) {
+  const { t } = useTranslation();
+  return (
+    <details className="rounded-md border px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+      <summary className="cursor-pointer select-none font-medium text-foreground">{t('overview.netif.fw.toggle')}</summary>
+      <div className="mt-2 flex flex-col gap-2">
+        <p>{t('overview.netif.fw.naming', { list })}</p>
+        <p>{t('overview.netif.fw.roles')}</p>
+        <ul className="flex list-disc flex-col gap-1 pl-4">
+          <li>{t('overview.netif.fw.roles.bridge')}</li>
+          <li>{t('overview.netif.fw.roles.line')}</li>
+          <li>{t('overview.netif.fw.roles.port')}</li>
+        </ul>
+        <p>{t('overview.netif.fw.path')}</p>
+      </div>
+    </details>
   );
 }
