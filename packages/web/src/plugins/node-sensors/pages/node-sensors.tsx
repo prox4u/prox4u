@@ -509,6 +509,7 @@ export function NodeSensorsPage() {
               <h2 className="text-lg font-semibold">{t('nodeSensors.failedUnits')}</h2>
               <span className="text-xs text-muted-foreground">({filteredUnits.length}/{data.failedUnits.length})</span>
             </div>
+            <p className="-mt-2 mb-3 text-[11px] text-muted-foreground">{t('nodeSensors.failedUnitsHint')}</p>
             {data.failedUnits.length === 0 ? (
               <p className="text-ok">{t('nodeSensors.noFailedUnits')}</p>
             ) : filteredUnits.length === 0 ? (

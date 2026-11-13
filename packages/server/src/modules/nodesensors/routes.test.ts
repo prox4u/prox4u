@@ -129,6 +129,56 @@ describe('registerNodeSensors — merge des seuils perso dans la réponse', () =
   });
 });
 
+describe('registerNodeSensors — unités systemd : seules les vraies alertes', () => {
+  /** Unités telles que vues par le nœud : 1 vrai échec, 1 erreur de chargement,
+   *  et les états dead NORMAUX (one-shot terminé, unité non installée). */
+  const unitRows = [
+    { node: 'proxmox', name: 'openipmi.service', active: 'failed', sub: 'failed', load: 'loaded', time: '2026-11-13T12:00:00Z' },
+    { node: 'proxmox', name: 'broken-unit.service', active: 'inactive', sub: 'dead', load: 'error', time: '2026-11-13T12:00:00Z' },
+    { node: 'proxmox', name: 'apt-daily.service', active: 'inactive', sub: 'dead', load: 'loaded', time: '2026-11-13T12:00:00Z' },
+    { node: 'proxmox', name: 'NetworkManager.service', active: 'inactive', sub: 'dead', load: 'not-found', time: '2026-11-13T12:00:00Z' },
+  ];
+
+  it('le SQL filtre active=failed / load=error — plus de sub=dead (dead normal ≠ échec)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sensor-units-'));
+    const seenSql: string[] = [];
+    const ctx: AppContext = {
+      config: { authFile: path.join(dir, 'auth.json') } as AppContext['config'],
+      endpoints: [],
+      logger,
+      influx: {
+        enabled: true,
+        rawDb: 'raw',
+        querySql: async (_db: string, sql: string) => {
+          if (sql.includes('FROM systemd_units')) {
+            seenSql.push(sql);
+            return unitRows;
+          }
+          return [];
+        },
+      } as unknown as AppContext['influx'],
+      auth: {} as AppContext['auth'],
+      hub: {} as AppContext['hub'],
+    };
+    const store = new SensorThresholdStore(path.join(dir, 'sensor-thresholds.json'), logger);
+    store.init();
+    const app = Fastify();
+    registerNodeSensors(app, ctx, store);
+    await app.ready();
+    const res = await app.inject({ method: 'GET', url: '/api/node-sensors' });
+    expect(res.statusCode).toBe(200);
+    // Contrat du SQL : seules les vraies alertes (le filtrage est côté requête,
+    // le mock ne l'applique pas — d'où l'assertion sur le SQL lui-même).
+    const sql = seenSql.find((s) => s.includes('FROM systemd_units'));
+    expect(sql).toBeDefined();
+    expect(sql).toContain("active = 'failed'");
+    expect(sql).toContain("load = 'error'");
+    expect(sql).not.toContain("sub = 'dead'");
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('registerNodeSensors — parsing SMART tri-state (vrai matériel)', () => {
   /** Disque virtuel QEMU : pas de SMART → health_ok NULL, temp_c 0. */
   const qemuRow = { node: 'ProxSite1', device: 'sda', model: 'QEMU HARDDISK', health_ok: null, temp_c: 0, time: '2026-11-10T00:00:00Z' };

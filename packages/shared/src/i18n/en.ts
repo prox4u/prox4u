@@ -173,6 +173,7 @@ export const en: Record<string, string> = {
   'nodeSensors.noZfs': 'No ZFS data available.',
   'nodeSensors.failedUnits': 'Failed systemd units',
   'nodeSensors.noFailedUnits': 'No failed units.',
+  'nodeSensors.failedUnitsHint': 'Real alerts only: state "failed" or load state "error". Normally-inactive units (finished one-shots, on-demand, not installed) are not listed.',
   'nodeSensors.node': 'Node',
   'nodeSensors.device': 'Device',
   'nodeSensors.model': 'Model',

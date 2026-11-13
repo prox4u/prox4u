@@ -69,7 +69,7 @@ base `consolidated` (∞)
   smart: SmartDevice[],       // 1 par (node, device)
   sensors: SensorReading[],   // 1 par (node, chip, feature)
   zfs: ZfsStatus[],           // 1 par node (ARC)
-  failedUnits: FailedUnit[],  // 1 par (node, name), seulement active='failed' / load='error' / sub='dead'
+  failedUnits: FailedUnit[],  // 1 par (node, name) — SEULES les vraies alertes : active='failed' OR load='error' (JAMAIS sub='dead' : état de repos normal des one-shots/à-la-demande → noyait la section, ~170 lignes/nœud d'états sains)
   source: 'influx' | 'empty', // 'influx' si au moins un nœud, 'empty' sinon
   sensorThresholds: Record<string, number>  // seuils perso (clé = `node/chip/feature`) — merge serveur
 }
@@ -140,9 +140,17 @@ Deux endpoints, **même pattern** (helper partagé `mergedTempBuckets` dans `rou
 | `smart_device` | `node`, `device` | `model`, `serial_no`, `health_ok`, `temp_c`, `power_on_hours`, `power_cycle_count`, `reallocated_sectors_count`, `pending_sector_count`, `uncorrectable_sector_count`, `udma_crc_errors`, `percentage_used`, `available_spare`, `critical_warning` |
 | `sensors` | `node`, `chip`, `feature` | `temp_input`, `temp_crit`, `fan_input`, `in_input` |
 | `zfs` | `node` | `arcstats_hits`, `arcstats_misses`, `arcstats_size` |
-| `systemd_units` | `node`, `name` | `active`, `sub`, `load` (filtré `active='failed' OR load='error' OR sub='dead'`) |
+| `systemd_units` | `node`, `name` | `active`, `sub`, `load` (filtré `active='failed' OR load='error'` — **vraies alertes seulement**) |
 
 > ⚠️ La table SMART s'appelle **`smart_device`** (pas `smart`) — piège classique, déjà corrigé.
+
+> ⚠️ **`systemd_units` — sémantique des états** (plugin Telegraf sans filtre = D-Bus `ListUnits()`,
+> toutes les unités connues du manager, ~170/nœud) : `inactive (dead)` est l'état de repos **normal**
+> des one-shots (terminés au boot/timer), des unités à la demande (`rescue`, `hibernate`…) et des
+> non-installées (`load='not-found'` — vestiges de provisioning : références à des unités dont le
+> fichier a disparu, stables au travers des redémarrages, souvent identiques sur tous les nœuds d'une
+> même image). Ne jamais alerter sur `dead` — seuls `active='failed'` et `load='error'` sont des
+> alertes (exemple réel env. de test : `openipmi.service` failed sur nœud sans BMC IPMI).
 
 ## 5. Page web (`/node-sensors`)
 
