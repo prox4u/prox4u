@@ -4,6 +4,8 @@ import type {
   NodeCpuCore,
   NodeDiskioResponse,
   NodeDiskioRow,
+  NodeNetResponse,
+  NodeNetRow,
   NodeSystemResponse,
   NodeSystemRow,
 } from '@prox4u/shared';
@@ -18,7 +20,9 @@ import type { AppContext } from '../../core/poller.js';
  *
  *  - GET /api/node-system   : dernier point par nœud (live, cache 1 min) ;
  *  - GET /api/node-diskio   : I/O par device physique, buckets date_bin+LAG
- *    (counters → débits), cache 5 min par (node, timeframe).
+ *    (counters → débits), cache 5 min par (node, timeframe) ;
+ *  - GET /api/node-net      : trafic réseau PAR INTERFACE hôte (Telegraf `net`),
+ *    mêmes buckets, cache 5 min par (node, timeframe).
  *
  * Toutes les tables sont dans `raw` (rétention 31 j) — non consolidées :
  * les buckets 15 min de `consolidated` servent les tables de jauges
@@ -98,6 +102,32 @@ export function diskioRateSql(where: string, bucket: string, bucketSec: number, 
 }
 
 /**
+ * SQL de débit réseau par interface — même principe que `diskioRateSql` :
+ * bucket d'abord (MAX colonaires des counters, pas de window function sur les
+ * ~50k points/iface/7 j), puis LAG des counters de bucket en bucket. Le débit =
+ * Δ(counter) / durée de bucket (octets/s) ; un delta négatif (reset de counter
+ * au reboot) devient NULL via normRate, jamais un pic faux.
+ * `where` est fourni par l'appelant (toujours construit par sqlStr) — pour
+ * /api/node-net, les tap des VMs (vnet* / tap* / veth*) et lo sont exclus
+ * (ce trafic est montré dans le Monitor de chaque VM — double-comptage).
+ */
+export function netRateSql(where: string, bucket: string, bucketSec: number, window: string): string {
+  return `WITH b AS (
+    SELECT "interface" AS iface, date_bin(INTERVAL '${bucket}', time) AS t,
+           MAX(bytes_recv) AS rb, MAX(bytes_sent) AS sb
+    FROM net
+    WHERE ${where} AND time >= now() - INTERVAL '${window}'
+    GROUP BY "interface", t
+  )
+  SELECT t, iface,
+         (rb - LAG(rb) OVER w) / ${bucketSec}.0 AS in_bps,
+         (sb - LAG(sb) OVER w) / ${bucketSec}.0 AS out_bps
+  FROM b
+  WINDOW w AS (PARTITION BY iface ORDER BY t)
+  ORDER BY t`;
+}
+
+/**
  * Lignes SQL → points par device. Filtre les PARTITIONS côté TS (sda1,
  * nvme0n1p1…) — le disques ENTIER porte déjà toute l'I/O ; dm-N / loop / md sont
  * exclus dans le SQL (double-comptage / bruit).
@@ -131,6 +161,7 @@ export function diskioRowsToDevices(rows: InfluxRow[]): NodeDiskioRow[] {
 export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext): void {
   const sysCache = new Map<string, { at: number; value: NodeSystemResponse }>();
   const diskioCache = new Map<string, { at: number; value: NodeDiskioResponse }>();
+  const netCache = new Map<string, { at: number; value: NodeNetResponse }>();
 
   app.get('/api/node-system', async (_req, reply) => {
     const cached = sysCache.get('all');
@@ -263,6 +294,56 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext):
       }
     }
     diskioCache.set(key, { at: Date.now(), value: body });
+    reply.send(body);
+  });
+
+  /**
+   * GET /api/node-net?node=&timeframe= — trafic réseau PAR INTERFACE hôte
+   * (Telegraf `net`, counters bytes_recv/bytes_sent → débits par delta) :
+   * NICs physiques + ponts (vmbr*). Les tap des VMs (vnet* / tap* / veth*)
+   * et lo sont exclus dans le SQL — leur trafic est montré dans le Monitor
+   * de chaque VM (vue /api/vm-net), pas ici (double-comptage).
+   */
+  app.get('/api/node-net', async (req, reply) => {
+    const q = req.query as { node?: string; timeframe?: string };
+    const node = q.node?.trim();
+    if (!node) {
+      reply.code(400).send({ error: 'node requis' });
+      return;
+    }
+    const tf = q.timeframe as MetricsTimeframe;
+    if (!HOST_DISKIO_TF[tf]) {
+      reply.code(400).send({ error: `timeframe must be one of ${Object.keys(HOST_DISKIO_TF).join(', ')}` });
+      return;
+    }
+    const key = `net:${node}/${tf}`;
+    const cached = netCache.get(key);
+    if (cached && Date.now() - cached.at < DISKIO_CACHE_TTL_MS) {
+      reply.send(cached.value);
+      return;
+    }
+    let body: NodeNetResponse = { timeframe: tf, node, rows: [], source: 'insufficientData' };
+    if (influxReady(ctx)) {
+      try {
+        const { bucket, bucketSec, window } = HOST_DISKIO_TF[tf];
+        const where = `node = ${sqlStr(node)} AND "interface" NOT LIKE 'vnet%' AND "interface" NOT LIKE 'tap%'
+          AND "interface" NOT LIKE 'veth%' AND "interface" <> 'lo'`;
+        const rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, netRateSql(where, bucket, bucketSec, window));
+        const out: NodeNetRow[] = [];
+        for (const r of rows) {
+          const iface = String(r.iface ?? '');
+          if (!iface) continue;
+          const t = influxTsToUnix(r.t as string | number | null);
+          if (t <= 0) continue;
+          out.push({ t, iface, inBps: normRate(r.in_bps), outBps: normRate(r.out_bps) });
+        }
+        out.sort((a, b) => a.iface.localeCompare(b.iface, undefined, { numeric: true }) || a.t - b.t);
+        body = { timeframe: tf, node, rows: out, source: out.length > 0 ? 'influx' : 'insufficientData' };
+      } catch (err) {
+        ctx.logger.warn(`node-net(${key}) : InfluxDB indisponible (${(err as Error).message})`);
+      }
+    }
+    netCache.set(key, { at: Date.now(), value: body });
     reply.send(body);
   });
 }

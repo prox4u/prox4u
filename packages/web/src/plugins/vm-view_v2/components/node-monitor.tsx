@@ -14,6 +14,7 @@ import { fetchMetrics, fetchNodeSystem } from '../../../core/api/apiClient';
 import { NodeSystemCard } from './node-system-card';
 import { CpuCoresCard } from './cpu-cores-card';
 import { NodeDiskioCard } from './node-diskio-card';
+import { NodeNetCard } from './node-net-card';
 
 const TIMEFRAMES: MetricsTimeframe[] = ['hour', 'day', 'week', 'month'];
 /** Auto-refresh pendant que l'onglet est ouvert (données pushées toutes les 5 s côté serveur). */
@@ -244,6 +245,8 @@ export function NodeMonitor({ endpointId, node }: Props) {
         {showCharts && chartCard(t('node.kpi.rootfs'), diskRef, false, () => downloadCsv('disk', ALL_COLS.slice(2, 3)))}
         <NodeDiskioCard node={node} timeframe={tf} />
         {showCharts && chartCard(t('vm.mon.net'), netRef, false, () => downloadCsv('net', ALL_COLS.slice(3)))}
+        {/* Réseau PAR INTERFACE hôte (agent Telegraf, tap des VMs exclus). */}
+        <NodeNetCard node={node} timeframe={tf} />
       </div>
     </div>
   );

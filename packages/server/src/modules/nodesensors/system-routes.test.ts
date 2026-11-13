@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { NodeDiskioResponse, NodeSystemResponse } from '@prox4u/shared';
+import type { NodeDiskioResponse, NodeNetResponse, NodeSystemResponse } from '@prox4u/shared';
 import type { AppContext } from '../../core/poller.js';
-import { diskioRateSql, diskioRowsToDevices, registerNodeSystemRoutes } from './system-routes.js';
+import { diskioRateSql, diskioRowsToDevices, netRateSql, registerNodeSystemRoutes } from './system-routes.js';
 
 const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
@@ -46,6 +46,21 @@ describe('diskioRateSql', () => {
     expect(sql).toContain('300000.0'); // io_time en ms → / durée
     expect(sql).toContain('MAX(io_time)'); // busy = Δ occupation réelle (pas weighted)
     expect(sql).toContain('PARTITION BY name ORDER BY t');
+  });
+});
+
+describe('netRateSql', () => {
+  it('contrat : where inséré tel quel, bucket, LAG des counters par interface', () => {
+    const sql = netRateSql(`node = 'proxmox' AND "interface" NOT LIKE 'vnet%'`, '5 minutes', 300, '24 hours');
+    expect(sql).toContain(`node = 'proxmox' AND "interface" NOT LIKE 'vnet%'`);
+    expect(sql).toContain("date_bin(INTERVAL '5 minutes', time)");
+    expect(sql).toContain("time >= now() - INTERVAL '24 hours'");
+    expect(sql).toContain('MAX(bytes_recv)');
+    expect(sql).toContain('MAX(bytes_sent)');
+    expect(sql).toContain('LAG(rb) OVER w');
+    expect(sql).toContain('/ 300.0'); // débits (octets/s) / durée de bucket
+    expect(sql).toContain('PARTITION BY iface ORDER BY t');
+    expect(sql).toContain('"interface" AS iface');
   });
 });
 
@@ -179,5 +194,70 @@ describe('GET /api/node-diskio', () => {
     expect(sql).toContain("INTERVAL '5 minutes'"); // bucket day
     expect(sql).toContain("INTERVAL '24 hours'");
     expect(sql).toContain('/ 300.0');
+  });
+});
+
+// --- GET /api/node-net --------------------------------------------------------------------
+
+describe('GET /api/node-net', () => {
+  let dir: string;
+  let app: FastifyInstance;
+  let sqlLog: string[];
+
+  const netRows = [
+    { t: '2026-11-13T12:00:00Z', iface: 'vmbr0', in_bps: 1e7, out_bps: 2e7 },
+    { t: '2026-11-13T12:00:00Z', iface: 'enp1s0f0', in_bps: 5e6, out_bps: -1 }, // delta négatif → null
+  ];
+
+  beforeEach(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'node-net-routes-'));
+    sqlLog = [];
+    app = Fastify();
+    registerNodeSystemRoutes(app, makeCtx(dir, { 'FROM net': () => netRows }, sqlLog));
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('400 sans node ou timeframe invalide', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/node-net' })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'GET', url: '/api/node-net?node=proxmox&timeframe=decade' })).statusCode).toBe(400);
+  });
+
+  it('contrat SQL (exclusions tap des VMs + lo) + lignes triées, delta négatif → null', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/node-net?node=proxmox&timeframe=day' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as NodeNetResponse;
+    expect(body.source).toBe('influx');
+    expect(body.node).toBe('proxmox');
+    expect(body.rows).toEqual([
+      { t: 1794571200, iface: 'enp1s0f0', inBps: 5e6, outBps: null },
+      { t: 1794571200, iface: 'vmbr0', inBps: 1e7, outBps: 2e7 },
+    ]);
+    const sql = sqlLog.find((s) => s.includes('FROM net'));
+    expect(sql).toBeDefined();
+    expect(sql).toContain("node = 'proxmox'");
+    expect(sql).toContain("NOT LIKE 'vnet%'");
+    expect(sql).toContain("NOT LIKE 'tap%'");
+    expect(sql).toContain("NOT LIKE 'veth%'");
+    expect(sql).toContain("<> 'lo'");
+    expect(sql).toContain("INTERVAL '5 minutes'");
+  });
+
+  it('insufficientData si table net absente (agent non déployé)', async () => {
+    const app2 = Fastify();
+    registerNodeSystemRoutes(
+      app2,
+      makeCtx(dir, {
+        'FROM net': () => {
+          throw new Error("Error during planning: table 'public.iox.net' not found");
+        },
+      }),
+    );
+    const res = await app2.inject({ method: 'GET', url: '/api/node-net?node=proxmox&timeframe=day' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().source).toBe('insufficientData');
   });
 });
