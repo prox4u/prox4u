@@ -18,6 +18,11 @@ Dashboard web de supervision pour cluster **Proxmox VE 9** : vue DSI/manager (KP
 
 ## Fonctionnalités / Features
 
+![Connexion](./docs/screenshots/login.png)
+
+*Connexion sécurisée — comptes par utilisateur avec rôles (admin / user).*
+*Secure login — per-user accounts with roles (admin / user).*
+
 - **Multi-cluster / nœuds autonomes** : plusieurs endpoints Proxmox déclarés dans `clusters.json` (un par cluster ou nœud autonome) ; vue d'ensemble agrégée + un dashboard complet par endpoint, navigation dans la barre latérale. Un endpoint en panne n'impacte pas les autres.
   *Multi-cluster / standalone nodes: multiple Proxmox endpoints declared in `clusters.json` (one per cluster or standalone node); aggregated overview + a full dashboard per endpoint, navigable from the sidebar. One failing endpoint does not affect the others.*
 - **Snapshot temps réel** (WebSocket, tick 5 s) : KPIs cluster, Health Score, PRA par site/bâtiment, top consommateurs VM/pools, alarmes.
@@ -30,6 +35,83 @@ Dashboard web de supervision pour cluster **Proxmox VE 9** : vue DSI/manager (KP
   *Demo mode (`MOCK=1`): simulated multi-site cluster, no Proxmox required.*
 - **Alarmes & Centreon** : règles de surveillance sur VMs/nœuds (CPU, RAM, disque, statut, IP, uptime, réseau) → alarmes transmises à **Centreon** en checks passifs via `send_nsca`. Provisionnement automatique du service passif (CLAPI SSH/local ou API REST v1) + mapping VM→hôte Centreon (ajout manuel) + pollers avec IP (destination NSCA) + page de config admin.
   *Alarms & Centreon: monitoring rules on VMs/nodes (CPU, RAM, disk, status, IP, uptime, network) → alarms forwarded to **Centreon** as passive checks via `send_nsca`. Automatic provisioning of the passive service (CLAPI SSH/local or REST v1 API) + VM→Centreon-host mapping (manual add) + pollers with IP (NSCA destination) + admin config page.*
+
+### Vue d'ensemble / Overview
+
+![Vue d'ensemble](./docs/screenshots/overview.png)
+
+Supervision agrégée de tous les serveurs Proxmox : CPU/RAM/disque sur 7 jours, allocation, stockage et système par nœud, en temps réel.
+*Aggregated supervision of all Proxmox servers: 7-day CPU/RAM/disk, allocation, storage and per-node system, real-time.*
+
+### Détail endpoint / Endpoint detail
+
+![Détail endpoint](./docs/screenshots/endpoint-detail.png)
+
+Dashboard complet par endpoint : graphiques 7 jours, métriques du cluster (InfluxDB/RRD), Health Score, PRA bascule N-1 et capacity planning 30 jours.
+*Full per-endpoint dashboard: 7-day charts, cluster metrics (InfluxDB/RRD), Health Score, N-1 PRA failover and 30-day capacity planning.*
+
+### Détail nœud / Node detail
+
+![Détail nœud](./docs/screenshots/node-detail.png)
+
+Détail d'un nœud Proxmox : CPU/RAM/disk système, charge moyenne, métriques historiques du nœud et liste des VMs hébergées.
+*Proxmox node detail: system CPU/RAM/disk, average load, historical node metrics and hosted VMs list.*
+
+### Vue des VMs / VM view
+
+![Vue des VMs](./docs/screenshots/vm-inventory.png)
+
+Inventaire temps réel (push 5 s) de toutes les VMs et conteneurs LXC du parc, multi-endpoints, arborescence type vCenter.
+*Real-time inventory (5 s push) of all VMs and LXC containers in the fleet, multi-endpoint, vCenter-style tree.*
+
+### Détail VM / VM detail
+
+![Détail VM](./docs/screenshots/vm-detail.png)
+
+Panneau détail d'une VM/LXC : résumé (OS invité, matériel, réseau, utilisation), monitor, configuration, snapshots et console web PVE.
+*VM/LXC detail panel: summary (guest OS, hardware, network, usage), monitor, configuration, snapshots and PVE web console.*
+
+### Inventaire Proxmox / Proxmox inventory
+
+![Inventaire Proxmox](./docs/screenshots/proxmox-inventory.png)
+
+Vue consolidée d'une machine par ligne (QEMU + LXC) : OS réel (agent invité), disques par filesystem, interfaces et IPs, export TXT/CSV/JSON.
+*Consolidated view, one machine per line (QEMU + LXC): real OS (guest agent), per-filesystem disks, interfaces and IPs, TXT/CSV/JSON export.*
+
+### Topologie réseau / Network topology
+
+![Topologie réseau](./docs/screenshots/network-topology.png)
+
+Topologie réseau auto-découverte (switches → nœuds → ponts → segments → VMs) avec inventaire, recherche unifiée et analyse d'impact incident.
+*Auto-discovered network topology (switches → nodes → bridges → segments → VMs) with inventory, unified search and incident impact analysis.*
+
+### Stockage / Storage
+
+![Stockage](./docs/screenshots/storage.png)
+
+Inventaire des datastores (local, Ceph, NFS, iSCSI, ZFS) : capacité réelle, type, surallocation et VMs hébergées, multi-endpoints.
+*Datastore inventory (local, Ceph, NFS, iSCSI, ZFS): real capacity, type, overallocation and hosted VMs, multi-endpoint.*
+
+### Alarmes & Centreon / Alarms & Centreon
+
+![Alarmes & Centreon](./docs/screenshots/alarms.png)
+
+Règles de surveillance VMs/nœuds (CPU, RAM, disque, statut, IP, uptime) → alarmes transmises à Centreon en checks passifs `send_nsca`, provisioning automatique.
+*VM/node monitoring rules (CPU, RAM, disk, status, IP, uptime) → alarms forwarded to Centreon as `send_nsca` passive checks, automatic provisioning.*
+
+### Capteurs nœuds / Node sensors
+
+![Capteurs nœuds](./docs/screenshots/node-sensors.png)
+
+Métriques locales Telegraf par nœud : santé SMART des disques, températures capteurs, ZFS ARC et unités systemd, avec seuils personnalisables.
+*Per-node local Telegraf metrics: SMART disk health, sensor temperatures, ZFS ARC and systemd units, with customizable thresholds.*
+
+### Administration / Administration
+
+![Administration](./docs/screenshots/admin.png)
+
+Administration : catalogue des modules (activation par version), groupes, utilisateurs, Centreon (NSCA) et seuils capteurs.
+*Administration: module catalog (per-version activation), groups, users, Centreon (NSCA) and sensor thresholds.*
 
 ## Architecture / Architecture
 
