@@ -1816,7 +1816,7 @@ comptes de test dédiés, (3) un bouton « lock » dans la gestion des comptes.
 
 ---
 
-## ✅ Fait — Bibliothèque de widgets complétée (référence ProxMenux) : hypervision_v3 + vm-view_v4 + 4 endpoints (livré, validé API + Playwright 34/34)
+## ✅ Fait — Bibliothèque de widgets complétée (référence ProxMenux) : hypervision_v3 + vm-view_v4 + 4 endpoints (livré, validé API + Playwright 34/34 — **commité + déployé en production 2026-11-14**)
 
 > 2026-11-14 — Analyse des 15 graphiques du dashboard ProxMenux (référence en lecture seule
 > `/home/opencode/projet/ProxMenux`) → **7 graphiques manquants et réalisables** avec les données
@@ -1890,17 +1890,25 @@ reçoivent le widget en bas par le merge.
   + `overview.tempNodes.*` — le reste réutilise `nodeSensors.*` existant
 - `apiClient.ts` : `fetchNodeTemps`, `fetchSmartTemps`, `fetchZfsArc`, `fetchNodeSystemHistory`
 
-### Déploiement runtime (validé)
-- Catalogue : `PUT /api/auth/catalog-sync` (12 ids) → `created: 2` ; **héritage** de
-  `globallyEnabled` de la famille de base → `hypervision_v3` activé (famille `hypervision` vraie),
-  `vm-view_v4` créé **désactivé** (famille `vm-view` fausse) → `PATCH /api/admin/modules/vm-view_v4`
-  `{globallyEnabled:true}`
-- Préférences comptes de test (A/B complet) : `PUT /api/auth/preferences` avec
-  `[hypervision_v2, hypervision_v3, vm-view_v2, vm-view_v3, vm-view_v4, node-sensors, storage,
-  proxmox-inventory, centreon-nsca]` — **sélection vide = rien de visible**
-  (`computeVisibleVersionIds` = autorisé ∩ sélection exacte)
-- Scopes user-config **inchangés** (`pages.nodeView`/`pages.vmView`/`pages.overview`) → les
-  layouts v3↔v4 sont partagés ; nouveaux widgets ajoutés par le merge
+### Déploiement
+- **Production (2026-11-14, commit `e90c686`)** : les 4 endpoints actifs après redémarrage du
+  service ; les nouvelles versions sont **auto-provisionnées au catalogue** au 1er chargement
+  de l'app (`PUT /api/auth/catalog-sync` — idempotent) ; ⚠️ **`vm-view_v4` est créé DÉSACTIVÉ**
+  (héritage de la famille `vm-view`) → à activer dans **Administration → Catalogue des modules**
+  (toggle « pour tout le monde ») ; `hypervision_v3` actif si la famille `hypervision` l'est.
+  Chaque utilisateur voit les nouvelles versions quand il les coche dans **Mon profil → Modules**
+  (sélection vide = rien de visible).
+- **Runtime dev (validé)** :
+  - Catalogue : `PUT /api/auth/catalog-sync` (12 ids) → `created: 2` ; **héritage** de
+    `globallyEnabled` de la famille de base → `hypervision_v3` activé (famille `hypervision` vraie),
+    `vm-view_v4` créé **désactivé** (famille `vm-view` fausse) → `PATCH /api/admin/modules/vm-view_v4`
+    `{globallyEnabled:true}`
+  - Préférences comptes de test (A/B complet) : `PUT /api/auth/preferences` avec
+    `[hypervision_v2, hypervision_v3, vm-view_v2, vm-view_v3, vm-view_v4, node-sensors, storage,
+    proxmox-inventory, centreon-nsca]` — **sélection vide = rien de visible**
+    (`computeVisibleVersionIds` = autorisé ∩ sélection exacte)
+  - Scopes user-config **inchangés** (`pages.nodeView`/`pages.vmView`/`pages.overview`) → les
+    layouts v3↔v4 sont partagés ; nouveaux widgets ajoutés par le merge
 
 ### Vérifications effectuées
 - 4 endpoints en live (`proxmox`) : chips 50–56 °C (8 chips, 61 pts/1 h) · 3 disques 37–47 °C +
