@@ -7,6 +7,7 @@ import { registerProxInventory } from './proxinventory/routes.js';
 import { registerSupervision } from './supervision/routes.js';
 import { registerVmInventory } from './vmview/routes.js';
 import { registerNodeSensorsModule } from './nodesensors/index.js';
+import { registerUserConfig } from './userconfig/index.js';
 
 /**
  * Manifeste des modules : chaque module enregistre ses routes REST.
@@ -18,6 +19,8 @@ import { registerNodeSensorsModule } from './nodesensors/index.js';
  * - proxinventory : GET /api/proxmox-inventory (inventaire consolidé multi-endpoints)
  * - centreonnsca : /api/alarms/* (règles, cibles, config) + engine d'alarmes
  *   (tick 15 s) + provisioning Centreon (CLAPI/REST) + envoi send_nsca
+ * - userconfig : GET/PUT/DELETE /api/user-config (personnalisation d'interface
+ *   par utilisateur — data/user-configs/<userId>.json, session obligatoire)
  * `register` peut être asynchrone (initialisation de dépendances).
  */
 export interface Module {
@@ -33,4 +36,5 @@ export const modules: Module[] = [
   { name: 'proxinventory', register: registerProxInventory },
   { name: 'centreonnsca', register: registerAlarmNsca },
   { name: 'nodesensors', register: registerNodeSensorsModule },
+  { name: 'userconfig', register: registerUserConfig },
 ];

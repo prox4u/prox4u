@@ -14,6 +14,7 @@ import { LoginPage } from './pages/login';
 import { ProfilePage } from './pages/profile';
 import { AdminPage } from './pages/admin';
 import { useAuth } from './store/auth';
+import { useUserConfig } from './store/user-config';
 
 /**
  * Arborescence de routes :
@@ -39,6 +40,21 @@ export default function App() {
       })
       .catch(() => {}); // pas de session (page /login) → sans objet
   }, [refresh]);
+
+  // Personnalisation d'interface par utilisateur : chargement de la config
+  // (GET /api/user-config) APRÈS l'auth (boot, connexion), réinitialisation
+  // de l'état local à la déconnexion (la config n'appartient plus à cet user).
+  const authStatus = useAuth((s) => s.status);
+  const userId = useAuth((s) => s.user?.id);
+  const loadUserConfig = useUserConfig((s) => s.load);
+  const invalidateUserConfig = useUserConfig((s) => s.invalidate);
+  useEffect(() => {
+    if (authStatus === 'authed' && userId) {
+      void loadUserConfig();
+    } else {
+      invalidateUserConfig();
+    }
+  }, [authStatus, userId, loadUserConfig, invalidateUserConfig]);
 
   // Routes des plugins initialisés (toutes versions), groupées par famille
   // (ModuleRoute de visibilité). Si plusieurs versions partagent un chemin,

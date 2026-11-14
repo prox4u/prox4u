@@ -7,6 +7,7 @@ import { useMulti } from '../../core/data/use-endpoint';
 import { useDashboard } from '../../core/data/dashboard';
 import { useTheme } from '../../store/theme';
 import { useLayout } from '../../store/layout';
+import { useCustomizablePage } from '../../core/widgets/customizable-page';
 import { useAuth } from '../../store/auth';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -22,6 +23,11 @@ export function Topbar() {
   const theme = useTheme((s) => s.theme);
   const toggleTheme = useTheme((s) => s.toggle);
   const resetLayout = useLayout((s) => s.resetLayout);
+  // Le bouton de reset ci-dessous agit sur le store v1 (useLayout). Les pages
+  // personnalisables v2 (vue d'ensemble v2, monitors v3) ont LEUR propre
+  // barre d'outils avec leur reset — on masque le bouton v1 pour ne pas
+  // exposer deux « Réinitialiser la disposition » dont l'un serait un no-op.
+  const hasCustomizableToolbar = useCustomizablePage((s) => s.active);
 
   const eps = multi?.endpoints ?? [];
   const withSnap = eps.filter((e) => e.snapshot);
@@ -69,9 +75,11 @@ export function Topbar() {
             <Globe className="h-3.5 w-3.5" />
             {i18n.language.toUpperCase()}
           </Button>
-          <Button variant="outline" size="sm" onClick={resetLayout} title={t('topbar.resetLayout')}>
-            <LayoutTemplate className="h-3.5 w-3.5" />
-          </Button>
+          {!hasCustomizableToolbar && (
+            <Button variant="outline" size="sm" onClick={resetLayout} title={t('topbar.resetLayout')}>
+              <LayoutTemplate className="h-3.5 w-3.5" />
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={toggleTheme} title={t('topbar.theme')}>
             {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           </Button>

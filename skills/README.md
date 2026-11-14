@@ -43,10 +43,10 @@ Si l'échelle augmente nettement au-delà, les points à surveiller en premier :
 | Skill | Périmètre |
 |---|---|
 | `general` | Architecture globale : contrat plugin, monorepo, flux de données (poller/InfluxDB/API/WS), design system, i18n, overcommit, déploiement, pièges transverses |
-| `hypervision` | Plugin hypervision : `/`, `/e/:endpointId`, `/e/:endpointId/n/:nodeId` + 12 composants (KPIs, graphiques 7 j, PRA, capacity, surallocation) |
+| `hypervision` | Plugin hypervision : `/`, `/e/:endpointId`, `/e/:endpointId/n/:nodeId` + composants (KPIs, graphiques 7 j, PRA, capacity, surallocation) ; `hypervision_v2` = vue d'ensemble en grille personnalisable par user |
 | `network` | Plugin network : `/topology` — graphe React Flow, inventaire réseaux→VMs, analyse d'impact incident, simulation PRA N-1 |
 | `storage` | Plugin storage : `/storage` — table vCenter des datastores, drill-down VMs, export CSV |
-| `vm-inventory` | Plugin inventaire VM : `/vms` — tree vCenter (Datacenter→cluster→nœud), tableau multi-endpoints live, détail à onglets (Config/Réseau/Snapshots) via `/api/vm-config` |
+| `vm-inventory` | Plugin Vue VM (famille `vm-view`) : `/vms` — tree vCenter (Datacenter→cluster→nœud), tableau multi-endpoints live, détail à onglets (Config/Réseau/Snapshots) via `/api/vm-config` ; v2 = console web PVE + détail nœud, v3 = monitors VM/nœud en grilles personnalisables par user |
 | `proxmox-inventory` | Plugin Inventaire Proxmox : `/proxmox-inventory` — inventaire consolidé multi-endpoints (une machine par ligne QEMU+LXC), OS réel (agent), disques par fs, interfaces/IPs, tags, état agent PVE, filtres par colonne + export TXT/CSV/JSON via `/api/proxmox-inventory` (cache 5 min, stale-while-revalidate) |
 | `operations` | Runbook production : kit de déploiement `deploiement/`, pointage InfluxDB externe, systemd/server.sh, day-2, dépannage (WS, repli RRD, TLS SAN, tokens PVE) |
 | `shared` | Package `@proxmox/shared` : fonctions pures testées par fichier, types partagés, THRESHOLDS, i18n fr/en |

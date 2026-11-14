@@ -1640,6 +1640,125 @@ d'axe Y « 0 o/s »**.
 
 ---
 
+## ✅ Fait — Personnalisation d'interface par utilisateur (drag/resize/retirer → bibliothèque) : Vue d'ensemble v2 + Vue VM v3 (livré, validé API + Playwright — **commité**)
+
+Demande utilisateur : sur les pages de graphiques (Vue d'ensemble `/` et Vue VM —
+onglets Monitor VM / Monitor nœud), **chaque utilisateur personnalise son propre
+environnement** : déplacer / redimensionner les cartes, retirer une carte (elle va
+dans la **bibliothèque** de la page, réinsérable), réinitialiser la disposition —
+**persisté par compte** côté serveur (robuste pour les utilisateurs présents ET
+futurs : nouveau widget ajouté au code → apparu en bas du layout ; widget retiré du
+code → basculé dans la bibliothèque, jamais de crash / layout cassé). Nom de la VM /
+du nœud affiché en **sous-titre** de chaque carte ; données fetchées par
+identifiants stables (vmid / nom de nœud), jamais par libellé.
+
+### Versionnement (`_vN`)
+- **`hypervision_v2`** (v0.2.0) : Vue d'ensemble = grille personnalisable. La v1
+  reste en rollback A/B (`/?v=hypervision`).
+- **`vm-view_v3`** (v0.3.0) : monitors VM + nœud = grilles personnalisables. La v2
+  reste en rollback (`/vms?v=vm-view_v2`). Convention : toute modification d'un
+  module crée `<id>_vN` ; l'admin active les versions (catalogue) et chaque user
+  sélectionne les siennes (« Mon profil → Modules » — une case par version).
+
+### Architecture (3 couches)
+- **`packages/shared/src/user-config.ts`** (fonctions pures, 25 tests) : types
+  (`UserConfig { schemaVersion, pages, lastUpdated }`, `PageConfig { layout[],
+  library[] }`, `WidgetItem { widgetId,x,y,w,h }`), `parseUserConfig` (validation
+  stricte), `mergePageConfig` (la règle « présents et futurs » : config nulle →
+  défaut ; id du catalogue absent de la config → **ajouté en bas** taille défaut ;
+  id de la layout absent du catalogue → **bibliothèque** ; id de la bibliothèque
+  absent du catalogue → jeté ; clamp 1..12 / 1..40), scopes + `widgetIdFrom`
+  (libellé → id stable), `defaultStackLayout`, `addWidget`/`removeWidget`/
+  `clearScopePage`.
+- **Serveur `modules/userconfig/`** : store **un fichier par user**
+  (`data/user-configs/<userId>.json`, écriture atomique tmp+rename, tolérant à la
+  corruption → null), routes `GET/PUT/DELETE /api/user-config` (401 sans session —
+  guard global ; 400 `bad-config` via `parseUserConfig` ; `userId` = `req.authUser.id`,
+  jamais de l'URL). Chacun gère SA config, aucun rôle requis.
+- **Web** : `core/widgets/` (framework : `widget-grid` = ResponsiveGridLayout +
+  frame de carte (handle drag `.drag-handle`, titre + **sous-titre VM/nœud**,
+  bouton retirer, slot extra export CSV), `widget-library` (panneau latéral
+  retirés/réinsérer), `widget-toolbar` (Bibliothèque + compteur, Réinitialiser avec
+  confirmation, indicateur Enregistrement), `types` (`CoreWidgetDef`,
+  `widgetIdFrom`, `layoutsEqual`), `customizable-page` (drapeau zustand — masque le
+  reset v1 de la topbar), `export-csv-button`) ; `store/user-config.ts` (zustand :
+  load au boot, **PUT débordé 800 ms + flush `pagehide` keepalive**, `dirty` garde
+  contre le load tardif, invalidation multi-onglets) ; `lib/user-config-api.ts`.
+- **Pages** : `hypervision_v2/pages/overview.tsx` (catalogue 12 widgets : res-*,
+  kpi-*, sys-nodes, ep-<endpoint> dynamiques, alerts, table) ;
+  `vm-view_v3/components/{vm,node}-monitor.tsx` (catalogues dynamiques :
+  `diskio-<device>`, `fs-<mountpoint>`, `net-<iface>`, `netif-<iface>` —
+  **scopes** : `overview` seul, `vmView « <ep>/<vmid> »`, `nodeView « <ep>/<nœud> »`
+  — un renommage de nœud remet le layout à zéro, accepté/documenté). Les corps de
+  carte ont été extraits en composants réutilisables (`CpuCoresBody`,
+  `NodeSystemStatsGrid`, `FwDecodeBlock`…) — la frame fournit l'en-tête, le corps
+  remplit la cellule (`min-h + flex-1`, ECharts ResizeObserver).
+
+### Vérifications effectuées
+- **Tests** : 295 shared (+25 user-config) + 196 server (+16 userconfig) + typecheck
+  web propre + build OK.
+- **API (curl, sessions réelles)** : GET null / PUT 200+lastUpdated / GET roundtrip /
+  400 bad-config (schemaVersion invalide) / DELETE reset — PASS.
+- **Playwright (3 scripts, ~76 assertions, tous verts)** :
+  - *Vue d'ensemble* : 12 widgets rendus, **aucune sauvegarde fantôme au montage**,
+    drag persisté (position changée + `lastUpdated`), resize w=6 persisté, retirer →
+    bibliothèque (badge compteur + `library:['alerts']`), réinsertion depuis la
+    bibliothèque, **ouverture/fermeture du panneau bibliothèque sans reflow ni
+    sauvegarde parasite**, reload → layout conservé (rendu visuel w=6 ≈ 1,5× w=4),
+    Réinitialiser → page supprimée de la config + retour au défaut, A/B v1
+    (`/?v=hypervision` sans toolbar v2, reset topbar de nouveau visible).
+  - *Vue VM v3* : deep-link `?vm=100` / `?node=proxmox/proxmox`, monitor VM = grille
+    (4 statiques + dynamiques), **sous-titre = nom de la VM sur chaque carte (4/4)**,
+    drag → scope `vmView « proxmox/100 »` persisté ; monitor nœud = grille (20
+    widgets dont réseau-par-interface + CPU par cœur graphe rendu), **sous-titre =
+    nom du nœud (4/4)**, drag → scope `nodeView « proxmox/proxmox »` persisté,
+    persistance au retour.
+  - *A/B + isolation* : `?v=hypervision_v2` explicite OK ; `?v=vm-view_v2` = monitor
+    v2 statique (0 carte RGL) + bouton « Console web (UI PVE) » ; `?v=vm-view`
+    (v1 non autorisée) → repli canonique v3 ; **jerome** : login → forçage
+    `/profile?tab=password` → changement de mdp → accès libre ; config jerome
+    vierge alors qu'admin a customisé ; drag jerome → SA config créée ; **config
+    admin bit-à-bit identique** avant/après ; re-login jerome avec le nouveau mdp
+    (plus de forçage) → sa config persiste.
+
+### Pièges rencontrés (corrigés — ne pas réintroduire)
+- **Sauvegarde fantôme RGL v2 (le gros)** : `react-grid-layout` est en **^2.2.4**
+  (pas 1.5). RGL v2 rappelle `onLayoutChange` à TOUT changement de layout interne —
+  y compris un **reflow de breakpoint** : ouvrir le panneau bibliothèque (w-64
+  inline) fait passer le conteneur de 1368 à ~1096 px → breakpoint lg(12 col) →
+  md(8 col) → le layout 12 col est clampé/compacté vers 8 col et **enregistré**
+  (sys-nodes w=12→8, etc.) → au reload la grille s'affiche décalée. Double garde :
+  (1) `breakpoint="lg"` **épinglé** sur `ResponsiveGridLayout` (design 12 col :
+  plus jamais de reflow, le viewport étroit ne rend que des cartes plus étroites) ;
+  (2) sauvegarde **uniquement** via `onDragStop`/`onResizeStop` (1ᵉʳ arg = layout
+  final post-compaction) — les `onLayoutChange` internes (reflow, sync après
+  ajout/retrait) ne sont plus enregistrés ; le parent gère déjà ces cas via
+  onAdd/onRemove/onReset. La garde `layoutsEqual` reste en backstop (drop sans
+  déplacement).
+- **Deux « Réinitialiser la disposition »** : la topbar a un bouton de reset du
+  store v1 (`useLayout`) — sans effet sur les pages v2 (user-config). → drapeau
+  zustand `useCustomizablePage` posé par `WidgetToolbar` au montage : la topbar
+  masque son bouton v1 quand une page personnalisable est montée (re-visible sur
+  les pages v1 — validé A/B).
+- **`PUT /api/auth/preferences` rejette les ids non autorisés** (400
+  `not-authorized` listant les ids) : ex. la famille `network` globalement
+  désactivée → retirer `network` de la sélection avant PUT. Le PUT est un
+  **remplacement complet** de la sélection.
+- **catalog-sync hérite de l'état famille** : `vm-view_v3` créée avec
+  `globallyEnabled=false` (famille `vm-view` désactivée, seule `_v2` activée) →
+  pour exposer v3 : `PATCH /api/admin/modules/vm-view_v3 {globallyEnabled:true}`
+  + sélection user. `hypervision_v2` avait hérité `true` (famille active).
+- **Type `Layout` RGL v2 = `readonly LayoutItem[]`** — les handlers
+  `onDragStop`/`onResizeStop` reçoivent le layout en readonly (TS2345 si on type
+  `LayoutItem[]`).
+- **Playwright** : `:has-text()` = sous-chaîne **insensible à la casse**
+  (« Serveurs Proxmox » matchait aussi « Alertes — tous les serveurs Proxmox ») →
+  regex ancrée `^…$` sur le `<h3>` ; le bouton reset de la topbar (icon-only,
+  accessible name = title) matchait le même pattern → drapeau ci-dessus +
+  disambiguation.
+
+---
+
 ## ⏳ À faire
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)

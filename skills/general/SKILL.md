@@ -19,9 +19,9 @@ Application web d'**hypervision multi-endpoints** pour Proxmox VE : dashboard vC
 | Backend | Node 20 + Fastify + TypeScript strict, WebSocket (`ws`), undici, zod |
 | Frontend | Vite + React 18 SPA + TypeScript strict, Tailwind CSS, composants style shadcn/ui (`components/ui/`) |
 | Graphiques | ECharts (hook `hooks/use-echart.ts` + thème `lib/chart-theme.ts`) |
-| Grille dashboard | `react-grid-layout` (drag/resize, persistée) |
+| Grille dashboard | `react-grid-layout` **^2.2.4** (drag/resize ; v2 API — voir piège RGL §10) |
 | Graphe réseau | `@xyflow/react` (React Flow) |
-| État | zustand (`store/theme`, `store/layout`, `core/data/dashboard`) |
+| État | zustand (`store/theme`, `store/layout`, `store/user-config`, `core/data/dashboard`) |
 | i18n | i18next + ressources dans `@proxmox/shared` (fr/en), persisté localStorage |
 | Historique | InfluxDB 3 Core (**externe en prod**) — repli RRD Proxmox si pas de token |
 
@@ -68,7 +68,7 @@ Application web d'**hypervision multi-endpoints** pour Proxmox VE : dashboard vC
 - **Comparaison A/B dans la sidebar** : chaque version d'une famille est une entrée du menu de gauche avec son badge `vN` — l'utilisateur choisit quelles versions voir dans **Mon profil → Modules** (une case par version) ; bascule à la volée via `?v=<id>`. La version canonique (la plus récente) est la référence : lien canonique, défaut du `VersionSwitch`, cible des deep-links.
 - **Les routes respectent la sélection du profil** (`app.tsx`) : sur une route multi-versions, seules les versions SÉLECTIONNÉES sont rendues — « cocher la V1 et non la v2 » → `/vms` sert la v1 (défaut = canonique si sélectionnée, sinon première sélectionnée) ; un `?v=` pointant vers une version non sélectionnée retombe sur le défaut.
 - **Feature flags restent au niveau famille** (disjoncteur env, pas par version).
-- Exemple livré : `vm-inventory_v2` = v1 + bouton « Console web » (lien UI PVE, voir skill `vm-inventory`).
+- Exemples livrés : `vm-view_v2` = v1 + bouton « Console web » (lien UI PVE) + détail nœud (voir skill `vm-inventory`) ; `hypervision_v2` (v0.2.0) = Vue d'ensemble en grille personnalisable (§12) ; `vm-view_v3` (v0.3.0) = monitors VM + nœud en grilles personnalisables (§12, voir skill `vm-inventory`).
 
 ## 3. Arborescence monorepo
 
@@ -81,13 +81,16 @@ proxmox-plugin-arch/
 │   │   └── src/
 │   │       ├── core/    #   poller.ts, influx.ts, influx-consolidator.ts, proxmox-client.ts,
 │   │       │            #   mock-source.ts, data-source.ts, ws-hub.ts, config.ts
-│   │       └── modules/ #   dashboard/routes.ts, supervision/routes.ts, index.ts
+│   │       └── modules/ #   dashboard/routes.ts, supervision/routes.ts, auth/ (§11),
+│   │                  #   userconfig/ (perso. d'interface par user, §12), index.ts
 │   └── web/             # Vite + React SPA
 │       └── src/
-│           ├── core/    #   plugin/ (contrat), api/, data/ (store WS), config/features.ts, ui/
-│           ├── plugins/ #   hypervision/, network/, storage/, vm-inventory/  ← TOUT le métier
+│           ├── core/    #   plugin/ (contrat), api/, data/ (store WS), widgets/ (grilles
+│           │            #   personnalisables, §12), config/features.ts, ui/
+│           ├── plugins/ #   hypervision/ (+_v2), vm-view/ (+_v2,_v3), network/, storage/,
+│           │            #   proxmox-inventory/, node-sensors/, centreon-nsca/  ← TOUT le métier
 │           ├── components/  # layout/ (sidebar, topbar) + ui/ (design system)
-│           ├── store/   #   theme.ts, layout.ts (grilles persistées)
+│           ├── store/   #   theme.ts, layout.ts (grilles persistées v1), user-config.ts (§12)
 │           ├── hooks/ lib/  # use-echart, chart-theme, utils
 │           └── app.tsx main.tsx i18n.ts
 ├── skills/              # bases de connaissance (trackées, livrées en prod) ← ce dossier
@@ -124,6 +127,7 @@ proxmox-plugin-arch/
 | `/api/overcommit-risk?endpoint=` | risque dynamique (pire cas p95 7 j) |
 | `/api/network-topology?endpoint=` | topologie réseau auto-découverte (supervision) |
 | `/api/storage-inventory?endpoint=` | inventaire stockage → VMs (supervision) |
+| `/api/user-config` (GET/PUT/DELETE) | personnalisation d'interface **par user** (§12) — session requise, `userId` = session (jamais l'URL) |
 
 ### 4.4 WebSocket + store web
 - `WsHub` (`/ws`) : pousse `{type:'snapshot', data: MultiDashboardSnapshot}` toutes les 5 s + un au connect.
@@ -185,6 +189,7 @@ proxmox-plugin-arch/
 - **Historique git** : repo poussé sur **`https://git.prox4u.com/prox4u/prox4u.git`** (remote `origin`, Gitea privé, token dans l'URL du remote ; branche `master`, auto-backups + commits explicites — le travail y est commité et poussé, ne plus écrire « non commité » dans les sections Fait). Aucun artefact sensible dans l'historique (`.env`, `clusters.json`, `data/` sont gitignorés).
 - **Ne pas toucher `/home/opencode/projet/proxmox/`** (ancienne app, référence en lecture seule).
 - **Double-comptage du SAN iSCSI/LVM (hiérarchie, dédoublonnage inversé)** : une cible iSCSI (le LUN) sur laquelle reposent des VG LVM est remontée par PVE **deux fois** (datastore `iscsi` + datastore(s) `lvm` dont le champ `base` = « {iscsi}:… ») — **même volume physique**. Le signal robuste n'est **pas** une heuristique de taille (total/used identiques) mais le **champ `base`** : le VG lvm pointe vers la cible iSCSI. `getStorage()` (prox4u-client) pose `duplicateOf` **sur le LUN** = la liste de ses VG enfants via le helper pur **`iscsiHostVgs`** (plusieurs VG possibles) ; le poller **compte le LUN** (capacité physique) et **exclut les VG enfants** (l'ensemble des valeurs `duplicateOf`) des sommes `storageTotalBytes`/`storageUsedBytes` — c'est l'**inverse** de la 1ʳᵉ version du correctif (qui comptait le VG et écartait le LUN). On ne réintroduit **ni** une heuristique « même total + même used = doublon » (fragile, faux sur du vrai matériel : deux baies identiques ≠ même volume) **ni** le dédoublonnage à l'envers (compter le VG + écarter le LUN) : le volume physique de référence est le **LUN**, le VG n'en est qu'une vue (et un LUN peut porter plusieurs VG).
+- **react-grid-layout est en v2 (^2.2.4), pas 1.5** — la v2 API (`dragConfig`/`resizeConfig`/`gridConfig`) diffère de la v1 flat. **Sauvegarde fantôme** : RGL v2 rappelle `onLayoutChange` à TOUT changement de layout interne, y compris un **reflow de breakpoint** — toute variation de largeur du conteneur (ex. un panneau latéral inline qui ouvre) peut faire basculer lg(12 col) → md(8 col) : le layout 12 col est clampé/compacté vers 8 col et **enregistré** comme config user → grille décalée au reload. Double garde du socle (`core/widgets/widget-grid.tsx`) : (1) `breakpoint="lg"` **épinglé** (design 12 col, plus de reflow) ; (2) sauvegarde **uniquement** via `onDragStop`/`onResizeStop` (1ᵉʳ arg = layout final post-compaction), jamais sur `onLayoutChange` brut ; les changements parent-dressés (ajout/retrait/reset) appellent le store directement. Le type `Layout` est **`readonly LayoutItem[]`** (TS2345 si typé mutable).
 
 ## 11. Authentification & autorisation (portée de l'ancienne app)
 - **Stack** : comptes locaux **argon2id** (npm `argon2` ^0.45.1 — Node 24 n'a pas d'argon2id natif), sessions **cookie httpOnly** `pvm_session` (TTL 12 h défaut, `AUTH_SESSION_TTL_HOURS`), rôles `admin | user`, groupes + visibilité par module.
@@ -195,3 +200,15 @@ proxmox-plugin-arch/
 - **Visibilité des modules, par version** : le catalogue serveur tient une entrée par version ; une version est **autorisée** si activée globalement OU si sa famille est attribuée à un groupe de l'utilisateur ; **visible** = autorisée ∩ sélectionnée par son id EXACT. `authorizedModules` (`/me`) = entrées autorisées au niveau VERSION (`authorizedModuleEntries`) — les lignes de Mon profil → Modules, qui **ré-hydrate `/me` à chaque ouverture** de la rubrique (`ModuleSelector` → `refresh()` au mount) : un changement de catalogue admin s'y voit immédiatement, sans action préalable. `/me` renvoie aussi `visibleVersionIds` (ids exacts — filtre menu PluginMenu + versions rendues sur les routes partagées) et `visibleModuleIds` (familles dérivées — ModuleRoute + liste d'endpoints du sidebar, famille `hypervision`). Après un toggle admin, le store re-hydrate `/me` (sidebar à jour immédiatement).
 - **Forçage mdp** : `mustChangePassword` → seule `/profile?tab=password` accessible jusqu'au changement.
 - **Garde-fous admin** : un admin ne peut pas se désactiver ni se dégrader lui-même (UI + refus serveur `self-modification`).
+
+## 12. Personnalisation d'interface par utilisateur (grilles v2)
+
+Chaque utilisateur personnalise les pages de graphiques (Vue d'ensemble `/` = `hypervision_v2`, onglets Monitor VM / Monitor nœud = `vm-view_v3`) : **drag/resize** des cartes, **retirer** (→ bibliothèque de la page, réinsérable), **réinitialiser** la disposition — **persisté par compte** côté serveur. Règle « présents ET futurs » : un widget ajouté au code apparaît en bas du layout (taille défaut) ; un widget retiré du code bascule dans la bibliothèque — jamais de layout cassé. Nom de la VM / du nœud en **sous-titre** de chaque carte ; données toujours fetchées par identifiants stables (vmid / nom de nœud), jamais par libellé.
+
+- **Shared** (`packages/shared/src/user-config.ts`, 25 tests) : types `UserConfig { schemaVersion, pages, lastUpdated }`, `PageConfig { layout[], library[] }`, `WidgetItem { widgetId,x,y,w,h }` ; `parseUserConfig` (stricte → 400 `bad-config`) ; **`mergePageConfig`** = la règle ci-dessus + clamp (w 1..12, h 1..40) ; scopes ; `defaultStackLayout` (piles de largeur 12), `addWidget` (append en bas), `removeWidget` (→ `library`), `clearScopePage`.
+- **Scopes** : `overview` = layout unique ; `vmView` = **`"<endpointId>/<vmid>"`** ; `nodeView` = **`"<endpointId>/<nomDuNœud>"`** (un renommage de nœud remet le layout à zéro — accepté, documenté).
+- **Serveur** (`modules/userconfig/`) : **un fichier par user** `data/user-configs/<userId>.json` (écriture atomique tmp+rename, corrompu → `null` au read) ; `GET/PUT/DELETE /api/user-config` — session obligatoire (guard global), `userId` = `req.authUser.id` (jamais de l'URL), aucun rôle requis.
+- **Socle web** (`core/widgets/`) : `types.ts` (`CoreWidgetDef` = `WidgetDef` shared + `render`, `widgetIdFrom` libellé→id stable, `layoutsEqual`) ; `widget-grid.tsx` = `ResponsiveGridLayout` + **`WidgetFrame`** (handle drag `.drag-handle`, titre `<h3>` + sous-titre `<p>` VM/nœud, bouton retirer, slot `extra` ex. export CSV) ; `widget-library.tsx` (panneau latéral `w-64 inline` : retirés + « Afficher ») ; `widget-toolbar.tsx` (Bibliothèque + compteur, Réinitialiser avec confirmation, indicateur de sauvegarde du store) ; `customizable-page.ts` (drapeau zustand — masque le bouton de reset v1 de la topbar quand une page personnalisable est montée, cf. statut de `useLayout`) ; `export-csv-button.tsx`.
+- **Store web** (`store/user-config.ts`, zustand) : load au boot ; **PUT débordé 800 ms + flush `pagehide` (keepalive)** ; flag `dirty` garde contre le load tardif ; `updatePage`/`clearPage`/`resetAll` ; invalidation multi-onglets.
+- **Garde RGL v2 (cf. piège §10)** : `breakpoint="lg"` épinglé + sauvegarde uniquement sur `onDragStop`/`onResizeStop` ; le parent garde `layoutsEqual` en backstop (drop sans déplacement).
+- **Pages** : `hypervision_v2/pages/overview.tsx` (catalogue 12 widgets, dont `ep-<endpoint>` dynamiques) ; `vm-view_v3/components/{vm,node}-monitor.tsx` (catalogues dynamiques `diskio-<device>`, `fs-<mountpoint>`, `net-<iface>`, `netif-<iface>` — les ids sont stables pendant la refetch grâce à un gate `ready` qui garde les données en cours). Les corps de carte sont des composants réutilisables exportés (`CpuCoresBody`, `NodeSystemStatsGrid`, `FwDecodeBlock`…) — la frame fournit l'en-tête, le corps remplit la cellule (`min-h` + `flex-1`, ECharts ResizeObserver). Détail par skill : `hypervision` (overview v2) et `vm-inventory` (monitors v3).

@@ -1,6 +1,6 @@
 ---
 name: hypervision
-description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes. Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card…).
+description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/ ou hypervision_v2/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card…).
 ---
 
 # Hypervision — Base de connaissance
@@ -38,7 +38,8 @@ hypervision/
     ├── alerts-list.tsx          # alertes endpoint
     ├── top-consumers.tsx        # top VMs + pools
     ├── nodes-table.tsx          # nœuds (sévérité, lien détail)
-    └── overcommit-card.tsx      # rapport surallocation + risque dynamique
+    ├── overcommit-card.tsx      # rapport surallocation + risque dynamique
+    └── system-nodes-card.tsx    # carte « Système — par nœud » (cross-node, Telegraf)
 ```
 
 ## 3. OverviewPage (`/`) — parc multi-endpoints
@@ -85,3 +86,20 @@ Préfixes : `nav.overview`, `overview.*`, `endpoint.*`, `node.*`, `nodes.*`, `kp
 - La vue nœud (`?node=`) est exclue de la fusion stockage (métrique d'endpoint).
 - Grilles : layout persisté par vue (overview vs endpoint) ; `key={gridVersion}` force le remontage au reset.
 - Rafraîchissement des données lourdes toutes les 5 min — ne pas ajouter de polling par seconde (le WS fournit déjà le temps réel).
+
+## 9. `hypervision_v2` (v0.2.0) — Vue d'ensemble personnalisable par user
+
+Copie de la v1 (`plugins/hypervision_v2/`, mêmes 3 routes + même menu — même famille = même surface, rule `_vN` du skill `general` §2.5). La v1 reste en rollback A/B (`/?v=hypervision` ; v2 = `/?v=hypervision_v2` ou canonique). Socle de grille : skill `general` §12.
+
+- **Manifest** : id `hypervision_v2`, version `0.2.0`.
+- **OverviewPage (`/`) = `WidgetGridLayout`** (framework `core/widgets`), **catalogue 12 widgets** (2 endpoints en prod) :
+  - `res-cpu` / `res-ram` / `res-storage` (w4 h3) — `ResourceChartBody` (graphe 7 j seul, sans carte)
+  - `kpi-nodes` / `kpi-cpu` / `kpi-storage` / `kpi-vms` (w3 h2, minW 2) — `KpiNodesBody` / `KpiCpuRamBody` / `KpiStorageBody` / `KpiVmsBody`
+  - `sys-nodes` (w12 h5, minW 6) — `SystemNodesBody` (Système par nœud, Telegraf)
+  - `ep-<endpointId>` (**dynamique**, un par endpoint, w4 h3) — `EndpointHealthBody` (copié local de la carte v1)
+  - `alerts` (w5 h3) — `OverviewAlertsBody` · `table` (w7 h3) — `EndpointsTableBody`
+- **Extraction des corps** : la v2 exporte des `*Body` (contenu sans `Card`/en-tête) dans `resource-chart.tsx`, `kpi-row.tsx`, `system-nodes-card.tsx` — c'est la **frame du socle** (`WidgetFrame`) qui fournit l'en-tête (handle drag, titre, bouton retirer) ; le corps remplit la cellule (`min-h` + `flex-1`). Les pages endpoint/nœud v2 gardent les cartes complètes v1.
+- **Toolbar + bibliothèque** : `WidgetToolbar` (Bibliothèque + compteur, Réinitialiser avec confirmation, indicateur de sauvegarde) + `WidgetLibraryPanel` (`w-64` inline). Le bouton de reset v1 de la topbar est **masqué** sur cette page (drapeau `useCustomizablePage`) — sinon deux « Réinitialiser la disposition » dont l'un no-op.
+- **Persistance** : `store/user-config` (zustand) → `GET/PUT/DELETE /api/user-config`, scope **`overview`** (layout unique, pas de scope). Merge « présents et futurs » : un nouveau widget du code est **ajouté en bas** du layout au chargement ; un widget retiré du code bascule dans la **bibliothèque** ; jamais de layout cassé. Drag/resize persistés uniquement en fin d'interaction (cf. piège RGL v2, skill `general` §10).
+- **Endpoint/Node pages** : identiques à la v1 (layout persisté `store/layout`, pas de personnalisation user) — la topbar v1 y reste visible et active.
+- **Validation livrée** : Playwright stage 1 (36 assertions) — 12 widgets, aucune sauvegarde fantôme au montage ni à l'ouverture/fermeture du panneau bibliothèque, drag/resize/retrait/réinsertion/reload/reset persistés, A/B v1 sans toolbar.

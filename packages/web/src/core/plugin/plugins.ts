@@ -1,8 +1,10 @@
 import { hypervisionPlugin } from '../../plugins/hypervision';
+import { hypervisionPluginV2 } from '../../plugins/hypervision_v2';
 import { networkPlugin } from '../../plugins/network';
 import { storagePlugin } from '../../plugins/storage';
 import { vmViewPlugin } from '../../plugins/vm-view';
 import { vmViewPluginV2 } from '../../plugins/vm-view_v2';
+import { vmViewPluginV3 } from '../../plugins/vm-view_v3';
 import { proxmoxInventoryPlugin } from '../../plugins/proxmox-inventory';
 import { centreonNscaPlugin } from '../../plugins/centreon-nsca';
 import { nodeSensorsPlugin } from '../../plugins/node-sensors';
@@ -19,11 +21,12 @@ import type { Plugin } from './types';
  * versions ; la plus récente porte la route canonique de la famille.
  */
 export const PLUGINS: Plugin[] = [
-  ...(FEATURES.USE_PLUGIN_HYPERVISION ? [hypervisionPlugin] : []),
+  // Famille hypervision : v1 (rollback) + v2 (vue d'ensemble personnalisable par user).
+  ...(FEATURES.USE_PLUGIN_HYPERVISION ? [hypervisionPlugin, hypervisionPluginV2] : []),
   ...(FEATURES.USE_PLUGIN_NETWORK ? [networkPlugin] : []),
   ...(FEATURES.USE_PLUGIN_STORAGE ? [storagePlugin] : []),
-  // Famille vm-view : v1 (rollback) + v2 (console web PVE).
-  ...(FEATURES.USE_PLUGIN_VM_VIEW ? [vmViewPlugin, vmViewPluginV2] : []),
+  // Famille vm-view : v1 (rollback) + v2 (console web PVE) + v3 (monitors personnalisables par user).
+  ...(FEATURES.USE_PLUGIN_VM_VIEW ? [vmViewPlugin, vmViewPluginV2, vmViewPluginV3] : []),
   // Famille proxmox-inventory : inventaire consolidé (une machine par ligne + export).
   ...(FEATURES.USE_PLUGIN_PROXMOX_INVENTORY ? [proxmoxInventoryPlugin] : []),
   // Famille centreon-nsca : alarmes & checks passifs NSCA (règles → Centreon).
