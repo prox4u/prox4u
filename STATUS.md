@@ -1927,6 +1927,33 @@ reçoivent le widget en bas par le merge.
   `CAP_NET_RAW` sur les agents (section commentée dans `deploiement/60-telegraf-nodes.sh`)
 - **GPU** : plugin `nvidia-smi` absent des agents (aucune carte NVIDIA sur le parc)
 
+## ✅ Fait — Identité visuelle Prox4u : login robot analyste + wordmark, sidebar emblème + mascotte, favicon (livré, validé navigateur — **commité**)
+
+> 2026-11-14 — Assets de marque fournis par l'utilisateur (PNG dans `images/` à la racine du repo)
+> convertis en WebP et intégrés dans l'app. Commits `f2c7a0d` (web) + `93ebeca` (images sources)
+> + `1b8e5da` (renvoi skill site web), poussés sur `origin/master`.
+
+### Assets (`packages/web/public/` — servis par Vite)
+- `favicon.png` + `apple-touch-icon.png` (emblème bouclier, alpha transparent) — `<link>` dans `packages/web/index.html`
+- `images/logo-emblem.webp` (256×256, alpha propre) — sidebar
+- `images/logo-wordmark.webp` — bandeau login
+- `images/robot-analyst.webp` — page de login (split-screen)
+- `images/robot-cosy-sidebar.webp` (480×480, **image en entier** — l'utilisateur a refusé le recadrage paysage) — sidebar
+
+### Changements
+- **Login** (`pages/login.tsx` + `components/auth/login-form.tsx`) : **split-screen** — formulaire à gauche, robot analyste `object-cover` à droite (masqué `< lg`) ; **mode sombre forcé localement** (classe `.dark` sur le wrapper, indépendant du thème utilisateur) ; bandeau **wordmark** en tête de carte (remplace l'ancienne icône Server indigo).
+- **Sidebar** (`components/layout/sidebar.tsx`) : emblème sur **fond blanc** (`bg-white`) + mascotte cosy complète sous le menu, au-dessus de LIVE.
+- **Piège rencontré** : l'emblème d'abord affiché en « tuile blanche » — le PNG original est déjà RGBA (fond transparent) mais l'alpha seul est illisible sur fond sombre → emblème régénéré (WebP alpha propre) + fond blanc explicite.
+- Sources PNG (10 fichiers, dont doublons de fichiers existants) commitées dans `images/` à la racine.
+
+### Vérifications
+- `pnpm typecheck` + `pnpm build` OK
+- Rendu vérifié en navigateur (sombre/clair/mobile) : login split-screen, sidebar emblème + mascotte, favicon
+- Capture README rafraîchie : `docs/screenshots/login.png` (nouveau login)
+
+### Rattaché — site vitrine (repo séparé)
+- Le site vitrine `www.prox4u.fr` (repo `prox4u_web/prox4u_web`) a sa propre skill : `skills/website/SKILL.md` dans **son** repo — renvoi croisé ajouté dans `skills/README.md` §4.2 (commit `1b8e5da`).
+
 ## ⏳ À faire
 
 ### À tester / à aborder
@@ -2021,5 +2048,7 @@ packages/web/src/pages/{login,profile,admin}/ # auth + admin (3 onglets : catalo
 data/auth.json                                # users/groups/modules/préférences (600, gitignored — comptes migrés de l'ancienne app)
 packages/web/src/hooks/use-echart.ts              # wrapper ECharts (init paresseux)
 packages/web/src/index.css                        # Tailwind v4 + tokens Tremor + @source inline
-skills/                                           # base de connaissance (trackée, livrée en prod) : 12 SKILL.md + README.md (inventaire) — .opencode/skills/ = symlinks locaux
+packages/web/public/                              # assets branding (WebP) : favicon + apple-touch-icon + images/ (emblème, wordmark, robots) — servis par Vite
+images/                                           # sources PNG mascottes/logo (commitées) — sources des WebP de public/ et du site vitrine
+skills/                                           # base de connaissance (trackée, livrée en prod) : 12 SKILL.md + README.md (inventaire, renvoi vers la skill `website` du repo prox4u_web) — .opencode/skills/ = symlinks locaux
 ```
