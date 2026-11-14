@@ -1,6 +1,6 @@
 # Prox4u — État d'avancement
 
-> **Dernière mise à jour : 2026-11-06**
+> **Dernière mise à jour : 2026-11-14**
 > Application de supervision vCenter-like pour Proxmox VE (managers/DSI).
 > Conception de référence : `.opencode/skills/proxmox-web/SKILL.md`
 
@@ -14,7 +14,7 @@
 - App en **HTTPS** (cert auto-signé, SAN localhost + IP VM) ; InfluxDB en HTTPS sur 8181 ; **Explorer** (UI InfluxDB 3) en HTTPS sur 8888
 - Logs / pid : `logs/` (à la racine du projet, rien dans /tmp)
 - Cron : `@reboot` + keepalive minute par minute sur `server.sh start` (idempotent) ; le conteneur InfluxDB se relance seul au boot (`restart: unless-stopped`)
-- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (313 tests : 217 shared + 96 server)
+- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (516 tests : 301 shared + 215 server)
 
 ---
 
@@ -1816,12 +1816,117 @@ comptes de test dédiés, (3) un bouton « lock » dans la gestion des comptes.
 
 ---
 
+## ✅ Fait — Bibliothèque de widgets complétée (référence ProxMenux) : hypervision_v3 + vm-view_v4 + 4 endpoints (livré, validé API + Playwright 34/34)
+
+> 2026-11-14 — Analyse des 15 graphiques du dashboard ProxMenux (référence en lecture seule
+> `/home/opencode/projet/ProxMenux`) → **7 graphiques manquants et réalisables** avec les données
+> déjà collectées (Telegraf `raw` + poller PVE). Livrés dans **deux nouvelles versions** de plugins
+> (règle `_vN`, versions existantes intactes → rollback A/B via `?v=` / VersionSwitch) :
+> **`hypervision_v3`** (v0.3.0, Vue d'ensemble) et **`vm-view_v4`** (v0.4.0, Monitor nœud).
+
+### Serveur — 4 nouveaux endpoints (module `nodesensors`, `system-routes.ts`)
+
+Mêmes conventions que `node-diskio`/`node-net` : tables Telegraf `raw` uniquement, buckets
+`HOST_DISKIO_TF` (hour → 1 min/1 h, day → 5 min/24 h, week → 1 h/7 j, month → 1 day/30 j),
+cache 5 min, validation `node`/`timeframe` (400), `source: 'influx' | 'insufficientData'`.
+
+| Endpoint | Données | Détail |
+|---|---|---|
+| `GET /api/node-temps?node=&timeframe=` | Températures **par chip** (table `sensors`) | `max(temp_input)` par (chip, bucket) ; null ≠ 0 (piège `Number(null)`=0 — `num()` null-safe + gardes `r.temp == null`) |
+| `GET /api/smart-temps?node=&timeframe=` | Températures **par disque** (table `smart_device`) | `temp_c > 0` uniquement (0 °C = pas de capteur) ; modèle (`model`) porté par série |
+| `GET /api/zfs-arc?node=&timeframe=` | ZFS ARC (tables `zfs_arc` / arcstats) | `sizeBytes` + `maxBytes` + **hit rate** = Δhits/Δmisses **dans le bucket** (max−min, pas de LAG) ; `hitRatePct: null` si compteurs 0 |
+| `GET /api/node-system-history?node=&timeframe=` | **load 1/5/15 + nCpus** (table `system`) **+ swap** (table `mem`) | 2 requêtes isolées fusionnées (`mergeHostHistory`) — une table manquante ne fait pas perdre l'autre |
+
+**Découverte runtime (ZFS)** : `arcstats_hits/misses` = **0 systématiquement** sur les 3 nœuds
+depuis 2026-11-06 (le nœud `proxmox` n'a pas de pool ZFS — LVM uniquement) → la série hit rate
+est **masquée** quand les compteurs sont nuls (pattern ProxMenux `hasZfsArc` : jamais de série
+inventée). Validé : ARC 4,2 GiB courante / 13,5 GiB max, `hitRatePct: null`.
+
+**Tests** : 19 nouveaux tests vitest (builders SQL, parsers, merge) → **215 tests serveur** (196 + 19).
+
+### Web — 7 nouveaux widgets
+
+**`vm-view_v4` (Monitor nœud, 6 widgets)** — `node-monitor.tsx` : 5 hooks hoistés
+(`useNodeTemps`, `useSmartTemps`, `useZfsArc`, `useNodeHostHistory`, `useNodeSensorsLive` —
+pattern `useNodeDiskio` : tick 60 s, effet sur `[node, timeframe, tick]`), helper local
+`multiLineOption` (multi-séries + axe droit % optionnel + `markLine` de référence + tooltip
+custom multi-unités) + `multiPalette` + `fmtTempTooltip`, 5 exports CSV, 6 corps
+(`HostTempsBody`, `SmartTempsBody`, `ZfsArcBody`, `LoadBody`, `SwapBody`, `SmartHealthBody`) :
+
+| id | Widget | Données | Spécificités |
+|---|---|---|---|
+| `temp-cpu` | Températures CPU & chips | `/api/node-temps` | une courbe par chip (8 sur `proxmox`) |
+| `smart-temps` | Températures disques (SMART) | `/api/smart-temps` | une courbe par disque + modèle dans la légende, `markLine` seuil critique 80 °C |
+| `smart-health` | Santé disques (SMART) | `/api/node-sensors` (live) | **table** (pas de graphe) : badge tri-state OK/Anomalie/Inconnu, temp (0 °C → « — »), usure NVMe % / secteurs (rouge si > 0), heures |
+| `zfs-arc` | ZFS ARC | `/api/zfs-arc` | GiB (aire) + `markLine` ARC max + hit rate % axe droit **masquée si compteurs 0** |
+| `load` | Charge moyenne | `/api/node-system-history` | load 1/5/15 + rappel « Cœurs : N » (charge lue vs capacité) |
+| `swap` | Swap | `/api/node-system-history` | utilisé (octets) + % axe droit ; état distinct « Pas de swap configuré » si total = 0 |
+
+Tous : w12 h4 minH 3, sous-titre = nom du nœud, état vide dédié (i18n), export CSV.
+Ordre catalogue : après `net`, avant les `netif-*` dynamiques.
+
+**`hypervision_v3` (Vue d'ensemble, 1 widget)** — nouveau composant
+`components/temp-nodes-card.tsx` : `TempNodesBody` (table par nœud connu : **max capteurs**
+avec **pire ton** selon seuil effectif par capteur — perso ≤ firmware, repli 80/60 °C — +
+**max disques SMART** seuils fixes 80/60 °C ; compteurs en discret ; nœuds sans capteur → « — »).
+Widget `temp-nodes` (w12 h4 minW 6 minH 3) + **rangée dédiée dans `overviewDefaultLayout`**
+(pleine largeur, après « Système — par nœud »).
+
+### Piège `mergePageConfig` corrigé (découvert par Playwright)
+`mergePageConfig(null, …)` (nouveau utilisateur, aucun layout sauvegardé) renvoie **uniquement**
+le `defaultLayout` — l'ajout des widgets manquants (étape 3) ne s'exécute que quand un layout est
+**déjà sauvegardé**. Or le layout par défaut de la Vue d'ensemble est **codé en dur** (pas dérivé
+du catalogue, contrairement au Monitor nœud où `defaultStackLayout(catalog)` inclut tout) → le
+widget v3 serait **invisible pour les nouveaux utilisateurs**. Fix : `temp-nodes` ajouté dans
+`overviewDefaultLayout` v3 (fichier local au plugin — v2 inchangé) ; les layouts déjà sauvegardés
+reçoivent le widget en bas par le merge.
+
+### Partage / i18n / apiClient
+- `@prox4u/shared` : types `NodeTempPoint/Series/Response`, `SmartTempPoint/Series/Response`,
+  `ZfsArcPoint/Response`, `NodeHostHistoryPoint/Response` + helpers purs `zfsHitRatePct` +
+  `swapPct` (6 tests inclus) → **301 tests shared** (295 + 6)
+- i18n FR/EN : `vm.node.{temps,smartTemps,zfsArc,load,swap}.*` (titres, hints, états vides,
+  `load.l1/l5/l15`, `swap.used/pct/noSwap`, `smartHealth.{sectors,reallocated,pending,uncorrectable}`)
+  + `overview.tempNodes.*` — le reste réutilise `nodeSensors.*` existant
+- `apiClient.ts` : `fetchNodeTemps`, `fetchSmartTemps`, `fetchZfsArc`, `fetchNodeSystemHistory`
+
+### Déploiement runtime (validé)
+- Catalogue : `PUT /api/auth/catalog-sync` (12 ids) → `created: 2` ; **héritage** de
+  `globallyEnabled` de la famille de base → `hypervision_v3` activé (famille `hypervision` vraie),
+  `vm-view_v4` créé **désactivé** (famille `vm-view` fausse) → `PATCH /api/admin/modules/vm-view_v4`
+  `{globallyEnabled:true}`
+- Préférences comptes de test (A/B complet) : `PUT /api/auth/preferences` avec
+  `[hypervision_v2, hypervision_v3, vm-view_v2, vm-view_v3, vm-view_v4, node-sensors, storage,
+  proxmox-inventory, centreon-nsca]` — **sélection vide = rien de visible**
+  (`computeVisibleVersionIds` = autorisé ∩ sélection exacte)
+- Scopes user-config **inchangés** (`pages.nodeView`/`pages.vmView`/`pages.overview`) → les
+  layouts v3↔v4 sont partagés ; nouveaux widgets ajoutés par le merge
+
+### Vérifications effectuées
+- 4 endpoints en live (`proxmox`) : chips 50–56 °C (8 chips, 61 pts/1 h) · 3 disques 37–47 °C +
+  modèles (nvme0n1/nvme1n1 CT4000P310SSD8, sda TOSHIBA) · ARC 4,2/13,5 GiB `hitRatePct: null` ·
+  load1 ≈ 6–9 / nCpus 24 / swap 8,6 Go total ; `ProxSite1` (pas de capteurs) → `insufficientData`
+- **Playwright 34/34 PASS** : 6 widgets v4 rendus avec données réelles (CSV exportés et parsés :
+  8 chips distincts, 3 disques + modèles, hit rate vide, `n_cpus`=24 sur toute la série, swap
+  total constant) ; « Cœurs : 24 » ; états vides absents ; A/B v3 (6/6 widgets absents) +
+  v2 (monitor statique, 0 carte) ; overview v3 carte `temp-nodes` (proxmox ≈ 81 °C/20 capteurs —
+  amdgpu junction 88 °C live — 39 °C/3 disques, ProxSite1/2 « — ») + A/B v2 (carte absente) ;
+  test-user : 6 widgets visibles
+- `pnpm typecheck` (web) + `pnpm build` OK · 301 tests shared + 215 tests serveur
+
+### À faire (ProxMenux — données manquantes, hors périmètre)
+- **Latence réseau** (graphique ping ProxMenux) : plugin Telegraf `ping` à activer — nécessite
+  `CAP_NET_RAW` sur les agents (section commentée dans `deploiement/60-telegraf-nodes.sh`)
+- **GPU** : plugin `nvidia-smi` absent des agents (aucune carte NVIDIA sur le parc)
+
 ## ⏳ À faire
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
 TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète dans la skill
 **`skills/monitoring-proxmenux`**. **P0 livré** : Telegraf bare-metal sur les 3 nœuds Proxmox +
-plugin **`node-sensors` v1** (section « Fait » ci-dessus). Reste en P0 : **règles d'alarme**
+plugin **`node-sensors` v1** (section « Fait » ci-dessus) + **bibliothèque de widgets complétée**
+(7 graphiques ProxMenux portés dans `hypervision_v3`/`vm-view_v4` — section « Fait » ci-dessus ;
+restent latence ping + GPU, données non collectées). Reste en P0 : **règles d'alarme**
 (SMART critique, température > seuil effectif, unité échouée) dans `centreonnsca`. P1 quorum (donnée déjà pollée) ·
 P2 moteur d'alarmes v2 (hystérésis/suppression/ack) · P3 audit best-practices · P4 PBS +
 événements · P5 certificats + NTP.

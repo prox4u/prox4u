@@ -1,6 +1,6 @@
 ---
 name: vm-inventory
-description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Trois versions : v1 (id vm-view), v2 (vm-view_v2, + bouton « Console web » vers l'UI PVE, + détail nœud) et v3 (vm-view_v3, + monitors VM/nœud en grilles personnalisables par user — drag/resize/bibliothèque, persistance /api/user-config par VM et par nœud). Use when working on the vm-view plugin family (packages/web/src/plugins/vm-view/ ou vm-view_v2/ ou vm-view_v3/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O sections), or the /api/vm-config endpoint.
+description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Quatre versions : v1 (id vm-view), v2 (vm-view_v2, + bouton « Console web » vers l'UI PVE, + détail nœud), v3 (vm-view_v3, + monitors VM/nœud en grilles personnalisables par user — drag/resize/bibliothèque, persistance /api/user-config par VM et par nœud) et v4 (vm-view_v4, + 6 widgets Monitor nœud : températures chips/disques SMART, santé SMART, ZFS ARC, charge moyenne, swap). Use when working on the vm-view plugin family (packages/web/src/plugins/vm-view/, vm-view_v2/, vm-view_v3/ ou vm-view_v4/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O / temps / ZFS ARC / load / swap sections), or the /api/vm-config endpoint.
 ---
 
 # Inventaire VM — Base de connaissance
@@ -13,6 +13,7 @@ Page `/vms` : **inventaire des VMs et conteneurs LXC** du parc multi-endpoints, 
 - **v1** : id `vm-view`, version 0.1.0. Route `/vms` → VmViewPage. Menu `nav.vmView` (icône MonitorSmartphone), order 40. Flag : `VITE_USE_PLUGIN_VM_VIEW` (défaut ON). `init()` : log uniquement. (La famille s'appelait `vm-inventory` à l'origine — le skill porte encore ce nom ; l'id, les dossiers et le module shared sont `vm-view`.)
 - **v2** : id `vm-view_v2`, version 0.2.0 — même route/menu (même famille, §2.5 du skill `general`) + bouton « Console web » + détail nœud. Copie de la v1 ; différences fonctionnelles = le bouton console dans l'en-tête du panneau détail (`components/vm-detail.tsx`) + les pages détail plein écran (§9). La v1 reste intacte en rollback ; l'admin active la version à exposer (Administration → Versions).
 - **v3** : id `vm-view_v3`, version 0.3.0 — même périmètre que la v2 + **monitors VM et nœud en grilles personnalisables par user** (§10). Copie de la v2 ; seules différences = `components/vm-monitor.tsx` et `components/node-monitor.tsx` convertis en `WidgetGridLayout`. La v2 reste en rollback (`/vms?v=vm-view_v2`).
+- **v4** : id `vm-view_v4`, version 0.4.0 — même périmètre que la v3 + **bibliothèque du Monitor nœud complétée** : 6 nouveaux widgets (températures chips, températures disques SMART, santé disques, ZFS ARC, charge moyenne, swap — référence ProxMenux, §11). Copie de la v3 ; seule différence = `components/node-monitor.tsx`. La v3 reste en rollback (`/vms?v=vm-view_v3`).
 
 ## 2. Arborescence
 
@@ -107,6 +108,52 @@ Même périmètre que la v2 (tree/tableau/détails/console web inchangés — §
 - **Sources de données = celles de la v2, inchangées** (§8 : `vm_metrics`/`vm_fs`/`/api/vm-diskio`/`/api/vm-net` ; §9 : `/api/metrics?node=` + `/api/node-system` + réseau par interface) — seul le conteneur change (grille au lieu de pile de cartes).
 - **Validation livrée** : Playwright stage 2 (26 assertions) — deep-links `?vm=100` / `?node=proxmox%2Fproxmox`, sous-titres VM/nœud 4/4, drag → scope `vmView`/`nodeView` persistés, widgets dynamiques (20 cartes sur le nœud de test), persistance au retour.
 
-## 11. Hors périmètre
+## 11. `vm-view_v4` (v0.4.0) — Bibliothèque du Monitor nœud complétée (référence ProxMenux)
+
+Même périmètre que la v3 (§3 à §10 s'appliquent) ; seul **`components/node-monitor.tsx`** change :
+**6 nouveaux widgets** dans le catalogue (tous w12 h4, minH 3, sous-titre = nom du nœud, export
+CSV dans le slot `extra`) — port des graphiques manquants du dashboard ProxMenux, alimentés par
+**4 nouveaux endpoints serveur** (skill `node-sensors` §5) + le live existant `/api/node-sensors` :
+
+| id | Widget | Source | Corps |
+|---|---|---|---|
+| `temp-cpu` | Températures CPU & chips | `/api/node-temps` | `HostTempsBody` — une courbe par chip |
+| `smart-temps` | Températures disques (SMART) | `/api/smart-temps` | `SmartTempsBody` — une courbe par disque + modèle dans la légende, `markLine` seuil critique 80 °C |
+| `smart-health` | Santé disques (SMART) | `/api/node-sensors` (live) | `SmartHealthBody` — **table** (pas de graphe) : badge tri-state, temp (0 °C → « — »), usure NVMe % / secteurs (rouge si > 0), heures |
+| `zfs-arc` | ZFS ARC | `/api/zfs-arc` | `ZfsArcBody` — GiB (aire) + `markLine` ARC max + hit rate % axe droit **masquée si compteurs 0** |
+| `load` | Charge moyenne | `/api/node-system-history` | `LoadBody` — load 1/5/15 + rappel « Cœurs : N » |
+| `swap` | Swap | `/api/node-system-history` | `SwapBody` — utilisé (octets) + % axe droit ; état « Pas de swap configuré » si total = 0 |
+
+- **Hooks hoistés** (pattern `useNodeDiskio` — state + tick `REFRESH_MS` 60 s + effet sur
+  `[node, timeframe, tick]`) : `useNodeTemps`, `useSmartTemps`, `useZfsArc`, `useNodeHostHistory`
+  (un seul fetch pour load + swap), `useNodeSensorsLive` (sans timeframe — état courant, pour
+  `smart-health`). `load` et `swap` partagent `hostHistData` (2 widgets, 1 requête).
+- **`multiLineOption(ct, tf, times, series, opts)`** — helper local générique de graphe
+  multi-séries (axe gauche format libre + axe droit % optionnel pour `yAxisIndex: 1` +
+  `markLine` de référence portée par la 1re série + `tooltipFormatter` custom multi-unités) ;
+  `multiPalette` (6 couleurs : `ct.temp/cpu/ram/disk/netIn/netOut`) + `fmtTempTooltip`.
+- **Ordre catalogue** : après `net`, **avant** les `netif-*` dynamiques (les ids dynamiques
+  doivent rester à la fin pour la stabilité du gate `ready`).
+- **Layouts** : scopes user-config **inchangés** (`nodeView « <endpointId>/<nomDuNœud> »`) →
+  v3↔v4 **partagent les layouts** ; les 6 nouveaux widgets sont ajoutés **en bas par le merge**
+  (nouvelle version du code = nouveaux ids dans le catalogue ; `defaultStackLayout` les inclut
+  pour les utilisateurs sans layout sauvegardé). Piège `mergePageConfig(null, …)` : l'ajout des
+  widgets manquants ne s'exécute qu'avec un layout **déjà sauvegardé** — ici sans conséquence
+  car le default layout du Monitor nœud est **dérivé du catalogue** (contrairement à la Vue
+  d'ensemble, skill `hypervision` §10).
+- **Exports CSV** : `exportNodeTempsCsv` / `exportSmartTempsCsv` / `exportZfsArcCsv` /
+  `exportHostHistoryCsv(data, node, tf, 'load' | 'swap')` (scope = colonnes) /
+  `exportSmartHealthCsv` (état courant, une ligne par disque).
+- **i18n** : `vm.node.{temps,smartTemps,zfsArc,load,swap}.*` (titres, hints, états vides,
+  `load.l1/l5/l15`, `swap.used/pct/noSwap`, `smartHealth.{sectors,reallocated,pending,uncorrectable}`)
+  — le widget santé réutilise `nodeSensors.{smart,noSmart,healthy,unhealthy,unknown,wear}` et
+  `overview.system.cores`.
+- **Hors périmètre (ProxMenux)** : latence réseau (plugin Telegraf `ping` — `CAP_NET_RAW`) et
+  GPU (plugin `nvidia-smi` absent) — données non collectées.
+- **Validation livrée** : Playwright 34/34 — 6 widgets rendus avec données réelles (CSV exportés
+  et parsés : 8 chips, 3 disques + modèles, hit rate vide, `n_cpus`=24, swap total constant),
+  A/B v3 (6/6 absents) + v2 (statique), test-user (6/6 visibles).
+
+## 12. Hors périmètre
 - Actions power (start/stop/reboot) — reportées (« plus tard »), token PVE écriture requis.
 - Création/migration/suppression de VM.

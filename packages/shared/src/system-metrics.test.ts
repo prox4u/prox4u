@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPhysicalDevice, mapperLabel, parsePveMapperName } from './system-metrics.js';
+import { isPhysicalDevice, mapperLabel, parsePveMapperName, swapPct, zfsHitRatePct } from './system-metrics.js';
 
 describe('parsePveMapperName', () => {
   it('décode un LV QEMU (vg simple)', () => {
@@ -81,5 +81,39 @@ describe('isPhysicalDevice', () => {
     expect(isPhysicalDevice('sr0')).toBe(false);
     expect(isPhysicalDevice('ram0')).toBe(false);
     expect(isPhysicalDevice('zram0')).toBe(false);
+  });
+});
+
+describe('zfsHitRatePct (Monitor nœud v4 — ZFS ARC)', () => {
+  it('compute le hit rate depuis les deltas de compteurs', () => {
+    expect(zfsHitRatePct(950, 50)).toBeCloseTo(95, 5);
+    expect(zfsHitRatePct(10, 10)).toBeCloseTo(50, 5);
+  });
+
+  it('retourne null sur total nul (compteurs à 0 — pas de pool ZFS actif)', () => {
+    expect(zfsHitRatePct(0, 0)).toBeNull();
+  });
+
+  it('retourne null sur delta négatif (reset de counter au reboot)', () => {
+    expect(zfsHitRatePct(-1, 5)).toBeNull();
+    expect(zfsHitRatePct(5, -1)).toBeNull();
+  });
+
+  it('retourne null si un delta est manquant', () => {
+    expect(zfsHitRatePct(null, 5)).toBeNull();
+    expect(zfsHitRatePct(5, null)).toBeNull();
+  });
+});
+
+describe('swapPct (Monitor nœud v4 — swap)', () => {
+  it('compute le % utilisé', () => {
+    expect(swapPct(50, 100)).toBeCloseTo(50, 5);
+    expect(swapPct(0, 100)).toBe(0);
+  });
+
+  it('retourne null si pas de swap (total = 0) ou mesure manquante', () => {
+    expect(swapPct(0, 0)).toBeNull();
+    expect(swapPct(null, 100)).toBeNull();
+    expect(swapPct(50, null)).toBeNull();
   });
 });

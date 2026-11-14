@@ -1,10 +1,12 @@
 import { hypervisionPlugin } from '../../plugins/hypervision';
 import { hypervisionPluginV2 } from '../../plugins/hypervision_v2';
+import { hypervisionPluginV3 } from '../../plugins/hypervision_v3';
 import { networkPlugin } from '../../plugins/network';
 import { storagePlugin } from '../../plugins/storage';
 import { vmViewPlugin } from '../../plugins/vm-view';
 import { vmViewPluginV2 } from '../../plugins/vm-view_v2';
 import { vmViewPluginV3 } from '../../plugins/vm-view_v3';
+import { vmViewPluginV4 } from '../../plugins/vm-view_v4';
 import { proxmoxInventoryPlugin } from '../../plugins/proxmox-inventory';
 import { centreonNscaPlugin } from '../../plugins/centreon-nsca';
 import { nodeSensorsPlugin } from '../../plugins/node-sensors';
@@ -21,12 +23,14 @@ import type { Plugin } from './types';
  * versions ; la plus récente porte la route canonique de la famille.
  */
 export const PLUGINS: Plugin[] = [
-  // Famille hypervision : v1 (rollback) + v2 (vue d'ensemble personnalisable par user).
-  ...(FEATURES.USE_PLUGIN_HYPERVISION ? [hypervisionPlugin, hypervisionPluginV2] : []),
+  // Famille hypervision : v1 (rollback) + v2 (vue d'ensemble personnalisable par user)
+  // + v3 (bibliothèque complétée : widget températures par nœud, référence ProxMenux).
+  ...(FEATURES.USE_PLUGIN_HYPERVISION ? [hypervisionPlugin, hypervisionPluginV2, hypervisionPluginV3] : []),
   ...(FEATURES.USE_PLUGIN_NETWORK ? [networkPlugin] : []),
   ...(FEATURES.USE_PLUGIN_STORAGE ? [storagePlugin] : []),
-  // Famille vm-view : v1 (rollback) + v2 (console web PVE) + v3 (monitors personnalisables par user).
-  ...(FEATURES.USE_PLUGIN_VM_VIEW ? [vmViewPlugin, vmViewPluginV2, vmViewPluginV3] : []),
+  // Famille vm-view : v1 (rollback) + v2 (console web PVE) + v3 (monitors personnalisables par user)
+  // + v4 (bibliothèque complétée : 6 widgets Monitor nœud, référence ProxMenux).
+  ...(FEATURES.USE_PLUGIN_VM_VIEW ? [vmViewPlugin, vmViewPluginV2, vmViewPluginV3, vmViewPluginV4] : []),
   // Famille proxmox-inventory : inventaire consolidé (une machine par ligne + export).
   ...(FEATURES.USE_PLUGIN_PROXMOX_INVENTORY ? [proxmoxInventoryPlugin] : []),
   // Famille centreon-nsca : alarmes & checks passifs NSCA (règles → Centreon).

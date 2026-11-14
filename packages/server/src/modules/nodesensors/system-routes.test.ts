@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { NodeDiskioResponse, NodeNetResponse, NodeSystemResponse } from '@prox4u/shared';
+import type { NodeDiskioResponse, NodeHostHistoryResponse, NodeNetResponse, NodeSystemResponse, NodeTempsResponse, SmartTempsResponse, ZfsArcResponse } from '@prox4u/shared';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
-import { buildNodeNetIfaces, diskioRateSql, diskioRowsToDevices, netRateSql, nodeEndpoint, parsePveFwIface, registerNodeSystemRoutes } from './system-routes.js';
+import { buildNodeNetIfaces, diskioRateSql, diskioRowsToDevices, hostHistoryMemSql, hostHistorySystemSql, mergeHostHistory, netRateSql, nodeEndpoint, parsePveFwIface, registerNodeSystemRoutes, smartTempsRowsToSeries, smartTempsSql, tempsRowsToSeries, tempsSql, zfsArcRowsToPoints, zfsArcSql } from './system-routes.js';
 
 const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
@@ -451,5 +451,333 @@ describe('nodeEndpoint', () => {
     const ep = { id: 'ep1', source: {} } as unknown as EndpointRuntime;
     const ctx = makeCtx('/tmp/nonexist', {}, undefined, [ep]);
     expect(nodeEndpoint(ctx, makePoller(['proxmox']), 'proxmox')).toBe(ep);
+  });
+});
+
+// --- Monitor nœud v4 : historiques de jauges hôte (référence ProxMenux) -----------------------
+
+describe('tempsSql / tempsRowsToSeries', () => {
+  it('contrat SQL : nœud, bucket du tf, max par (chip, bucket), temp_input non null', () => {
+    const sql = tempsSql("node = 'proxmox'", '5 minutes', '24 hours');
+    expect(sql).toContain("node = 'proxmox'");
+    expect(sql).toContain("date_bin(INTERVAL '5 minutes', time)");
+    expect(sql).toContain("INTERVAL '24 hours'");
+    expect(sql).toContain('max(temp_input)');
+    expect(sql).toContain('GROUP BY chip, t');
+  });
+
+  it('regroupe par chip (max du chip par bucket), trie chip puis temps ; lignes invalides écartées', () => {
+    const series = tempsRowsToSeries([
+      { chip: 'k10temp', t: '2026-11-13T12:05:00Z', temp: 61 },
+      { chip: 'k10temp', t: '2026-11-13T12:00:00Z', temp: 59 },
+      { chip: 'amdgpu', t: '2026-11-13T12:00:00Z', temp: 48 },
+      { chip: '', t: '2026-11-13T12:00:00Z', temp: 30 },
+      { chip: 'k10temp', t: '2026-11-13T12:00:00Z', temp: null },
+    ]);
+    expect(series.map((s) => s.chip)).toEqual(['amdgpu', 'k10temp']);
+    expect(series[1].points).toEqual([
+      { t: Date.parse('2026-11-13T12:00:00Z') / 1000, temp: 59 },
+      { t: Date.parse('2026-11-13T12:05:00Z') / 1000, temp: 61 },
+    ]);
+  });
+});
+
+describe('smartTempsSql / smartTempsRowsToSeries', () => {
+  it('contrat SQL : temp_c > 0 (disques sans sonde exclus), max par (device, bucket)', () => {
+    const sql = smartTempsSql("node = 'proxmox'", '1 hour', '7 days');
+    expect(sql).toContain('temp_c > 0');
+    expect(sql).toContain("INTERVAL '1 hour'");
+    expect(sql).toContain('max(temp_c)');
+    expect(sql).toContain('GROUP BY device, t');
+  });
+
+  it('une série par disque (model null — joint ensuite) ; 0 °C et lignes vides écartés', () => {
+    const series = smartTempsRowsToSeries([
+      { device: 'nvme0n1', t: '2026-11-13T12:00:00Z', temp: 36 },
+      { device: 'sda', t: '2026-11-13T12:00:00Z', temp: 35 },
+      { device: 'nvme0n1', t: '2026-11-13T12:00:00Z', temp: 0 },
+      { device: '', t: '2026-11-13T12:00:00Z', temp: 30 },
+    ]);
+    expect(series.map((s) => s.device)).toEqual(['nvme0n1', 'sda']);
+    expect(series[0].model).toBeNull();
+    expect(series[0].points[0].temp).toBe(36);
+  });
+});
+
+describe('zfsArcSql / zfsArcRowsToPoints', () => {
+  it('contrat SQL : jauges en max, compteurs en min/max du bucket (pas de LAG)', () => {
+    const sql = zfsArcSql("node = 'proxmox'", '5 minutes', '24 hours');
+    expect(sql).toContain('max(arcstats_c)');
+    expect(sql).toContain('max(arcstats_c_max)');
+    expect(sql).toContain('max(arcstats_hits)');
+    expect(sql).toContain('min(arcstats_hits)');
+    expect(sql).toContain('min(arcstats_misses)');
+    expect(sql).toContain("GROUP BY t");
+    expect(sql).not.toContain('LAG');
+  });
+
+  it('hit rate depuis les deltas du bucket ; null si compteurs à 0 ou reset (delta négatif)', () => {
+    const pts = zfsArcRowsToPoints([
+      { t: '2026-11-13T12:00:00Z', size_bytes: 4e9, max_bytes: 13e9, hmax: 1000, hmin: 0, mmax: 100, mmin: 0 },
+      { t: '2026-11-13T12:05:00Z', size_bytes: 4.1e9, max_bytes: 13e9, hmax: 0, hmin: 0, mmax: 0, mmin: 0 },
+      { t: '2026-11-13T12:10:00Z', size_bytes: null, max_bytes: 13e9, hmax: 5, hmin: 10, mmax: 2, mmin: 0 },
+    ]);
+    expect(pts[0].hitRatePct).toBeCloseTo(90.909, 2);
+    expect(pts[0].sizeBytes).toBe(4e9);
+    expect(pts[1].hitRatePct).toBeNull(); // 0/0 — compteurs à 0
+    expect(pts[2].hitRatePct).toBeNull(); // delta négatif (reset)
+    expect(pts[2].sizeBytes).toBeNull();
+  });
+});
+
+describe('hostHistory SQL / mergeHostHistory', () => {
+  it('contrat SQL : max du bucket pour la charge ; max(total)/min(free) pour le swap', () => {
+    expect(hostHistorySystemSql("node = 'n'", '1 day', '30 days')).toContain('max(load1)');
+    expect(hostHistorySystemSql("node = 'n'", '1 day', '30 days')).toContain('max(n_cpus)');
+    expect(hostHistoryMemSql("node = 'n'", '1 day', '30 days')).toContain('max(swap_total)');
+    expect(hostHistoryMemSql("node = 'n'", '1 day', '30 days')).toContain('min(swap_free)');
+  });
+
+  it('union des temps ; sources indépendantes (table absente → champs null, pas l’autre)', () => {
+    const pts = mergeHostHistory(
+      [
+        { t: '2026-11-13T12:00:00Z', load1: 2.1, load5: 1.5, load15: 1.2, ncpus: 24 },
+        { t: '2026-11-13T12:01:00Z', load1: 3.0, load5: 1.8, load15: 1.3, ncpus: 24 },
+      ],
+      [{ t: '2026-11-13T12:00:00Z', swap_total: 8e9, swap_free_min: 2e9 }],
+    );
+    expect(pts).toHaveLength(2);
+    expect(pts[0].load1).toBe(2.1);
+    expect(pts[0].swapUsedBytes).toBe(6e9);
+    expect(pts[0].swapTotalBytes).toBe(8e9);
+    expect(pts[1].load1).toBe(3.0);
+    expect(pts[1].swapUsedBytes).toBeNull(); // pas de mesure mem sur ce bucket
+    expect(pts[1].swapTotalBytes).toBeNull();
+  });
+
+  it('swap : total = 0 (pas de swap) → utilisé null ; free > total (incohérent) → null', () => {
+    const pts = mergeHostHistory(
+      [],
+      [
+        { t: '2026-11-13T12:00:00Z', swap_total: 0, swap_free_min: 0 },
+        { t: '2026-11-13T12:01:00Z', swap_total: 4e9, swap_free_min: 5e9 },
+      ],
+    );
+    expect(pts[0].swapUsedBytes).toBeNull();
+    expect(pts[0].swapTotalBytes).toBe(0);
+    expect(pts[1].swapUsedBytes).toBeNull();
+  });
+});
+
+describe('GET /api/node-temps', () => {
+  let dir: string;
+  let app: FastifyInstance;
+  let sqlLog: string[];
+
+  const sensorRows = [
+    { chip: 'k10temp', t: '2026-11-13T12:00:00Z', temp: 55 },
+    { chip: 'k10temp', t: '2026-11-13T12:05:00Z', temp: 58 },
+  ];
+
+  beforeEach(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'node-temps-'));
+    sqlLog = [];
+    app = Fastify();
+    registerNodeSystemRoutes(app, makeCtx(dir, { 'FROM sensors': () => sensorRows }, sqlLog), makePoller());
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('400 sans node ou timeframe invalide', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/node-temps' })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'GET', url: '/api/node-temps?node=n&timeframe=decade' })).statusCode).toBe(400);
+  });
+
+  it('séries par chip + source influx ; contrat SQL (nœud, bucket day)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/node-temps?node=proxmox&timeframe=day' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as NodeTempsResponse;
+    expect(body.source).toBe('influx');
+    expect(body.series[0].chip).toBe('k10temp');
+    expect(body.series[0].points).toHaveLength(2);
+    const sql = sqlLog.find((s) => s.includes('FROM sensors'));
+    expect(sql).toContain("node = 'proxmox'");
+    expect(sql).toContain("INTERVAL '5 minutes'");
+  });
+
+  it('table sensors absente (agent non déployé) → insufficientData', async () => {
+    const app2 = Fastify();
+    registerNodeSystemRoutes(
+      app2,
+      makeCtx(dir, { 'FROM sensors': () => { throw new Error("table 'public.iox.sensors' not found"); } }),
+      makePoller(),
+    );
+    await app2.ready();
+    const res = await app2.inject({ method: 'GET', url: '/api/node-temps?node=proxmox&timeframe=day' });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as NodeTempsResponse).source).toBe('insufficientData');
+    await app2.close();
+  });
+});
+
+describe('GET /api/smart-temps', () => {
+  let dir: string;
+  let app: FastifyInstance;
+
+  const smartRows = [
+    { device: 'nvme0n1', t: '2026-11-13T12:00:00Z', temp: 36 },
+    { device: 'nvme1n1', t: '2026-11-13T12:00:00Z', temp: 37 },
+  ];
+  const modelRows = [
+    { device: 'nvme1n1', model: 'CT4000P310SSD8', time: '2026-11-13T12:00:00Z' },
+    { device: 'nvme0n1', model: 'CT4000P310SSD8', time: '2026-11-13T11:59:00Z' },
+  ];
+
+  beforeEach(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'smart-temps-'));
+    app = Fastify();
+    registerNodeSystemRoutes(
+      app,
+      makeCtx(dir, {
+        'max(temp_c)': () => smartRows,
+        'SELECT device, model, time': () => modelRows,
+      }),
+      makePoller(),
+    );
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('séries par disque + modèle joint (dernier point 1 h) ; 400 params', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/smart-temps?node=n&timeframe=decade' })).statusCode).toBe(400);
+    const res = await app.inject({ method: 'GET', url: '/api/smart-temps?node=proxmox&timeframe=week' });
+    const body = res.json() as SmartTempsResponse;
+    expect(body.source).toBe('influx');
+    expect(body.series.map((s) => s.device)).toEqual(['nvme0n1', 'nvme1n1']);
+    expect(body.series.every((s) => s.model === 'CT4000P310SSD8')).toBe(true);
+  });
+
+  it('aucun disque à temp > 0 → insufficientData (pas de requête modèle)', async () => {
+    const app2 = Fastify();
+    registerNodeSystemRoutes(app2, makeCtx(dir, { 'max(temp_c)': () => [] }), makePoller());
+    await app2.ready();
+    const res = await app2.inject({ method: 'GET', url: '/api/smart-temps?node=proxmox&timeframe=day' });
+    expect((res.json() as SmartTempsResponse).source).toBe('insufficientData');
+    await app2.close();
+  });
+});
+
+describe('GET /api/zfs-arc', () => {
+  let dir: string;
+  let app: FastifyInstance;
+
+  const zfsRows = [
+    { t: '2026-11-13T12:00:00Z', size_bytes: 4e9, max_bytes: 13e9, hmax: 0, hmin: 0, mmax: 0, mmin: 0 },
+  ];
+
+  beforeEach(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'zfs-arc-'));
+    app = Fastify();
+    registerNodeSystemRoutes(app, makeCtx(dir, { 'FROM zfs': () => zfsRows }), makePoller());
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('points ARC ; hit rate null (compteurs à 0 sur ce parc) ; 400 params', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/zfs-arc?node=n&timeframe=decade' })).statusCode).toBe(400);
+    const res = await app.inject({ method: 'GET', url: '/api/zfs-arc?node=proxmox&timeframe=month' });
+    const body = res.json() as ZfsArcResponse;
+    expect(body.source).toBe('influx');
+    expect(body.points[0].sizeBytes).toBe(4e9);
+    expect(body.points[0].maxBytes).toBe(13e9);
+    expect(body.points[0].hitRatePct).toBeNull();
+  });
+
+  it('table zfs absente (module ZFS non chargé) → insufficientData', async () => {
+    const app2 = Fastify();
+    registerNodeSystemRoutes(app2, makeCtx(dir, { 'FROM zfs': () => { throw new Error('not found'); } }), makePoller());
+    await app2.ready();
+    const res = await app2.inject({ method: 'GET', url: '/api/zfs-arc?node=proxmox&timeframe=day' });
+    expect((res.json() as ZfsArcResponse).source).toBe('insufficientData');
+    await app2.close();
+  });
+});
+
+describe('GET /api/node-system-history', () => {
+  let dir: string;
+  let app: FastifyInstance;
+
+  const sysRows = [
+    { t: '2026-11-13T12:00:00Z', load1: 7.3, load5: 5.1, load15: 4.0, ncpus: 24 },
+  ];
+  const memRows = [
+    { t: '2026-11-13T12:00:00Z', swap_total: 8e9, swap_free_min: 2e9 },
+  ];
+
+  beforeEach(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'host-hist-'));
+    app = Fastify();
+    registerNodeSystemRoutes(
+      app,
+      makeCtx(dir, { 'FROM system': () => sysRows, 'FROM mem': () => memRows }),
+      makePoller(),
+    );
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('fusion load + swap ; 400 params', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/node-system-history?node=n&timeframe=decade' })).statusCode).toBe(400);
+    const res = await app.inject({ method: 'GET', url: '/api/node-system-history?node=proxmox&timeframe=day' });
+    const body = res.json() as NodeHostHistoryResponse;
+    expect(body.source).toBe('influx');
+    expect(body.points[0]).toMatchObject({ load1: 7.3, nCpus: 24, swapUsedBytes: 6e9, swapTotalBytes: 8e9 });
+  });
+
+  it('table system absente → swap seule (indépendance des sources)', async () => {
+    const app2 = Fastify();
+    registerNodeSystemRoutes(
+      app2,
+      makeCtx(dir, {
+        'FROM system': () => { throw new Error('not found'); },
+        'FROM mem': () => memRows,
+      }),
+      makePoller(),
+    );
+    await app2.ready();
+    const res = await app2.inject({ method: 'GET', url: '/api/node-system-history?node=proxmox&timeframe=day' });
+    const body = res.json() as NodeHostHistoryResponse;
+    expect(body.source).toBe('influx');
+    expect(body.points[0].load1).toBeNull();
+    expect(body.points[0].swapUsedBytes).toBe(6e9);
+    await app2.close();
+  });
+
+  it('deux tables absentes → insufficientData', async () => {
+    const app2 = Fastify();
+    registerNodeSystemRoutes(
+      app2,
+      makeCtx(dir, {
+        'FROM system': () => { throw new Error('not found'); },
+        'FROM mem': () => { throw new Error('not found'); },
+      }),
+      makePoller(),
+    );
+    await app2.ready();
+    const res = await app2.inject({ method: 'GET', url: '/api/node-system-history?node=proxmox&timeframe=day' });
+    expect((res.json() as NodeHostHistoryResponse).source).toBe('insufficientData');
+    await app2.close();
   });
 });
