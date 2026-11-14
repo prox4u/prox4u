@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Server } from 'lucide-react';
 import { ApiError } from '../../lib/auth-api';
 import { useAuth } from '../../store/auth';
 import { Button } from '../ui/button';
@@ -82,9 +81,8 @@ export function LoginCard() {
   return (
     <div className="flex w-full max-w-sm flex-col gap-6 rounded-2xl border bg-card p-8 shadow-xl">
       <div className="flex flex-col items-center gap-3 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-md shadow-indigo-500/30">
-          <Server className="h-6 w-6 text-white" />
-        </div>
+        {/* Bandeau wordmark Prox4u (fond noir intégré à l'image) */}
+        <img src="/images/logo-wordmark.webp" alt="Prox4u" className="h-10" />
         <div>
           <h1 className="text-lg font-semibold tracking-tight">{t('auth.login.title')}</h1>
           <p className="mt-1 text-xs text-muted-foreground">{t('auth.login.subtitle')}</p>

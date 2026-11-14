@@ -15,8 +15,25 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <LoginCard />
+    /*
+     * Page de connexion « brandée » : toujours en mode sombre (classe `dark`
+     * locale — le robot analyste et le wordmark sont sur fond noir, l'identité
+     * de marque reste cohérente quel que soit le thème de l'app).
+     * Split-screen : formulaire à gauche, robot analyste à droite (≥ lg).
+     */
+    <div className="dark flex min-h-screen bg-background">
+      <div className="flex flex-1 items-center justify-center p-4">
+        <LoginCard />
+      </div>
+      <div className="relative hidden lg:block lg:w-[46%]">
+        <img
+          src="/images/robot-analyst.webp"
+          alt=""
+          aria-hidden
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-background via-background/30 to-transparent" />
+      </div>
     </div>
   );
 }

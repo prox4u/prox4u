@@ -1,5 +1,4 @@
 import { useTranslation } from 'react-i18next';
-import { Server } from 'lucide-react';
 import { useDashboard } from '../../core/data/dashboard';
 import { PluginMenu } from '../../core/ui/PluginMenu';
 
@@ -10,9 +9,14 @@ export function Sidebar() {
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r bg-card transition-colors">
       <div className="flex h-14 items-center gap-2.5 border-b px-4">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 shadow-md shadow-indigo-500/30">
-          <Server className="h-4 w-4 text-white" />
-        </div>
+        {/* Emblème Prox4u sur fond blanc : les parties noires du bouclier
+            restent visibles en thème sombre comme en thème clair. */}
+        <img
+          src="/images/logo-emblem.webp"
+          alt=""
+          aria-hidden
+          className="h-8 w-8 rounded-lg border border-border bg-white"
+        />
         <div className="text-sm font-semibold tracking-tight">{t('app.title')}</div>
       </div>
 
@@ -25,6 +29,16 @@ export function Sidebar() {
          */}
         <PluginMenu />
       </nav>
+
+      {/* Mascotte Prox4u — sous le menu, au-dessus de l'indicateur LIVE */}
+      <div className="px-3 pb-3">
+        <img
+          src="/images/robot-cosy-sidebar.webp"
+          alt=""
+          aria-hidden
+          className="h-auto w-full rounded-lg border border-border"
+        />
+      </div>
 
       <div className="flex items-center gap-1.5 border-t p-3 text-[11px] tracking-wide text-muted-foreground">
         <span className={`h-1.5 w-1.5 rounded-full ${wsConnected ? 'animate-pulse bg-ok' : 'bg-crit'}`} />
