@@ -1929,6 +1929,10 @@ reçoivent le widget en bas par le merge.
 
 ## ⏳ À faire
 
+### À tester / à aborder
+- [ ] **Module « Alarmes & Centreon » (centreon-nsca)** : pas encore testé de bout en bout — le daemon NSCA n'est pas installé sur cet environnement (seul le client `send_nsca` l'est) → la réception côté Centreon n'est pas encore validée (script `scripts/nsca-test.sh` fourni).
+- [ ] **Gestion des utilisateurs** : pas encore abordée.
+
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
 TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète dans la skill
 **`skills/monitoring-proxmenux`**. **P0 livré** : Telegraf bare-metal sur les 3 nœuds Proxmox +
