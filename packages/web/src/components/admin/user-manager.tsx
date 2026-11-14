@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, KeyRound, Plus, UserCheck, UserX } from 'lucide-react';
+import { ChevronDown, KeyRound, Lock, LockOpen, Plus } from 'lucide-react';
 import type { PublicUser, Role } from '@prox4u/shared';
 import { adminApi, type AdminGroup } from '../../lib/auth-api';
 import { useAuth } from '../../store/auth';
@@ -16,9 +16,11 @@ interface Props {
 
 /**
  * Gestion des utilisateurs : création (mdp initial forçant le changement),
- * activation/désactivation, réinitialisation du mdp, affectation aux groupes.
- * Garde-fou anti-verrouillage : un admin ne peut pas se désactiver ni se
- * dégrader lui-même (boutons désactivés + refus serveur).
+ * **verrouillage/déverrouillage** (cadenas — `active: false` : le login est
+ * refusé en 403 `disabled` ET les sessions actives sont invalidées
+ * immédiatement au prochain appel API), réinitialisation du mdp, affectation
+ * aux groupes. Garde-fou anti-verrouillage : un admin ne peut pas se
+ * verrouiller ni se dégrader lui-même (boutons désactivés + refus serveur).
  */
 export function UserManager({ users, groups, onDone }: Props) {
   const { t } = useTranslation();
@@ -229,7 +231,7 @@ function UserRow({
   }
 
   // Garde-fou anti-verrouillage (miroir du refus serveur) : un admin ne peut
-  // pas se désactiver ni se dégrader lui-même.
+  // pas se verrouiller ni se dégrader lui-même.
   const canDeactivate = !(isSelf && user.active);
   const canToggleRole = !(isSelf && user.role === 'admin');
 
@@ -266,7 +268,7 @@ function UserRow({
               onClick={() => void patch({ active: !user.active })}
               title={t(user.active ? 'admin.users.deactivate' : 'admin.users.activate')}
             >
-              {user.active ? <UserX className="h-3.5 w-3.5 text-warn" /> : <UserCheck className="h-3.5 w-3.5 text-ok" />}
+              {user.active ? <Lock className="h-3.5 w-3.5 text-warn" /> : <LockOpen className="h-3.5 w-3.5 text-ok" />}
             </Button>
             <Button
               variant="ghost"

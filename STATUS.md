@@ -1759,6 +1759,63 @@ identifiants stables (vmid / nom de nœud), jamais par libellé.
 
 ---
 
+## ✅ Fait — Verrouillage de comptes (cadenas) + comptes de test dédiés + règle « ne pas modifier les mdp » (livré, validé API — **commité**)
+
+Contexte : lors des vérifications Playwright de la personnalisation d'interface, les mdp
+des comptes `admin` et `jerome` ont été **écrasés** par des mdp de test (hachage
+argon2id = un seul sens, pas de backup de `data/auth.json` → **irrécupérables**).
+Demande utilisateur : (1) le documenter pour que ça ne se reproduise plus, (2) des
+comptes de test dédiés, (3) un bouton « lock » dans la gestion des comptes.
+
+### Verrouillage de comptes (cadenas)
+- La mécanique existait déjà côté serveur (`active: false` → login **403 `disabled`** +
+  **sessions actives invalidées immédiatement** : le guard renvoie 401 `no-session` et
+  détruit la session au prochain appel API) — ce qui manquait = la **visibilité**.
+- `user-manager.tsx` : le toggle activation/désactivation (icône discrète
+  UserX/UserCheck, tooltip « Désactiver/Activer ») est devenu un bouton **cadenas**
+  explicite : `Lock` (verrouiller) / `LockOpen` (déverrouiller) + badge d'état
+  « **Verrouillé** » (crit) au lieu de « Désactivé » + message de login
+  « **Compte verrouillé — contactez un administrateur** » (fr/en).
+- Invariant conservé : un admin ne peut pas se verrouiller ni se dégrader lui-même
+  (bouton désactivé + refus serveur `self-modification`).
+
+### Comptes de test dédiés (créés, documentés dans skill `general` §11)
+| Compte | Rôle | Mot de passe | Usage |
+|---|---|---|---|
+| `test-admin` | admin | `Prox4u-TestAdmin-2026` | tests nécessitant le rôle admin (gestion users, catalogue, …) |
+| `test-user` | user | `Prox4u-TestUser-2026` | tests utilisateur classique (+ bac à sable verrouillage) |
+
+- `mustChangePassword=false` sur les deux (créés via `POST /api/admin/users`, puis flag
+  passé à false dans `data/auth.json` + restart — `createUser` force `true` et aucun
+  endpoint ne le lève). **Toute vérification automatisée (Playwright/curl) utilise ces
+  comptes, jamais `admin`/`jerome`.**
+
+### Règle documentée (skills `general` §11 + `operations` §7)
+- **Ne JAMAIS modifier les mots de passe des utilisateurs existants pour tester** —
+  argon2id un seul sens + `data/auth.json` sans backup = mdp perdu.
+- Dépannage ajouté : 429 « Trop de tentatives échouées » = throttle 5 échecs/15 min
+  **en mémoire** → restart du service = déblocage immédiat ; 403 « Compte verrouillé »
+  → déverrouillage par un admin.
+
+### Vérifications effectuées
+- Tests shared (295) + server (196) verts, typecheck web propre, build
+  (`index-Bq-v8Agf.js`).
+- **API (curl)** : login test-admin 200 · login test-user 200 · `PATCH active=false`
+  sur test-user → login **403 `disabled`** · `PATCH active=true` → login 200.
+
+### Pièges rencontrés (corrigés — ne pas réintroduire)
+- **`data/auth.json` est la source de vérité en mémoire** : l'éditer à chaud (serveur
+  tournant) n'a aucun effet — le store charge au boot et ré-écrit le fichier à chaque
+  mutation. Édition = stop serveur → fichier → start (ou API).
+- **`createUser` force `mustChangePassword: true`** (sans flag d'entrée ni endpoint de
+  reset) — un compte créé par l'API ne peut pas être utilisé tel quel en test sans le
+  passage par le forçage ou l'édition du fichier.
+- **Throttle login en mémoire** : 5 échecs de mdp (même en testant les bons mdp après
+  des erreurs) bloquent 15 min par identifiant → un restart du service lève tout
+  compteur (utile aussi pour « débloquer » un user après des essais ratés).
+
+---
+
 ## ⏳ À faire
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
