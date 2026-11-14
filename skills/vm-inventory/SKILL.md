@@ -1,6 +1,6 @@
 ---
 name: vm-inventory
-description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Deux versions : v1 (id vm-inventory) et v2 (vm-inventory_v2, + bouton « Console web » vers l'UI PVE, + détail nœud). Use when working on the vm-inventory plugin (packages/web/src/plugins/vm-inventory/ ou vm-inventory_v2/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O sections), or the /api/vm-config endpoint.
+description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Trois versions : v1 (id vm-view), v2 (vm-view_v2, + bouton « Console web » vers l'UI PVE, + détail nœud) et v3 (vm-view_v3, + monitors VM/nœud en grilles personnalisables par user — drag/resize/bibliothèque, persistance /api/user-config par VM et par nœud). Use when working on the vm-view plugin family (packages/web/src/plugins/vm-view/ ou vm-view_v2/ ou vm-view_v3/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O sections), or the /api/vm-config endpoint.
 ---
 
 # Inventaire VM — Base de connaissance
@@ -10,8 +10,9 @@ Page `/vms` : **inventaire des VMs et conteneurs LXC** du parc multi-endpoints, 
 > Architecture globale : voir le skill `general`. Contrat API : skill `api` (`/api/vm-config`). Fonctions pures : skill `shared` (`vm-inventory.ts`).
 
 ## 1. Manifest (`index.ts`)
-- **v1** : id `vm-inventory`, version 0.1.0. Route `/vms` → VmInventoryPage. Menu `nav.vmInventory` (icône MonitorSmartphone), order 40. Flag : `VITE_USE_PLUGIN_VM_INVENTORY` (défaut ON). `init()` : log uniquement.
-- **v2** : id `vm-inventory_v2`, version 0.2.0 — même route/menu (même famille, §2.5 du skill `general`) + bouton « Console web ». Copie de la v1 ; seule différence fonctionnelle = le bouton console dans l'en-tête du panneau détail (`components/vm-detail.tsx`). La v1 reste intacte en rollback ; l'admin active la version à exposer (Administration → Versions).
+- **v1** : id `vm-view`, version 0.1.0. Route `/vms` → VmViewPage. Menu `nav.vmView` (icône MonitorSmartphone), order 40. Flag : `VITE_USE_PLUGIN_VM_VIEW` (défaut ON). `init()` : log uniquement. (La famille s'appelait `vm-inventory` à l'origine — le skill porte encore ce nom ; l'id, les dossiers et le module shared sont `vm-view`.)
+- **v2** : id `vm-view_v2`, version 0.2.0 — même route/menu (même famille, §2.5 du skill `general`) + bouton « Console web » + détail nœud. Copie de la v1 ; différences fonctionnelles = le bouton console dans l'en-tête du panneau détail (`components/vm-detail.tsx`) + les pages détail plein écran (§9). La v1 reste intacte en rollback ; l'admin active la version à exposer (Administration → Versions).
+- **v3** : id `vm-view_v3`, version 0.3.0 — même périmètre que la v2 + **monitors VM et nœud en grilles personnalisables par user** (§10). Copie de la v2 ; seules différences = `components/vm-monitor.tsx` et `components/node-monitor.tsx` convertis en `WidgetGridLayout`. La v2 reste en rollback (`/vms?v=vm-view_v2`).
 
 ## 2. Arborescence
 
@@ -37,19 +38,21 @@ Page `/vms` : **inventaire des VMs et conteneurs LXC** du parc multi-endpoints, 
 | `components/node-monitor.tsx` | Onglet Monitor nœud : historique PVE + sections agent hôte (§9) |
 | `components/node-system-card.tsx` / `cpu-cores-card.tsx` / `node-diskio-card.tsx` / `node-net-card.tsx` | Sections agent hôte du Monitor nœud : Système (chips) / CPU par cœur (barres) / I/O disques par device (2 graphes) / Réseau **par interface** (1 carte graphique PAR INTERFACE DU NŒUD — même liste que la page Réseau de Proxmox : titre = nom PVE + badge type/actif, joint des mesures sur `kernels`, état vide par carte ; interfaces pare-feu PVE `fw*` **décryptées** (badge « pare-feu PVE · machine 102 · net0 · pont (fwbr) », infobulle = trajet paquet, bloc dépliable `FwDecodeBlock` si des fw* existent) — détail skill `node-sensors` §2/§4/§6 |
 
+**v3** (`vm-view_v3/`) : copie de la v2, mêmes 12 fichiers — seules différences : `components/vm-monitor.tsx` et `components/node-monitor.tsx` convertis en grilles personnalisables (§10) + `index.ts` (manifest v3). Les corps de carte (contenu sans `Card`/en-tête — c'est la `WidgetFrame` du socle qui fournit l'en-tête) : `CpuCoresBody` (`cpu-cores-card.tsx`), `NodeSystemStatsGrid` (`node-system-card.tsx`), `FwDecodeBlock` (`node-net-card.tsx`), et corps locaux dans les monitors (`StaticChartBody`, `FsUsageBody`, `PerDeviceBody`, `PerIfaceBody` dans vm-monitor ; `StaticChartBody`, `NodeDiskioBody`, `NodeNetIfaceBody` dans node-monitor) — le corps remplit la cellule (`min-h` + `flex-1`, ECharts ResizeObserver).
+
 ## 3. Flux de données (deux sources)
 - **Liste = live WS** : `useMulti()` → `snapshot.vms: VmSummary[]` par endpoint (push 5 s). `VmSummary` a été enrichi pour l'inventaire : `diskBytes`, `maxdiskBytes`, `cpuAllocCores`, `os`, `uptimeSec`, **`agentActive: boolean | null`** (état de l'agent invité QGA — mapping poller depuis le réchauffage agent existant, zéro appel API supplémentaire).
 - **Détail = REST** : `fetchVmDetail(endpointId, vmid)` → `GET /api/vm-config?endpoint=&vmid=` → `VmDetailResponse { vm (live), config (cache 1 h), snapshots (appel PVE à la demande, cache 5 min) }`. La pseudo-entrée PVE `current` est filtrée côté serveur.
 - Périmètre du tableau selon la sélection tree : `'dc'` = tout · `<epId>` = l'endpoint · `<epId>/<node>` = le nœud. Les VMs sont taggées `{ vm, endpointId }` (le détail a besoin de l'endpoint).
 
-## 4. Fonctions pures (`@proxmox/shared/vm-inventory.ts`, 13 tests)
+## 4. Fonctions pures (`@proxmox/shared/vm-view.ts`, 13 tests)
 - `filterVmRows(vms, query, filter)` : recherche nom (contient, insensible à la casse) **ou vmid exact** + filtres nœud/statut/type.
 - `sortVmRows(vms, key, dir)` : 8 clés (`name`, `vmid`, `node`, `type`, `status` [ordre running→paused→stopped→unknown], `cpuPct`, `memBytes`, `diskBytes`) ; **diskBytes null → fin de liste quel que soit le sens** (appliqué après le signe) ; dédoublonnage par vmid.
 - `buildVmTree(rootLabel, endpoints, vmsByEndpoint)` : `VmTreeNode { id ('dc' | epId | 'epId/node'), kind, vmCount, runningCount, children? }`.
 
 ## 5. Conventions spécifiques
 - **Sync URL** (deep-links) : `tree` (absent = 'dc') · `q` · `status` · `type` · `vm` (vmid détaillé). Le tri est en état local (non synchronisé).
-- **i18n** : préfixe `vm.*` + `nav.vmInventory` (fr/en dans `@proxmox/shared/i18n`). Libellés VM/LXC du tableau non traduits (termes techniques).
+- **i18n** : préfixe `vm.*` + `nav.vmView` (fr/en dans `@proxmox/shared/i18n`). Libellés VM/LXC du tableau non traduits (termes techniques).
 - **Code couleur statuts** : running = ok (vert) · paused = warn (ambre) · stopped/unknown = default. Barres d'utilisation détail : <80 % primary, ≥80 % warn, ≥90 % crit.
 - **Limite données connue** : PVE 9 renvoie `disk=0` dans `/cluster/resources` selon le stockage → « 0 o / X To » au tableau (pas de crash) ; le détail affiche la même valeur live.
 
@@ -88,6 +91,22 @@ Page `/vms` : **inventaire des VMs et conteneurs LXC** du parc multi-endpoints, 
 - i18n : `vm.node.system` / `vm.node.system.hint` (nouvelles) ; les sections graphiques réutilisent les libellés `overview.diskio.*` / `overview.cpubars.*` / `overview.netif.*` (une seule source de wording — ne pas dupliquer) ; Monitor VM : `vm.mon.perDevice.*` / `vm.mon.netPerIface.*`.
 - **Historique** : les 2 sections I/O + CPU par cœur ont été livrées d'abord dans la Vue d'ensemble (2026-11-13, `LAYOUT_VERSION` 3) puis **déplacées ici** à la demande (Vue d'ensemble = parc → ne garde que la carte Système cross-node ; par-device/par-cœur = drill-down d'un nœud) — `LAYOUT_VERSION` 4, composants déplacés de `plugins/hypervision/components/` → `plugins/vm-view_v2/components/`.
 
-## 10. Hors périmètre
+## 10. `vm-view_v3` (v0.3.0) — Monitors VM & nœud personnalisables par user
+
+Même périmètre que la v2 (tree/tableau/détails/console web inchangés — §3 à §9 s'appliquent) ; seules les pages **Monitor** de la VM et du nœud deviennent des grilles `WidgetGridLayout` (socle `core/widgets` — skill `general` §12, piège RGL v2 §10) : drag/resize des cartes, retrait → **bibliothèque** de la page (réinsérable), **Réinitialiser** avec confirmation. Persistance par compte via `GET/PUT/DELETE /api/user-config` — **un layout par VM et par nœud**.
+
+- **Monitor VM** (`components/vm-monitor.tsx`) — scope **`vmView « <endpointId>/<vmid> »`** (le vmid est stable : données fetchées par vmid, sous-titres par nom) :
+  - Catalogue : `cpu` (`vm.mon.cpu`) / `mem` (`vm.mon.mem`) / `disk` (`metrics.disk`) / `net` (`vm.mon.net`) — `StaticChartBody` ; **dynamiques** `diskio-<device>` (`vm.mon.perDevice`) — `PerDeviceBody`, `fs-<mountpoint>` (`vm.mon.diskUsage`) — `FsUsageBody`, `net-<iface>` (`vm.mon.netPerIface`) — `PerIfaceBody`.
+  - **Sous-titre = nom de la VM** sur chaque carte (`WidgetFrame`, via `ctx.vmName`).
+  - **Export CSV conservé par carte** (button dans le slot `extra` de la frame) — même contenu que l'export v2.
+  - **Gate `ready`** : la grille ne se monte qu'après le 1ᵉʳ chargement (`ready = !!(data || fsData || diskioData || netData)`) ; pendant les refresh 60 s les **données en cours sont gardées** → les ids dynamiques du catalogue restent stables (pas de remontage, pas de drag interrompu). Layout par défaut = `defaultStackLayout` (pile pleine largeur, comme la v2).
+- **Monitor nœud** (`components/node-monitor.tsx`) — scope **`nodeView « <endpointId>/<nomDuNœud> »`** (⚠️ un **renommage de nœud remet le layout à zéro** — accepté, documenté) :
+  - Catalogue : `system` (`vm.node.system`, w12 h2) — `NodeSystemStatsGrid` ; `cpu` (`metrics.cpu`) / `ram` (`metrics.ram`) / `rootfs` (`node.kpi.rootfs`) / `net` (`vm.mon.net`) — `StaticChartBody` ; `cpubars` (`overview.cpubars`) — `CpuCoresBody` ; `diskio` (`overview.diskio`, w12 h6) — `NodeDiskioBody` ; **dynamiques** `netif-<iface>` (titre = nom PVE de l'interface) — `NodeNetIfaceBody` (décryptage fw* via `FwDecodeBlock`).
+  - **Sous-titre = nom du nœud** sur chaque carte (`ctx.nodeName`).
+  - Gate `ready = netDone` (1ᵉʳ chargement terminé).
+- **Sources de données = celles de la v2, inchangées** (§8 : `vm_metrics`/`vm_fs`/`/api/vm-diskio`/`/api/vm-net` ; §9 : `/api/metrics?node=` + `/api/node-system` + réseau par interface) — seul le conteneur change (grille au lieu de pile de cartes).
+- **Validation livrée** : Playwright stage 2 (26 assertions) — deep-links `?vm=100` / `?node=proxmox%2Fproxmox`, sous-titres VM/nœud 4/4, drag → scope `vmView`/`nodeView` persistés, widgets dynamiques (20 cartes sur le nœud de test), persistance au retour.
+
+## 11. Hors périmètre
 - Actions power (start/stop/reboot) — reportées (« plus tard »), token PVE écriture requis.
 - Création/migration/suppression de VM.

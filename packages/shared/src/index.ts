@@ -107,6 +107,26 @@ export type {
 } from './network.js';
 export { resources, DEFAULT_LANG } from './i18n/index.js';
 export type { Lang } from './i18n/index.js';
+export {
+  USER_CONFIG_SCHEMA_VERSION,
+  USER_CONFIG_GRID_COLS,
+  MAX_LAYOUT_ITEMS,
+  MAX_LIBRARY_ITEMS,
+  MAX_WIDGET_ID_LEN,
+  MAX_SCOPE_LEN,
+  MAX_Y,
+  MAX_H,
+  clampWidgetItem,
+  defaultStackLayout,
+  mergePageConfig,
+  removeWidget,
+  addWidget,
+  getScopePage,
+  setScopePage,
+  clearScopePage,
+  parseUserConfig,
+} from './user-config.js';
+export type { UserConfigPage, WidgetItem, PageConfig, UserConfig, WidgetDef } from './user-config.js';
 export type { SmartDevice, SensorReading, ZfsStatus, FailedUnit, NodeSensorsResponse, SensorThresholds, SensorThresholdEntry, SensorThresholdsResponse, SensorHistoryPoint, SensorHistoryResponse, SmartHistoryResponse } from './node-sensors.js';
 export { sensorKey, effectiveSensorThreshold, tempTone, smartHealthTone, smartTempDisplay } from './node-sensors.js';
 export type { NodeCpuCore, NodeSystemRow, NodeSystemResponse, NodeDiskioRow, NodeDiskioResponse, VmDiskioPoint, VmDiskioSeries, VmDiskioResponse, PveMapperParse, NodeNetRow, NodeNetResponse, NodeNetIface, NodeNetFwInfo, VmNetPoint, VmNetSeries, VmNetResponse } from './system-metrics.js';
