@@ -2,15 +2,19 @@ import type {
   DatastoreHistoryResponse,
   MetricsTimeframe,
   NodeDiskioResponse,
+  NodeHostHistoryResponse,
   NodeNetResponse,
   NodeSensorsResponse,
   NodeSystemResponse,
+  NodeTempsResponse,
   ProxmoxInventoryResponse,
   SensorHistoryResponse,
   SmartHistoryResponse,
+  SmartTempsResponse,
   VmDiskioResponse,
   VmFsResponse,
   VmNetResponse,
+  ZfsArcResponse,
 } from '@prox4u/shared';
 import type {
   CapacityResponse,
@@ -137,6 +141,26 @@ export function fetchVmDiskio(endpoint: string, vmid: number, timeframe: Metrics
 /** Trafic réseau PAR INTERFACE d'un nœud hôte (Telegraf net, tap des VMs exclus) — Monitor nœud. */
 export function fetchNodeNet(node: string, timeframe: MetricsTimeframe): Promise<NodeNetResponse> {
   return getJson<NodeNetResponse>(`/api/node-net?node=${encodeURIComponent(node)}&timeframe=${timeframe}`);
+}
+
+/** Températures PAR CHIP (Telegraf sensors, max du chip par bucket) — Monitor nœud v4. */
+export function fetchNodeTemps(node: string, timeframe: MetricsTimeframe): Promise<NodeTempsResponse> {
+  return getJson<NodeTempsResponse>(`/api/node-temps?node=${encodeURIComponent(node)}&timeframe=${timeframe}`);
+}
+
+/** Températures PAR DISQUE (Telegraf smart_device, temp_c > 0) — Monitor nœud v4. */
+export function fetchSmartTemps(node: string, timeframe: MetricsTimeframe): Promise<SmartTempsResponse> {
+  return getJson<SmartTempsResponse>(`/api/smart-temps?node=${encodeURIComponent(node)}&timeframe=${timeframe}`);
+}
+
+/** ZFS ARC (taille + max + hit rate) — Monitor nœud v4. */
+export function fetchZfsArc(node: string, timeframe: MetricsTimeframe): Promise<ZfsArcResponse> {
+  return getJson<ZfsArcResponse>(`/api/zfs-arc?node=${encodeURIComponent(node)}&timeframe=${timeframe}`);
+}
+
+/** Charge 1/5/15 + swap (Telegraf system + mem) — Monitor nœud v4 (widgets « Charge moyenne » et « Swap »). */
+export function fetchNodeSystemHistory(node: string, timeframe: MetricsTimeframe): Promise<NodeHostHistoryResponse> {
+  return getJson<NodeHostHistoryResponse>(`/api/node-system-history?node=${encodeURIComponent(node)}&timeframe=${timeframe}`);
 }
 
 /** Trafic réseau PAR INTERFACE d'une VM (agent hôte + joint MAC → tap) — Monitor VM. */

@@ -1,6 +1,6 @@
 ---
 name: node-sensors
-description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds), ET historique des valeurs d'un capteur OU d'un disque SMART (GET /api/node-sensors-history, GET /api/smart-device-history, fenêtre modal « Historique des valeurs » avec graphe ECharts depuis l'icône des tables capteurs et SMART), ET métriques système hôte (GET /api/node-system : load/swap/iowait/usage par cœur ; GET /api/node-diskio : I/O par device physique — consommées par la Vue d'ensemble (carte Système cross-node) et le Monitor nœud de la Vue VM v2 (sections Système / CPU par cœur / I/O disques)), ET mapping device-mapper → LV PVE (table dm_names écrite par le plugin exec Telegraf, consommée par GET /api/vm-diskio de la vue VM). Use when working on the node-sensors plugin, the /api/node-sensors, /api/node-sensors-history, /api/smart-device-history, /api/node-system or /api/node-diskio routes, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, the value-history dialog (sensors & SMART disks), custom sensor thresholds, the « Seuils capteurs » admin tab, the overview system card (load/swap/uptime), the node monitor sections (CPU per-core, per-device disk I/O), or the dm_names Telegraf mapping.
+description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métriques locales Telegraf (SMART, températures, ZFS ARC, unités systemd) lues dans la base InfluxDB `raw`, servies par GET /api/node-sensors, affichées dans la page /node-sensors (4 tableaux + filtres colonnes multi-choix + filtre des sections), ET seuils capteurs personnalisés (perso ≤ firmware) persistés dans data/sensor-thresholds.json, gérés dans l'onglet Administration « Seuils capteurs » (GET/PUT/DELETE /api/admin/sensor-thresholds), ET historique des valeurs d'un capteur OU d'un disque SMART (GET /api/node-sensors-history, GET /api/smart-device-history, fenêtre modal « Historique des valeurs » avec graphe ECharts depuis l'icône des tables capteurs et SMART), ET métriques système hôte (GET /api/node-system : load/swap/iowait/usage par cœur ; GET /api/node-diskio : I/O par device physique — consommées par la Vue d'ensemble (carte Système cross-node) et le Monitor nœud de la Vue VM v2 (sections Système / CPU par cœur / I/O disques)), ET historiques de jauges hôte (GET /api/node-temps : températures par chip ; GET /api/smart-temps : températures par disque SMART ; GET /api/zfs-arc : taille ARC + max + hit rate ; GET /api/node-system-history : load 1/5/15 + n_cpus + swap — tous 4 timeframes raw, cache 5 min, 400 params, source influx|insufficientData), ET mapping device-mapper → LV PVE (table dm_names écrite par le plugin exec Telegraf, consommée par GET /api/vm-diskio de la vue VM). Use when working on the node-sensors plugin, the /api/node-sensors, /api/node-sensors-history, /api/smart-device-history, /api/node-system, /api/node-diskio, /api/node-temps, /api/smart-temps, /api/zfs-arc or /api/node-system-history routes, Telegraf consolidation, SMART/sensors/ZFS/systemd_units readings, the per-column filters, the value-history dialog (sensors & SMART disks), custom sensor thresholds, the « Seuils capteurs » admin tab, the overview system card (load/swap/uptime) and temp-nodes card (v3), the node monitor sections (CPU per-core, per-device disk I/O, temps, ZFS ARC, load, swap), or the dm_names Telegraf mapping.
 ---
 
 # Node Sensors — métriques locales Telegraf
@@ -215,13 +215,57 @@ bucket** (`WINDOW w AS (PARTITION BY name ORDER BY t)`) ; débits = Δ(counter) 
 Δ(`io_time`, ms d'occupation réelle) / durée — 0–100, **convention iostat** (PAS `io_util`
 Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % avec du parallélisme).
 
+### 3.4 Historiques de jauges hôte (Monitor nœud v4 + Vue d'ensemble v3)
+
+Quatre routes de plus, **même source** (tables Telegraf `raw`), même module
+(`system-routes.ts`) : mêmes buckets `HOST_DISKIO_TF` que node-diskio (hour → 1 min/1 h,
+day → 5 min/24 h, week → 1 h/7 j, month → 1 day/30 j), cache 5 min par (node, timeframe),
+400 sans `node` ou timeframe invalide, `source: 'influx' | 'insufficientData'`.
+**Contrairement au débit (counters + LAG), ce sont des JAUGES** : `max` du bucket (pic de la
+fenêtre) — pas de LAG, pas de `normRate`.
+
+- `GET /api/node-temps?node=&timeframe=` → `NodeTempsResponse { timeframe, node, series:
+  NodeTempSeries[], source }` — températures **PAR CHIP** (table `sensors`) :
+  `tempsSql` = `max(temp_input)` par (chip, bucket), `temp_input IS NOT NULL` (les features
+  ventilateurs/tensions sans température sont exclues dans le SQL). Un chip regroupe plusieurs
+  features (par cœur, Tdie/Tctl…) → le max du bucket représente le chip. Parsers
+  `tempsRowsToSeries` : gardes `r.temp == null` + `Number.isFinite` (**piège `Number(null)` = 0**
+  — `num()` est null-safe : `if (v == null) return null`).
+- `GET /api/smart-temps?node=&timeframe=` → `SmartTempsResponse { …, series: SmartTempSeries[] }`
+  — températures **PAR DISQUE** (table `smart_device`) : `smartTempsSql` = `max(temp_c)` par
+  (device, bucket), **`temp_c > 0` dans le SQL** (0 °C = pas de capteur — ils traceraient une
+  ligne plate à 0 °C, cf. `smartTempDisplay`). Le **modèle** est joint ensuite par une 2ᵉ
+  requête glissante 1 h (`SELECT device, model … ORDER BY time DESC`, dernier par device).
+- `GET /api/zfs-arc?node=&timeframe=` → `ZfsArcResponse { …, points: ZfsArcPoint[] }` — ZFS ARC
+  (table `zfs`) : `zfsArcSql` mélange jauges et counters **dans le même bucket** —
+  `max(arcstats_c)` (taille courante) / `max(arcstats_c_max)` (max) +
+  `max/min(arcstats_hits)` / `max/min(arcstats_misses)` ; **hit rate = Δ dans le bucket
+  (max − min, PAS de LAG entre buckets)** → helper partagé `zfsHitRatePct(Δhits, Δmisses)`
+  (`null` si compteurs nuls, total = 0 ou delta négatif = reset). **Découverte live** : sur le
+  parc actuel `arcstats_hits/misses` = **0 systématiquement** (nœud `proxmox` sans pool ZFS —
+  LVM) → le front **masque la série hit rate** quand tout est nul (pattern ProxMenux
+  `hasZfsArc` — jamais de série inventée).
+- `GET /api/node-system-history?node=&timeframe=` → `NodeHostHistoryResponse { …, points:
+  NodeHostHistoryPoint[] }` — **load 1/5/15 + n_cpus** (table `system`, `max` du bucket) **+
+  swap** (table `mem` : utilisé = `max(swap_total) − min(swap_free)`, seulement si
+  total > 0 et free ∈ [0, total] — sinon null, jamais négatif). **2 requêtes isolées**
+  (`hostHistorySystemSql` + `hostHistoryMemSql`) fusionnées par `mergeHostHistory` (union des
+  horodatages de buckets) — **une table absente ne fait pas perdre l'autre**. Helper partagé
+  `swapPct(used, total)`.
+
+**Consommés** : `vm-view_v4` Monitor nœud (6 widgets — skill `vm-inventory` §11 : `temp-cpu`,
+`smart-temps`, `zfs-arc`, `load`, `swap` + `smart-health` sur le live `/api/node-sensors`) et
+`hypervision_v3` Vue d'ensemble (widget `temp-nodes` sur le live `/api/node-sensors` —
+skill `hypervision` §10). Tests : 19 nouveaux (builders SQL + parsers + merge) dans
+`system-routes.test.ts` → 215 tests serveur.
+
 ## 4. Mesures InfluxDB (tables Telegraf)
 
 | Table | Clé d'unicité | Colonnes clés |
 |---|---|---|
 | `smart_device` | `node`, `device` | `model`, `serial_no`, `health_ok`, `temp_c`, `power_on_hours`, `power_cycle_count`, `reallocated_sectors_count`, `pending_sector_count`, `uncorrectable_sector_count`, `udma_crc_errors`, `percentage_used`, `available_spare`, `critical_warning` |
 | `sensors` | `node`, `chip`, `feature` | `temp_input`, `temp_crit`, `fan_input`, `in_input` |
-| `zfs` | `node` | `arcstats_hits`, `arcstats_misses`, `arcstats_size` |
+| `zfs` | `node` | ~253 colonnes `arcstats_*` — consommées : `arcstats_c` (taille courante), `arcstats_c_max` (max), `arcstats_hits` / `arcstats_misses` (counters, 0 sur le parc actuel — nœud sans pool ZFS), `arcstats_size` |
 | `systemd_units` | `node`, `name` | `active`, `sub`, `load` (filtré `active='failed' OR load='error'` — **vraies alertes seulement**) |
 | `system` | `node` | `load1`, `load5`, `load15`, `n_cpus`, `uptime` |
 | `mem` | `node` | `swap_total`, `swap_free` (PAS de `swap_used` — calculé total−free), `used`, `available_percent` |
@@ -452,8 +496,8 @@ Telegraf, basé sur `weighted_io_time`, qui **dépassait 100 %** observé 233 % 
 - **I/O disques > 31 j** : les 4 timeframes lisent `raw` (rétention 31 j). Pour de l'historique
   longue durée, il faudra un consolidateur **de taux** (Δ counter / 15 min écrit dans une table
   consolidée `diskio_rate`) — le min/max actuel n'est pas applicable aux counters.
-- **Tendances load/swap 7 j** dans la vue nœud (capteurs nœuds ou vue nœud PVE) : les tables
-  `system`/`mem` sont déjà dans `raw`, un graphe `date_bin(1h)` suffirait.
+- ~~**Tendances load/swap 7 j** dans la vue nœud~~ — **livré (2026-11-14)** : widgets `load` +
+  `swap` du Monitor nœud `vm-view_v4` (`GET /api/node-system-history`, §3.4).
 - **`ping` CAP_NET_RAW** : le plugin `ping` de Telegraf nécessite la capability
   `CAP_NET_RAW` (ou root) ; le service Telegraf tourne non-root → ajouter la capability
   (`setcap`) si on veut la latence vers le cœur de cluster.

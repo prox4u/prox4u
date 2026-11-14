@@ -1,6 +1,6 @@
 ---
 name: hypervision
-description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/ ou hypervision_v2/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card…).
+description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/ ou hypervision_v3/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card…).
 ---
 
 # Hypervision — Base de connaissance
@@ -103,3 +103,38 @@ Copie de la v1 (`plugins/hypervision_v2/`, mêmes 3 routes + même menu — mêm
 - **Persistance** : `store/user-config` (zustand) → `GET/PUT/DELETE /api/user-config`, scope **`overview`** (layout unique, pas de scope). Merge « présents et futurs » : un nouveau widget du code est **ajouté en bas** du layout au chargement ; un widget retiré du code bascule dans la **bibliothèque** ; jamais de layout cassé. Drag/resize persistés uniquement en fin d'interaction (cf. piège RGL v2, skill `general` §10).
 - **Endpoint/Node pages** : identiques à la v1 (layout persisté `store/layout`, pas de personnalisation user) — la topbar v1 y reste visible et active.
 - **Validation livrée** : Playwright stage 1 (36 assertions) — 12 widgets, aucune sauvegarde fantôme au montage ni à l'ouverture/fermeture du panneau bibliothèque, drag/resize/retrait/réinsertion/reload/reset persistés, A/B v1 sans toolbar.
+
+## 10. `hypervision_v3` (v0.3.0) — + widget « Températures — par nœud »
+
+Copie de la v2 (`plugins/hypervision_v3/`, manifest id `hypervision_v3`, version `0.3.0`,
+export `hypervisionPluginV3`, enregistré dans `core/plugin/plugins.ts`). v1/v2 intactes →
+rollback A/B (`/?v=hypervision_v2` / `?v=hypervision`). Un seul ajout : le widget
+**`temp-nodes`** (bibliothèque complétée, référence ProxMenux — la jauge « Température » du
+dashboard ProxMenux, en vue parc).
+
+- **Composant** : `components/temp-nodes-card.tsx` → `TempNodesBody` (+ helpers locaux
+  `nodeChipsMax` / `nodeDisksMax`). Tableau (UI `Table`) : une ligne par **nœud connu**
+  (`data.nodes` de `/api/node-sensors`), colonnes « Capteurs (max) » + « Disques (max) » —
+  valeur max + **compteur en discret** (`· 20`, tooltip `{{n}} capteur(s)`).
+  - **Capteurs** : max `tempInput` des `SensorReading` du nœud ; **ton = le pire** parmi les
+    capteurs (un capteur critique colore la cellule même si le max vient d'un autre) via
+    `effectiveSensorThreshold` (perso ≤ firmware) + `tempTone` (repli 80/60 °C) — helpers
+    partagés, même sémantique que la page `/node-sensors`.
+  - **Disques** : max `tempC > 0` (0 °C = pas de capteur, exclu), seuils **fixes 80/60 °C**.
+  - Nœud sans mesure → « — » (jamais de valeur inventée) ; aucun nœud avec temp → état vide
+    `overview.tempNodes.none`.
+- **Hook** `useNodeSensors` dans `overview.tsx` (fetch `/api/node-sensors`, tick 60 s — cache
+  serveur 1 min), hoisté au niveau page comme `useNodeSystem`.
+- **Catalogue** : entrée `temp-nodes` (w12 h4, minW 6, minH 3) après `sys-nodes` ; deps du
+  `useMemo` mises à jour (`sensorsData`, `sensorsLoading`).
+- **Layout par défaut** : **`temp-nodes` est DANS `overviewDefaultLayout` v3** (rangée pleine
+  largeur h4 après `sys-nodes`, `epY` décalé) — PIÈGE : `mergePageConfig(null, …)` ne renvoie
+  que le `defaultLayout` pour un **nouvel utilisateur** (l'ajout des widgets manquants ne
+  s'exécute qu'avec un layout **déjà sauvegardé**) → un widget absent du default layout serait
+  invisible tant que l'user n'aurait rien sauvegardé. Les layouts v2 déjà sauvegardés reçoivent
+  le widget **en bas par le merge** (scope user-config inchangé entre v2 et v3).
+- **i18n** : `overview.tempNodes{,.hint,.chips,.disks,.count,.none}` (fr/en) ; le reste réutilise
+  `topbar.nodes`.
+- **Validation livrée** : Playwright — carte présente dans le default layout (nouvel user),
+  valeurs réelles (proxmox ≈ 81 °C/20 capteurs — amdgpu junction — 39 °C/3 disques ;
+  ProxSite1/2 « — »), A/B v2 (carte absente).

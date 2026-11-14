@@ -244,3 +244,128 @@ export function isPhysicalDevice(name: string): boolean {
   if (/^nvme\d+n\d+p\d+$/.test(name)) return false; // partition nvme0n1p1
   return /^nvme\d+n\d+$/.test(name) || /^(sd|vd|hd|xvd)[a-z]+$/.test(name) || /^(cciss\d+|dasd[a-z]+|osm\d+|memstick[a-z]+\d*)$/.test(name);
 }
+
+// ---------------------------------------------------------------------------
+// Historiques de jauges hôte (Monitor nœud v4 — bibliothèque complétée,
+// référence ProxMenux) : températures capteurs, températures disques SMART,
+// ZFS ARC, charge moyenne + swap. Source : tables Telegraf `sensors`,
+// `smart_device`, `zfs`, `system`, `mem` dans la base `raw` (rétention 31 j).
+// ---------------------------------------------------------------------------
+
+/** Point de température d'UN chip (bucket — max de la fenêtre, jauge). */
+export interface NodeTempPoint {
+  /** unix seconds (début de bucket). */
+  t: number;
+  temp: number;
+}
+
+/**
+ * Série de températures d'UN chip (lm-sensors : coretemp, k10temp, amdgpu,
+ * nvme…) — la plus haute température du chip par bucket (le chip regroupe
+ * plusieurs features — capteurs par cœur, Tdie/Tctl…).
+ */
+export interface NodeTempSeries {
+  chip: string;
+  points: NodeTempPoint[];
+}
+
+export interface NodeTempsResponse {
+  timeframe: MetricsTimeframe;
+  node: string;
+  /** une série par chip avec au moins une lecture — triée par nom. */
+  series: NodeTempSeries[];
+  source: 'influx' | 'insufficientData';
+}
+
+/** Point de température d'UN disque SMART (bucket — max de la fenêtre). */
+export interface SmartTempPoint {
+  t: number;
+  temp: number;
+}
+
+/**
+ * Série de température d'UN disque (table `smart_device.temp_c`) — les disques
+ * à `temp_c = 0` (pas de capteur, cf. smartTempDisplay) sont exclus côté requête
+ * — sinon un disque sans sonde tracerait une ligne plate à 0 °C.
+ */
+export interface SmartTempSeries {
+  device: string;
+  /** modèle (dernier point connu, 1 h) — null si illisible. */
+  model: string | null;
+  points: SmartTempPoint[];
+}
+
+export interface SmartTempsResponse {
+  timeframe: MetricsTimeframe;
+  node: string;
+  series: SmartTempSeries[];
+  source: 'influx' | 'insufficientData';
+}
+
+/**
+ * Point ZFS ARC (bucket) — équivalent prox4u de la ligne « memoryZfsArc » du
+ * graphique mémoire ProxMenux.
+ */
+export interface ZfsArcPoint {
+  t: number;
+  /** Taille ARC courante (octets) — `arcstats_c` (max du bucket). */
+  sizeBytes: number | null;
+  /** Taille max ARC (octets) — `arcstats_c_max` (constant) : ligne de référence. */
+  maxBytes: number | null;
+  /** Hit rate % du bucket (Δhits / (Δhits+Δmisses)) — null si compteurs à 0 / reset / illisibles (la série est alors masquée, pattern ProxMenux). */
+  hitRatePct: number | null;
+}
+
+export interface ZfsArcResponse {
+  timeframe: MetricsTimeframe;
+  node: string;
+  points: ZfsArcPoint[];
+  source: 'influx' | 'insufficientData';
+}
+
+/**
+ * Point d'historique charge + swap d'UN nœud (bucket) — les deux champs sont
+ * indépendants (table `system` absente → load null, table `mem` absente →
+ * swap null) : une table manquante ne fait pas perdre l'autre.
+ */
+export interface NodeHostHistoryPoint {
+  t: number;
+  /** max du bucket (pic de la fenêtre) — jamais la moyenne : la charge est un signal d'alerte. */
+  load1: number | null;
+  load5: number | null;
+  load15: number | null;
+  /** nombre de cœurs (pour la lecture load/cœur) — null si pas de mesure. */
+  nCpus: number | null;
+  /** Swap utilisé (octets) : pic du bucket = max(total) − min(free) — null si pas de swap ou pas de mesure. */
+  swapUsedBytes: number | null;
+  /** Swap total (octets) — 0 = pas de swap configuré. */
+  swapTotalBytes: number | null;
+}
+
+export interface NodeHostHistoryResponse {
+  timeframe: MetricsTimeframe;
+  node: string;
+  points: NodeHostHistoryPoint[];
+  source: 'influx' | 'insufficientData';
+}
+
+/**
+ * Hit rate ZFS ARC % depuis les deltas de compteurs DANS un bucket
+ * (`arcstats_hits` / `arcstats_misses` sont des counters monotones — le delta
+ * sur la fenêtre = max − min). Delta négatif (reset au reboot) ou total nul
+ * (compteurs à 0 — ex. node sans pool ZFS actif) → **null, jamais de valeur
+ * inventée** (le front masque alors la série hit rate).
+ */
+export function zfsHitRatePct(dHits: number | null, dMisses: number | null): number | null {
+  if (dHits == null || dMisses == null) return null;
+  if (dHits < 0 || dMisses < 0) return null;
+  const total = dHits + dMisses;
+  if (total <= 0) return null;
+  return (dHits / total) * 100;
+}
+
+/** % de swap utilisé — null si pas de mesure ou pas de swap (total = 0). */
+export function swapPct(usedBytes: number | null, totalBytes: number | null): number | null {
+  if (usedBytes == null || totalBytes == null || totalBytes <= 0) return null;
+  return (usedBytes / totalBytes) * 100;
+}

@@ -129,5 +129,5 @@ export {
 export type { UserConfigPage, WidgetItem, PageConfig, UserConfig, WidgetDef } from './user-config.js';
 export type { SmartDevice, SensorReading, ZfsStatus, FailedUnit, NodeSensorsResponse, SensorThresholds, SensorThresholdEntry, SensorThresholdsResponse, SensorHistoryPoint, SensorHistoryResponse, SmartHistoryResponse } from './node-sensors.js';
 export { sensorKey, effectiveSensorThreshold, tempTone, smartHealthTone, smartTempDisplay } from './node-sensors.js';
-export type { NodeCpuCore, NodeSystemRow, NodeSystemResponse, NodeDiskioRow, NodeDiskioResponse, VmDiskioPoint, VmDiskioSeries, VmDiskioResponse, PveMapperParse, NodeNetRow, NodeNetResponse, NodeNetIface, NodeNetFwInfo, VmNetPoint, VmNetSeries, VmNetResponse } from './system-metrics.js';
-export { parsePveMapperName, mapperLabel, isPhysicalDevice } from './system-metrics.js';
+export type { NodeCpuCore, NodeSystemRow, NodeSystemResponse, NodeDiskioRow, NodeDiskioResponse, VmDiskioPoint, VmDiskioSeries, VmDiskioResponse, PveMapperParse, NodeNetRow, NodeNetResponse, NodeNetIface, NodeNetFwInfo, VmNetPoint, VmNetSeries, VmNetResponse, NodeTempPoint, NodeTempSeries, NodeTempsResponse, SmartTempPoint, SmartTempSeries, SmartTempsResponse, ZfsArcPoint, ZfsArcResponse, NodeHostHistoryPoint, NodeHostHistoryResponse } from './system-metrics.js';
+export { parsePveMapperName, mapperLabel, isPhysicalDevice, zfsHitRatePct, swapPct } from './system-metrics.js';

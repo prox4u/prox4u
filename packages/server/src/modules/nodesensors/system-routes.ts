@@ -4,13 +4,21 @@ import type {
   NodeCpuCore,
   NodeDiskioResponse,
   NodeDiskioRow,
+  NodeHostHistoryPoint,
+  NodeHostHistoryResponse,
   NodeNetIface,
   NodeNetResponse,
   NodeNetRow,
   NodeSystemResponse,
   NodeSystemRow,
+  NodeTempsResponse,
+  NodeTempSeries,
+  SmartTempsResponse,
+  SmartTempSeries,
+  ZfsArcPoint,
+  ZfsArcResponse,
 } from '@prox4u/shared';
-import { isPhysicalDevice } from '@prox4u/shared';
+import { isPhysicalDevice, zfsHitRatePct } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
 import type { NodeNetwork } from '../../core/data-source.js';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
@@ -59,7 +67,12 @@ export function normRate(v: unknown): number | null {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
+/**
+ * Nombre ou null — **null-safe** : `Number(null)` vaut 0 (piège classique), on
+ * renvoie donc null pour null/undefined et toute valeur non finie.
+ */
 function num(v: unknown): number | null {
+  if (v == null) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -215,6 +228,170 @@ export function buildNodeNetIfaces(net: NodeNetwork | null, rows: Array<{ iface?
   return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 }
 
+// ---------------------------------------------------------------------------
+// Historiques de jauges hôte (Monitor nœud v4 — bibliothèque complétée,
+// référence ProxMenux) : températures capteurs, températures disques SMART,
+// ZFS ARC, charge + swap. Jauges → max par bucket (le pic de la fenêtre) ;
+// counters ARC (hits/misses) → delta max−min du bucket (pas de LAG : les bornes
+// sont dans le même bucket). Raw uniquement (rétention 31 j couvre `month`).
+// ---------------------------------------------------------------------------
+
+/**
+ * SQL des températures PAR CHIP (table `sensors`) — le chip regroupe plusieurs
+ * features (par cœur, Tdie/Tctl…) : le max du bucket représente le chip.
+ * Les features sans `temp_input` (ventilateurs, tensions) sont exclues.
+ * `where` est fourni par l'appelant (toujours construit par sqlStr).
+ */
+export function tempsSql(where: string, bucket: string, window: string): string {
+  return `SELECT chip, date_bin(INTERVAL '${bucket}', time) AS t, max(temp_input) AS temp
+          FROM sensors
+          WHERE ${where} AND time >= now() - INTERVAL '${window}' AND temp_input IS NOT NULL
+          GROUP BY chip, t ORDER BY t`;
+}
+
+/** Lignes SQL → séries par chip (triées par nom, puis temps croissant). */
+export function tempsRowsToSeries(rows: InfluxRow[]): NodeTempSeries[] {
+  const m = new Map<string, Map<number, number>>();
+  for (const r of rows) {
+    const chip = String(r.chip ?? '');
+    if (!chip || r.temp == null) continue; // null ≠ 0 (Number(null) = 0)
+    const temp = Number(r.temp);
+    const t = influxTsToUnix(r.t as string | number | null);
+    if (t <= 0 || !Number.isFinite(temp)) continue;
+    const pts = m.get(chip) ?? new Map<number, number>();
+    pts.set(t, temp);
+    m.set(chip, pts);
+  }
+  return [...m.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+    .map(([chip, pts]) => ({
+      chip,
+      points: [...pts.entries()].sort((x, y) => x[0] - y[0]).map(([t, temp]) => ({ t, temp })),
+    }));
+}
+
+/**
+ * SQL des températures SMART PAR DISQUE (table `smart_device`) — les disques à
+ * `temp_c = 0` (pas de capteur, cf. smartTempDisplay) sont exclus DANS la
+ * requête : ils traceraient une ligne plate à 0 °C.
+ */
+export function smartTempsSql(where: string, bucket: string, window: string): string {
+  return `SELECT device, date_bin(INTERVAL '${bucket}', time) AS t, max(temp_c) AS temp
+          FROM smart_device
+          WHERE ${where} AND time >= now() - INTERVAL '${window}' AND temp_c > 0
+          GROUP BY device, t ORDER BY t`;
+}
+
+/** Lignes SQL → séries par disque (le modèle est joint ensuite, 1 h glissante). */
+export function smartTempsRowsToSeries(rows: InfluxRow[]): SmartTempSeries[] {
+  const m = new Map<string, Map<number, number>>();
+  for (const r of rows) {
+    const device = String(r.device ?? '');
+    if (!device || r.temp == null) continue; // null ≠ 0 (Number(null) = 0)
+    const temp = Number(r.temp);
+    const t = influxTsToUnix(r.t as string | number | null);
+    if (t <= 0 || !Number.isFinite(temp) || temp <= 0) continue;
+    const pts = m.get(device) ?? new Map<number, number>();
+    pts.set(t, temp);
+    m.set(device, pts);
+  }
+  return [...m.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+    .map(([device, pts]) => ({
+      device,
+      model: null,
+      points: [...pts.entries()].sort((x, y) => x[0] - y[0]).map(([t, temp]) => ({ t, temp })),
+    }));
+}
+
+/**
+ * SQL ZFS ARC (table `zfs`) — mélangé : `arcstats_c` / `arcstats_c_max` sont
+ * des jauges (max du bucket) ; `arcstats_hits` / `arcstats_misses` sont des
+ * counters monotones → delta du bucket = max − min (les deux bornes sont dans
+ * le même bucket : pas de LAG entre buckets).
+ */
+export function zfsArcSql(where: string, bucket: string, window: string): string {
+  return `SELECT date_bin(INTERVAL '${bucket}', time) AS t,
+                 max(arcstats_c) AS size_bytes, max(arcstats_c_max) AS max_bytes,
+                 max(arcstats_hits) AS hmax, min(arcstats_hits) AS hmin,
+                 max(arcstats_misses) AS mmax, min(arcstats_misses) AS mmin
+          FROM zfs
+          WHERE ${where} AND time >= now() - INTERVAL '${window}'
+          GROUP BY t ORDER BY t`;
+}
+
+/** Lignes SQL → points ARC (hit rate via zfsHitRatePct — null si compteurs à 0 / reset). */
+export function zfsArcRowsToPoints(rows: InfluxRow[]): ZfsArcPoint[] {
+  const out: ZfsArcPoint[] = [];
+  for (const r of rows) {
+    const t = influxTsToUnix(r.t as string | number | null);
+    if (t <= 0) continue;
+    const hmax = num(r.hmax);
+    const hmin = num(r.hmin);
+    const mmax = num(r.mmax);
+    const mmin = num(r.mmin);
+    const dh = hmax != null && hmin != null ? hmax - hmin : null;
+    const dm = mmax != null && mmin != null ? mmax - mmin : null;
+    out.push({ t, sizeBytes: num(r.size_bytes), maxBytes: num(r.max_bytes), hitRatePct: zfsHitRatePct(dh, dm) });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+
+/** SQL de charge (table `system`) — jauges, max du bucket (pic de la fenêtre). */
+export function hostHistorySystemSql(where: string, bucket: string, window: string): string {
+  return `SELECT date_bin(INTERVAL '${bucket}', time) AS t,
+                 max(load1) AS load1, max(load5) AS load5, max(load15) AS load15, max(n_cpus) AS ncpus
+          FROM system
+          WHERE ${where} AND time >= now() - INTERVAL '${window}'
+          GROUP BY t ORDER BY t`;
+}
+
+/** SQL de swap (table `mem`) — pic du bucket = max(total) − min(free). */
+export function hostHistoryMemSql(where: string, bucket: string, window: string): string {
+  return `SELECT date_bin(INTERVAL '${bucket}', time) AS t,
+                 max(swap_total) AS swap_total, min(swap_free) AS swap_free_min
+          FROM mem
+          WHERE ${where} AND time >= now() - INTERVAL '${window}'
+          GROUP BY t ORDER BY t`;
+}
+
+/**
+ * Fusion charge (`system`) + swap (`mem`) — union des horodatages de buckets ;
+ * les deux sources sont **indépendantes** (une table absente laisse ses champs
+ * null sans perdre l'autre). Swap utilisé = max(total) − min(free), seulement
+ * si total > 0 et free dans [0, total] (sinon null — jamais de valeur négative).
+ */
+export function mergeHostHistory(sysRows: InfluxRow[], memRows: InfluxRow[]): NodeHostHistoryPoint[] {
+  const sys = new Map<number, InfluxRow>();
+  for (const r of sysRows) {
+    const t = influxTsToUnix(r.t as string | number | null);
+    if (t > 0) sys.set(t, r);
+  }
+  const mem = new Map<number, InfluxRow>();
+  for (const r of memRows) {
+    const t = influxTsToUnix(r.t as string | number | null);
+    if (t > 0) mem.set(t, r);
+  }
+  const out: NodeHostHistoryPoint[] = [];
+  for (const t of [...new Set<number>([...sys.keys(), ...mem.keys()])].sort((a, b) => a - b)) {
+    const s = sys.get(t);
+    const m = mem.get(t);
+    const total = m ? num(m.swap_total) : null;
+    const free = m ? num(m.swap_free_min) : null;
+    const used = total != null && free != null && total > 0 && free >= 0 && free <= total ? total - free : null;
+    out.push({
+      t,
+      load1: s ? num(s.load1) : null,
+      load5: s ? num(s.load5) : null,
+      load15: s ? num(s.load15) : null,
+      nCpus: s ? num(s.ncpus) : null,
+      swapUsedBytes: used,
+      swapTotalBytes: total,
+    });
+  }
+  return out;
+}
+
 /** Nœud → endpoint dont le dernier snapshot connaît ce nœud (null si introuvable / pas de snapshot). */
 export function nodeEndpoint(ctx: AppContext, poller: Poller, node: string): EndpointRuntime | null {
   const multi = poller.getMulti();
@@ -236,6 +413,10 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
   const sysCache = new Map<string, { at: number; value: NodeSystemResponse }>();
   const diskioCache = new Map<string, { at: number; value: NodeDiskioResponse }>();
   const netCache = new Map<string, { at: number; value: NodeNetResponse }>();
+  const tempsCache = new Map<string, { at: number; value: NodeTempsResponse }>();
+  const smartTempsCache = new Map<string, { at: number; value: SmartTempsResponse }>();
+  const zfsArcCache = new Map<string, { at: number; value: ZfsArcResponse }>();
+  const hostHistCache = new Map<string, { at: number; value: NodeHostHistoryResponse }>();
 
   app.get('/api/node-system', async (_req, reply) => {
     const cached = sysCache.get('all');
@@ -429,6 +610,195 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
       ctx.logger.warn(`node-net(${key}) : réseau PVE indisponible (${(err as Error).message})`);
     }
     netCache.set(key, { at: Date.now(), value: body });
+    reply.send(body);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Historiques de jauges hôte (Monitor nœud v4) — mêmes conventions que
+  // node-diskio / node-net : raw uniquement, buckets HOST_DISKIO_TF, cache 5 min
+  // par (node, timeframe), 400 paramètre manquant / invalide.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * GET /api/node-temps?node=&timeframe= — températures PAR CHIP (table `sensors`,
+   * max du chip par bucket) : le widget « Températures CPU & chips » du Monitor
+   * nœud (équivalent prox4u du graphique « Température » + historique ProxMenux).
+   */
+  app.get('/api/node-temps', async (req, reply) => {
+    const q = req.query as { node?: string; timeframe?: string };
+    const node = q.node?.trim();
+    if (!node) {
+      reply.code(400).send({ error: 'node requis' });
+      return;
+    }
+    const tf = q.timeframe as MetricsTimeframe;
+    if (!HOST_DISKIO_TF[tf]) {
+      reply.code(400).send({ error: `timeframe must be one of ${Object.keys(HOST_DISKIO_TF).join(', ')}` });
+      return;
+    }
+    const key = `temps:${node}/${tf}`;
+    const cached = tempsCache.get(key);
+    if (cached && Date.now() - cached.at < DISKIO_CACHE_TTL_MS) {
+      reply.send(cached.value);
+      return;
+    }
+    let body: NodeTempsResponse = { timeframe: tf, node, series: [], source: 'insufficientData' };
+    if (influxReady(ctx)) {
+      try {
+        const { bucket, window } = HOST_DISKIO_TF[tf];
+        const rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, tempsSql(`node = ${sqlStr(node)}`, bucket, window));
+        const series = tempsRowsToSeries(rows);
+        body = { timeframe: tf, node, series, source: series.length > 0 ? 'influx' : 'insufficientData' };
+      } catch (err) {
+        ctx.logger.warn(`node-temps(${key}) : InfluxDB indisponible (${(err as Error).message})`);
+      }
+    }
+    tempsCache.set(key, { at: Date.now(), value: body });
+    reply.send(body);
+  });
+
+  /**
+   * GET /api/smart-temps?node=&timeframe= — températures PAR DISQUE (table
+   * `smart_device`, temp_c > 0) : le widget « Températures disques (SMART) »
+   * (équivalent du graphique disques ProxMenux). Le modèle de chaque disque est
+   * joint (dernier point connu, 1 h) — non bloquant en cas d'échec.
+   */
+  app.get('/api/smart-temps', async (req, reply) => {
+    const q = req.query as { node?: string; timeframe?: string };
+    const node = q.node?.trim();
+    if (!node) {
+      reply.code(400).send({ error: 'node requis' });
+      return;
+    }
+    const tf = q.timeframe as MetricsTimeframe;
+    if (!HOST_DISKIO_TF[tf]) {
+      reply.code(400).send({ error: `timeframe must be one of ${Object.keys(HOST_DISKIO_TF).join(', ')}` });
+      return;
+    }
+    const key = `smarttemps:${node}/${tf}`;
+    const cached = smartTempsCache.get(key);
+    if (cached && Date.now() - cached.at < DISKIO_CACHE_TTL_MS) {
+      reply.send(cached.value);
+      return;
+    }
+    let body: SmartTempsResponse = { timeframe: tf, node, series: [], source: 'insufficientData' };
+    if (influxReady(ctx)) {
+      try {
+        const where = `node = ${sqlStr(node)}`;
+        const { bucket, window } = HOST_DISKIO_TF[tf];
+        const rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, smartTempsSql(where, bucket, window));
+        const series = smartTempsRowsToSeries(rows);
+        if (series.length > 0) {
+          try {
+            const modelRows = await ctx.influx!.querySql<InfluxRow>(
+              ctx.influx!.rawDb,
+              `SELECT device, model, time FROM smart_device WHERE ${where} AND time >= now() - INTERVAL '1h' ORDER BY time DESC`,
+            );
+            const models = new Map<string, string | null>();
+            for (const r of modelRows) {
+              const d = String(r.device ?? '');
+              if (d && !models.has(d)) models.set(d, r.model ? String(r.model) : null);
+            }
+            for (const s of series) s.model = models.get(s.device) ?? null;
+          } catch (err) {
+            ctx.logger.warn(`smart-temps(${key}) : modèles inconnus (${(err as Error).message})`);
+          }
+        }
+        body = { timeframe: tf, node, series, source: series.length > 0 ? 'influx' : 'insufficientData' };
+      } catch (err) {
+        ctx.logger.warn(`smart-temps(${key}) : InfluxDB indisponible (${(err as Error).message})`);
+      }
+    }
+    smartTempsCache.set(key, { at: Date.now(), value: body });
+    reply.send(body);
+  });
+
+  /**
+   * GET /api/zfs-arc?node=&timeframe= — ZFS ARC (table `zfs`) : taille courante
+   * (`arcstats_c`), max (`arcstats_c_max`) et hit rate (deltas de compteurs du
+   * bucket — null si compteurs à 0 / reset : le front masque la série, pattern
+   * ProxMenux) : le widget « ZFS ARC » du Monitor nœud (équivalent de la ligne
+   * « memoryZfsArc » du graphique mémoire ProxMenux).
+   */
+  app.get('/api/zfs-arc', async (req, reply) => {
+    const q = req.query as { node?: string; timeframe?: string };
+    const node = q.node?.trim();
+    if (!node) {
+      reply.code(400).send({ error: 'node requis' });
+      return;
+    }
+    const tf = q.timeframe as MetricsTimeframe;
+    if (!HOST_DISKIO_TF[tf]) {
+      reply.code(400).send({ error: `timeframe must be one of ${Object.keys(HOST_DISKIO_TF).join(', ')}` });
+      return;
+    }
+    const key = `zfsarc:${node}/${tf}`;
+    const cached = zfsArcCache.get(key);
+    if (cached && Date.now() - cached.at < DISKIO_CACHE_TTL_MS) {
+      reply.send(cached.value);
+      return;
+    }
+    let body: ZfsArcResponse = { timeframe: tf, node, points: [], source: 'insufficientData' };
+    if (influxReady(ctx)) {
+      try {
+        const { bucket, window } = HOST_DISKIO_TF[tf];
+        const rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, zfsArcSql(`node = ${sqlStr(node)}`, bucket, window));
+        const points = zfsArcRowsToPoints(rows);
+        body = { timeframe: tf, node, points, source: points.length > 0 ? 'influx' : 'insufficientData' };
+      } catch (err) {
+        ctx.logger.warn(`zfs-arc(${key}) : InfluxDB indisponible (${(err as Error).message})`);
+      }
+    }
+    zfsArcCache.set(key, { at: Date.now(), value: body });
+    reply.send(body);
+  });
+
+  /**
+   * GET /api/node-system-history?node=&timeframe= — charge 1/5/15 (table `system`)
+   * + swap (table `mem`) : les widgets « Charge moyenne » et « Swap » du Monitor
+   * nœud (équivalent de la partie « load average » du graphique CPU ProxMenux +
+   * tendance swap du backlog node-sensors). Les deux requêtes sont isolées : une
+   * table absente ne fait pas perdre l'autre (champs null).
+   */
+  app.get('/api/node-system-history', async (req, reply) => {
+    const q = req.query as { node?: string; timeframe?: string };
+    const node = q.node?.trim();
+    if (!node) {
+      reply.code(400).send({ error: 'node requis' });
+      return;
+    }
+    const tf = q.timeframe as MetricsTimeframe;
+    if (!HOST_DISKIO_TF[tf]) {
+      reply.code(400).send({ error: `timeframe must be one of ${Object.keys(HOST_DISKIO_TF).join(', ')}` });
+      return;
+    }
+    const key = `hosthist:${node}/${tf}`;
+    const cached = hostHistCache.get(key);
+    if (cached && Date.now() - cached.at < DISKIO_CACHE_TTL_MS) {
+      reply.send(cached.value);
+      return;
+    }
+    const empty: NodeHostHistoryResponse = { timeframe: tf, node, points: [], source: 'insufficientData' };
+    let body: NodeHostHistoryResponse = empty;
+    if (influxReady(ctx)) {
+      const { bucket, window } = HOST_DISKIO_TF[tf];
+      const where = `node = ${sqlStr(node)}`;
+      let sysRows: InfluxRow[] = [];
+      let memRows: InfluxRow[] = [];
+      try {
+        sysRows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, hostHistorySystemSql(where, bucket, window));
+      } catch (err) {
+        ctx.logger.warn(`node-system-history(${key}) : table system indisponible (${(err as Error).message})`);
+      }
+      try {
+        memRows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, hostHistoryMemSql(where, bucket, window));
+      } catch (err) {
+        ctx.logger.warn(`node-system-history(${key}) : table mem indisponible (${(err as Error).message})`);
+      }
+      const points = mergeHostHistory(sysRows, memRows);
+      body = { timeframe: tf, node, points, source: points.length > 0 ? 'influx' : 'insufficientData' };
+    }
+    hostHistCache.set(key, { at: Date.now(), value: body });
     reply.send(body);
   });
 }
