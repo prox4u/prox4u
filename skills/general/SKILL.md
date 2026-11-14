@@ -84,6 +84,7 @@ proxmox-plugin-arch/
 │   │       └── modules/ #   dashboard/routes.ts, supervision/routes.ts, auth/ (§11),
 │   │                  #   userconfig/ (perso. d'interface par user, §12), index.ts
 │   └── web/             # Vite + React SPA
+│       ├── public/      #   assets branding (favicon, images WebP — §5 Design system)
 │       └── src/
 │           ├── core/    #   plugin/ (contrat), api/, data/ (store WS), widgets/ (grilles
 │           │            #   personnalisables, §12), config/features.ts, ui/
