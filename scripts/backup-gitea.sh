@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Sauvegarde quotidienne du projet prox4u :
 #   1. git  : commit auto + push vers Gitea (git.prox4u.com, repo privé prox4u/prox4u)
+#            + push vers le mirror GitHub (github.com/prox4u/prox4u, public — Gitea reste source de vérité)
 #   2. tar  : copie indépendante dans /home/opencode/backups/prox4u/
 # Exclusions tar : node_modules (réinstallable, racine + packages/* de la workspace pnpm)
 # et data/influxdb (ré-écrie par les agents).
@@ -22,7 +23,10 @@ if ! git diff --cached --quiet; then
   git commit -m "backup: auto-commit $STAMP $(date +%H%M)"
 fi
 if ! git push origin master; then
-  echo "WARN: git push en échec (réseau ?) — le tar ci-dessous reste fait" >&2
+  echo "WARN: git push origin (Gitea) en échec (réseau ?) — le tar ci-dessous reste fait" >&2
+fi
+if ! git push github master 2>/dev/null; then
+  echo "WARN: git push github (mirror) en échec (réseau ? ou remote absent)" >&2
 fi
 
 # --- Tar : copie autonome du projet (y compris .git, en secours du remote) ---
