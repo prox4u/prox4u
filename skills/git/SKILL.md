@@ -8,7 +8,7 @@ description: Infrastructure git de Prox4u — Gitea perso (https://git.prox4u.co
 ## 1. Instance Gitea (git.prox4u.com)
 - **URL** : **https://git.prox4u.com/** (Gitea, IP 37.187.121.211) — ⚠️ le domaine est **`.com`**, pas `.fr` : **git.prox4u.fr n'existe pas** (NXDOMAIN, vérifié 2026-11-19).
 - **Comptes** : user `prox4u` (propriétaire du repo app, email info@lunixform.com) + organisation `prox4u_web` (site vitrine).
-- **Token** : `57c91531…cec2a` (compte `prox4u`) — token **complet** dans `.git/config` du serveur (URL du remote `origin`) et dans l'env du Gitea MCP (§5) ; sinon Gitea UI → compte → Settings → Applications. ⚠️ **Rotation recommandée (2026-11-19)** : le token complet a été commité dans `skills/git/SKILL.md` (commit `31d2994`) et cette histoire est **miroitée sur le GitHub public** → il est exposé. Après rotation : mettre à jour `.git/config` (remote origin), l'env du MCP et ce §1 (masqué).
+- **Token** : `57c91531…cec2a` (compte `prox4u`) — token **complet** dans `.git/config` du serveur (URL du remote `origin`) et dans l'env du Gitea MCP (§5) ; sinon Gitea UI → compte → Settings → Applications. **Historique (2026-11-19)** : le token complet a été commité dans `skills/git/SKILL.md` (ancien commit `31d2994`), puis **purgé de tout l'historique** par `git filter-repo --replace-text` + force-push Gitea & GitHub (les anciens objets restent peut-être accessibles par leur ancien SHA — `31d2994`/`43540bf` — un temps côté serveurs ; la rotation du token reste une précaution de sécurité supplémentaire).
 - **SSH** (alternative HTTPS) : `ssh://git@git.prox4u.com:2222/<owner>/<repo>.git` (port **2222**).
 
 ## 2. Repos & remote
@@ -49,7 +49,7 @@ description: Infrastructure git de Prox4u — Gitea perso (https://git.prox4u.co
 - **Auto-commit 03:00** : le cron committe le working tree tel quel — finir les tâches avec un arbre propre (commit + push), sinon un commit `backup: auto-commit` mélange du travail inachevé dans l'historique.
 - **Push en échec du cron** = réseau/Gitea indispo : le tar reste fait (WARN dans le log) — au prochain run, le push rattrape (idem pour le mirror GitHub).
 - **Restart du serveur ≠ git** : voir skill `operations` (PIDs exacts via `ss -tlnp`).
-- **GitHub = PUBLIC** : tout ce qui est commité (y compris l'historique) est visible par tous. Secrets exposés à ce jour : token Gitea complet (commit `31d2994`, §1 → rotater) + mot de passe du compte de test `test-admin` (`STATUS.md` § comptes de test). Avant de committer : `git grep` les secrets ; un secret dans l'historique public ne se retire qu'en **révoquant/rotant** (ou rewrite d'historique, à éviter).
+- **GitHub = PUBLIC** : tout ce qui est commité (y compris l'historique) est visible par tous. Le token Gitea complet y a été exposé (ancien commit `31d2994`) puis **purgé par `git filter-repo` (2026-11-19)** (§1) ; reste exposé : mot de passe du compte de test `test-admin` (`STATUS.md` § comptes de test). Avant de committer : `git grep` les secrets ; un secret déjà dans l'historique public se retire par **rotation** (ou rewrite `git filter-repo` + force-push des 2 remotes — procédé utilisé le 2026-11-19).
 
 ## 7. GitHub — mirror public (en place depuis 2026-11-19)
 **Décision** : le git prox4u sur GitHub est un **mirror public** de Gitea.
@@ -57,5 +57,5 @@ description: Infrastructure git de Prox4u — Gitea perso (https://git.prox4u.co
 - **Token** : `ghp_aDun…gQlkP` (PAT classique) — token **complet** dans `.git/config` du serveur (URL du remote `github`) ou GitHub UI → Settings → Developer settings → Tokens.
 - **Direction** : **Gitea → GitHub, unidirectionnel** — Gitea (`origin`) reste **source de vérité** ; **ne jamais pull/merge depuis GitHub** (le mirror ne doit pas diverger ni remonter).
 - **Synchro** : push explicite après chaque tâche (`git push origin master` puis `git push github master`, §3) + **cron quotidien** (`scripts/backup-gitea.sh`, §4) qui rattrape tout oubli.
-- **Exposition publique (2026-11-19)** : token Gitea complet dans l'historique (`31d2994`) → **rotation recommandée** (§1) ; mot de passe `test-admin` dans `STATUS.md` ; IPs internes `192.168.x.x` (mineur).
+- **Exposition publique (2026-11-19)** : token Gitea complet présent dans l'historique (ancien commit `31d2994`) → **purgé par `git filter-repo --replace-text` + force-push des 2 remotes** (rotation = précaution supplémentaire, §1) ; mot de passe `test-admin` dans `STATUS.md` (toujours exposé) ; IPs internes `192.168.x.x` (mineur).
 - **Vérifier le mirror** : `git ls-remote github master` = `git rev-parse master` ; côté API : `GET /repos/prox4u/prox4u/commits/master`.
