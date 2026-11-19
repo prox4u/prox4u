@@ -1,6 +1,6 @@
 ---
 name: vm-inventory
-description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Quatre versions : v1 (id vm-view), v2 (vm-view_v2, + bouton « Console web » vers l'UI PVE, + détail nœud), v3 (vm-view_v3, + monitors VM/nœud en grilles personnalisables par user — drag/resize/bibliothèque, persistance /api/user-config par VM et par nœud) et v4 (vm-view_v4, + 6 widgets Monitor nœud : températures chips/disques SMART, santé SMART, ZFS ARC, charge moyenne, swap + **onglet Résumé du détail VM en grille personnalisable** (10 widgets : 7 panneaux vSphere + 3 capacity planning par élément au niveau cluster, drag/resize/bibliothèque, persistance /api/user-config par VM, réemploi cross-plugin de CapacityChartBody hypervision_v4)). Use when working on the vm-view plugin family (packages/web/src/plugins/vm-view/, vm-view_v2/, vm-view_v3/ ou vm-view_v4/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O / temps / ZFS ARC / load / swap sections), or the /api/vm-config endpoint.
+description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Quatre versions : v1 (id vm-view), v2 (vm-view_v2, + bouton « Console web » vers l'UI PVE, + détail nœud), v3 (vm-view_v3, + monitors VM/nœud en grilles personnalisables par user — drag/resize/bibliothèque, persistance /api/user-config par VM et par nœud) et v4 (vm-view_v4, + 6 widgets Monitor nœud : températures chips/disques SMART, santé SMART, ZFS ARC, charge moyenne, swap + **onglet Résumé du détail VM en grille personnalisable** (10 widgets : 7 panneaux vSphere + 3 capacity planning par élément au niveau cluster, drag/resize/bibliothèque, persistance /api/user-config par VM, réemploi cross-plugin de CapacityChartBody hypervision_v4) + **onglet Résumé du détail NŒUD en grille personnalisable** (7 widgets : 4 KPIs live + 3 capacity planning par élément au **niveau nœud** — disk = rootfs du nœud, drag/resize/bibliothèque, persistance /api/user-config par nœud, réemploi cross-plugin de CapacityChartBody hypervision_v4, nouvel endpoint serveur GET /api/node-capacity?endpoint=&node=)). Use when working on the vm-view plugin family (packages/web/src/plugins/vm-view/, vm-view_v2/, vm-view_v3/ ou vm-view_v4/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O / temps / ZFS ARC / load / swap sections), the node Résumé grid (nodeSummary) or the /api/vm-config and /api/node-capacity endpoints.
 ---
 
 # Inventaire VM — Base de connaissance
@@ -202,6 +202,64 @@ persistance par compte via `/api/user-config` — **scope `vmSummary « <endpoin
   **reset** (10 widgets, entrée config supprimée), **persistance** (`vmSummary["proxmox/103"]` dans
   `/api/user-config`) + **persistance à la reconnexion** (rechargement → layout conservé), 0 erreur console.
 
-## 13. Hors périmètre
+## 13. `vm-view_v4` — Onglet Résumé du détail NŒUD en grille personnalisable + capacity planning niveau nœud
+
+Toute la **vue Résumé** du détail nœud (`components/node-detail.tsx`) est devenue une grille
+`WidgetGridLayout` (socle `core/widgets` — skill `general` §12, même mécanique que le Résumé VM §12) :
+**7 widgets** drag/resize/retirer (→ bibliothèque)/réinsérer, **Réinitialiser** avec confirmation,
+persistance par compte via `/api/user-config` — **scope `nodeSummary « <endpointId>/<nomDuNœud> »`**.
+
+- **Catalogue** (ids statiques) :
+  - 4 cartes KPI (corps = `KpiBody` : grand chiffre + sous-texte + barre `Progress` teinte overcommit —
+    le frame fournit la carte + le titre + le handle de drag + le bouton retirer ; l'icône/label de
+    l'ancienne `StatCard` deviennent le titre de carte) : `kpi-cpu` / `kpi-ram` / `kpi-disk` / `kpi-load`
+    (données **live** snapshot WS 5 s — `node.cpuPct`/`ramPct`/`diskPct`/`loadavg`, cœurs utilisés,
+    `formatBytes` RAM, rootfs).
+  - 3 graphiques capacity planning par élément : `capacity-cpu` / `capacity-ram` / `capacity-disk` —
+    `CapacityChartBody` (réemploi cross-plugin `hypervision_v4`, §11) avec `metric` ; capacité
+    **au NIVEAU NŒUD** (pas le cluster) via le hook `useNodeCapacity(endpointId, nodeName)`
+    (cache module `nodeCapacityCache` Map, `NODE_CAPACITY_TTL_MS` 5 min) → `fetchNodeCapacity`
+    (`/api/node-capacity?endpoint=&node=`).
+- **Layout par défaut** « design validé » : rangée 4 KPIs (w3 h2) + rangée 3 capacity (w4 h4) —
+  déclaré explicitement (`defaultLayout`), **pas** `defaultStackLayout`.
+- **Piège `mergePageConfig`** : pour un **nouvel** user (stored=null) → `defaultLayout` +
+  bibliothèque **vide** → tout widget du catalogue **doit** être dans le `defaultLayout`
+  (sinon invisible pour les nouveaux users). Ici les 7 widgets sont dans le default.
+- **⚠️ Renommage de nœud** : le scope utilise le **nom du nœud** (hostname = seul identifiant
+  nœud PVE) → un renommage remet le layout Résumé à zéro. Même arbitrage que le Monitor nœud
+  `nodeView` (documenté §11) — accepté.
+- **i18n** : aucun libellé nouveau — les titres réutilisent `metrics.cpu/ram`, `nodes.disk`,
+  `node.kpi.load`, `capacity.titleCpu/Ram/Disk` ; la toolbar/bibliothèque réutilisent `widgets.*`.
+- **Validation livrée** : Playwright (nœud `proxmox`) — 7 widgets rendus (4 KPIs + 3 capacity avec
+  données réelles : CPU « à 90 % dans ~48 j, pente +1.39 %/j », RAM « tendance stable », Disque
+  rootfs « ~1467 j »), bibliothèque Affichés 7/Bibliothèque 0, retirer (→ bibliothèque, 6) +
+  réinsérer (7), **drag** (kpi-cpu déplacé, reflow, sauvegardé), **reset** (7 widgets, scope
+  supprimé, `endpointView` préservé), **persistance** (`nodeSummary["proxmox/proxmox"]` dans
+  `/api/user-config`) + **persistance à la reconnexion** (rechargement → layout conservé),
+  0 erreur console.
+
+### 13.1. Serveur — `GET /api/node-capacity?endpoint=&node=` (capacity planning niveau nœud)
+
+Nouvel endpoint dans `packages/server/src/modules/dashboard/routes.ts` (calqué sur
+`computeCapacity` du cluster, mais **filtré sur un seul nœud** — pas d'agrégation cross-nœuds) :
+
+- **InfluxDB** (primaire) : `node_metrics` avec `WHERE node = '<nœud>' AND clusterFilter`,
+  `date_bin(INTERVAL '1 day')`, `GROUP BY t` → `dailyByNode` **réutilisé tel quel** (filtré sur un
+  seul nœud, il donne la moyenne journalière de ce nœud). **disk = rootfs du nœud**
+  (`disk_pct` de `node_metrics`) — **pas** de surcharge `storage_metrics` (concept de stockage VM
+  du cluster). `buildForecast('cpu'|'ram'|'disk', …)` (shared, réutilisé tel quel — ≥7 j sinon
+  `insufficientData`).
+- **Repli RRD** : `getRrddata('node', node)` → `nodeDailyFromRrd` (fonction pure exportée :
+  cpu fraction ×100, ram `mem/memTotal`, disk `rootfs/rootfsTotal`, moyenne journalière par
+  nœud unique). Nœud absent/offline → `nodeCapacityFromDaily([])` (tout `insufficientData`).
+- **Fonctions pures exportées** (testées dans `routes.test.ts`) : `nodeCapacityFromDaily(days,
+  source)` (construit la `CapacityResponse` — 3 `buildForecast`) et `nodeDailyFromRrd(points, node)`.
+- **Route** : résolution endpoint (404 si inconnu) + **validation du nœud** (`getNodes()` — 404 si
+  le nœud n'existe pas sur l'endpoint) + param `node` requis (400 si absent) + cache
+  `nodeCapacityCache` clé `${ep.id}/${node}` (5 min, comme le cluster). Renvoie **`CapacityResponse`**
+  — **même forme que le cluster** → `CapacityChartBody` se réemploie tel quel.
+- **Échappement SQL** : `sqlQuote(nodeName)` (helper existant) pour le `WHERE node = '…'`.
+
+## 14. Hors périmètre
 - Actions power (start/stop/reboot) — reportées (« plus tard »), token PVE écriture requis.
 - Création/migration/suppression de VM.

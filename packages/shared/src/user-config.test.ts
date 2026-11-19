@@ -217,6 +217,19 @@ describe('scopes (vmView / nodeView)', () => {
     expect(cfg.pages.storageView).toBeUndefined();
     expect(getScopePage(cfg, 'vmSummary', 'ep1/103')).toEqual({ layout: [item('vm-os')], library: ['capacity'] });
   });
+
+  it('nodeSummary : round-trip + isolation vis-à-vis de nodeView (Monitor nœud)', () => {
+    let cfg: UserConfig = setScopePage(null, 'nodeSummary', 'ep1/pve1', { layout: [item('kpi-cpu')], library: ['capacity-disk'] });
+    expect(getScopePage(cfg, 'nodeSummary', 'ep1/pve1')).toEqual({ layout: [item('kpi-cpu')], library: ['capacity-disk'] });
+    // Isolation : nodeSummary (Résumé) ne lit pas nodeView (Monitor) et inversement.
+    cfg = setScopePage(cfg, 'nodeView', 'ep1/pve1', { layout: [item('cpu')], library: [] });
+    expect(getScopePage(cfg, 'nodeView', 'ep1/pve1')).toEqual({ layout: [item('cpu')], library: [] });
+    expect(getScopePage(cfg, 'nodeSummary', 'ep1/pve1')).toEqual({ layout: [item('kpi-cpu')], library: ['capacity-disk'] });
+    // clearScopePage supprime le scope puis la map vidée.
+    cfg = clearScopePage(cfg, 'nodeSummary', 'ep1/pve1');
+    expect(cfg.pages.nodeSummary).toBeUndefined();
+    expect(getScopePage(cfg, 'nodeView', 'ep1/pve1')).toEqual({ layout: [item('cpu')], library: [] });
+  });
 });
 
 describe('parseUserConfig (validation serveur)', () => {
@@ -229,6 +242,7 @@ describe('parseUserConfig (validation serveur)', () => {
       endpointView: { ep1: { layout: [item('res-cpu')], library: [] } },
       nodePage: { 'ep1/pve1': { layout: [item('kpi-cpu')], library: ['vms'] } },
       vmSummary: { 'ep1/103': { layout: [item('vm-os')], library: ['capacity'] } },
+      nodeSummary: { 'ep1/pve1': { layout: [item('kpi-cpu')], library: ['capacity-disk'] } },
       storageView: { 'ep1/local-lvm': { layout: [item('storage-occupancy')], library: [] } },
       sensorHistory: { 'pve1/cpu-core-0': { layout: [], library: ['history'] } },
     },
@@ -255,6 +269,13 @@ describe('parseUserConfig (validation serveur)', () => {
       parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { vmSummary: 'nope' } }),
     ).toBeNull();
     expect(parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { sensorHistory: { 'a/b': 'nope' } } })).toBeNull();
+  });
+
+  it('parse le scope nodeSummary (Résumé nœud) et rejette une forme invalide', () => {
+    const parsed = parseUserConfig(JSON.parse(JSON.stringify(valid)))!;
+    expect(parsed.pages.nodeSummary?.['ep1/pve1']).toEqual({ layout: [item('kpi-cpu')], library: ['capacity-disk'] });
+    expect(parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { nodeSummary: 'nope' } })).toBeNull();
+    expect(parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { nodeSummary: { 'a/b': 'nope' } } })).toBeNull();
   });
 
   it('accepte une config valide et clame la géométrie', () => {

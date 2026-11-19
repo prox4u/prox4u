@@ -44,6 +44,12 @@ export function fetchCapacity(endpoint?: string): Promise<CapacityResponse> {
   return getJson<CapacityResponse>(withEndpoint('/api/capacity', endpoint));
 }
 
+/** Capacity planning au NIVEAU NŒUD (disk = rootfs du nœud) — /api/node-capacity. */
+export function fetchNodeCapacity(endpoint: string, node: string): Promise<CapacityResponse> {
+  const path = `/api/node-capacity?node=${encodeURIComponent(node)}`;
+  return getJson<CapacityResponse>(withEndpoint(path, endpoint));
+}
+
 export function fetchTrends(endpoint?: string): Promise<TrendsResponse> {
   return getJson<TrendsResponse>(withEndpoint('/api/trends', endpoint));
 }
