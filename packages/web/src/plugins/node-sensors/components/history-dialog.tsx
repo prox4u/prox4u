@@ -1,12 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { EChartsOption, LineSeriesOption } from 'echarts';
-import { sensorKey, type SensorHistoryPoint, type SensorHistoryResponse, type SensorReading, type SmartDevice } from '@prox4u/shared';
+import {
+  addWidget,
+  mergePageConfig,
+  removeWidget,
+  sensorKey,
+  type SensorHistoryPoint,
+  type SensorHistoryResponse,
+  type SensorReading,
+  type SmartDevice,
+  type WidgetItem,
+} from '@prox4u/shared';
 import { fetchSensorHistory, fetchSmartHistory } from '../../../core/api/apiClient';
 import { useEChart } from '../../../hooks/use-echart';
 import { chartTheme } from '../../../lib/chart-theme';
 import { cn } from '../../../lib/utils';
 import { useTheme } from '../../../store/theme';
+import { useUserConfig } from '../../../store/user-config';
+import type { CoreWidgetDef } from '../../../core/widgets/types';
+import { layoutsEqual } from '../../../core/widgets/types';
+import { WidgetGridLayout } from '../../../core/widgets/widget-grid';
+import { WidgetLibraryPanel } from '../../../core/widgets/widget-library';
+import { WidgetToolbar } from '../../../core/widgets/widget-toolbar';
 import { Dialog } from '../../../components/ui/dialog';
 import { Skeleton } from '../../../components/ui/skeleton';
 
@@ -95,6 +111,74 @@ export function HistoryDialog({ target, onClose }: { target: HistoryTarget | nul
     };
   }, [target, range, t, theme]);
 
+  // Personnalisation du graphe d'historique par utilisateur : le graphe est un
+  // WIDGET redimensionnable (framework core/widgets), persisté par compte et par
+  // cible (scope = identité stable de la cible — capteur ou disque SMART). Survit
+  // à la reconnexion (serveur = source de vérité).
+  const scope = target ? historyTargetKey(target) : '';
+  const stored = useUserConfig((s) => s.config?.pages.sensorHistory?.[scope] ?? null);
+  const updatePage = useUserConfig((s) => s.updatePage);
+  const clearPage = useUserConfig((s) => s.clearPage);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+
+  // Catalogue : un seul widget — le graphe (gère les états chargement/erreur/vide).
+  const catalog = useMemo<CoreWidgetDef[]>(
+    () => [
+      {
+        id: 'sensor-history-chart',
+        title: t('nodeSensors.history.title'),
+        default: { w: 12, h: 6 },
+        minW: 4,
+        minH: 4,
+        render: () =>
+          loading ? (
+            <Skeleton className="h-full w-full" />
+          ) : error ? (
+            <div className="flex h-full items-center justify-center p-3 text-xs text-crit">
+              {t('nodeSensors.history.error', { msg: error })}
+            </div>
+          ) : data && data.points.length > 0 ? (
+            <HistoryChart points={data.points} markLines={data.markLines} />
+          ) : (
+            <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+              {t('nodeSensors.history.empty')}
+            </div>
+          ),
+      },
+    ],
+    [t, loading, error, data],
+  );
+
+  const catalogKey = useMemo(() => catalog.map((c) => c.id).join(','), [catalog]);
+  const defaultLayout = useMemo<WidgetItem[]>(
+    () => [{ widgetId: 'sensor-history-chart', x: 0, y: 0, w: 12, h: 6 }],
+    [],
+  );
+  const merged = useMemo(
+    () => mergePageConfig(stored, catalog, defaultLayout),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stored, catalogKey, defaultLayout],
+  );
+
+  const onLayoutChange = (layout: WidgetItem[]) => {
+    if (!scope) return;
+    if (layoutsEqual(layout, merged.layout)) return;
+    updatePage('sensorHistory', scope, { layout, library: merged.library });
+  };
+  const onRemove = (widgetId: string) => {
+    if (!scope) return;
+    updatePage('sensorHistory', scope, removeWidget(merged, widgetId));
+  };
+  const onAdd = (widgetId: string) => {
+    if (!scope) return;
+    const def = catalog.find((c) => c.id === widgetId);
+    if (def) updatePage('sensorHistory', scope, addWidget(merged, def));
+  };
+  const onReset = () => {
+    if (!scope) return;
+    clearPage('sensorHistory', scope);
+  };
+
   const open = target !== null;
   const last = data && data.points.length > 0 ? data.points[data.points.length - 1] : null;
 
@@ -131,18 +215,36 @@ export function HistoryDialog({ target, onClose }: { target: HistoryTarget | nul
             </div>
           </div>
 
-          {/* Graphe / états */}
-          {loading ? (
-            <Skeleton className="h-72 w-full" />
-          ) : error ? (
-            <p className="text-xs text-crit">{t('nodeSensors.history.error', { msg: error })}</p>
-          ) : data && data.points.length > 0 ? (
-            <HistoryChart points={data.points} markLines={data.markLines} />
-          ) : (
-            <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">
-              {t('nodeSensors.history.empty')}
+          {/* Barre d'outils : bibliothèque + réinitialiser + indicateur de sauvegarde. */}
+          <div className="flex items-center justify-end">
+            <WidgetToolbar
+              libraryOpen={libraryOpen}
+              onToggleLibrary={() => setLibraryOpen((o) => !o)}
+              onReset={onReset}
+              libraryCount={merged.library.length}
+            />
+          </div>
+          {/* Graphe d'historique = widget redimensionnable (taille persistée par cible). */}
+          <div className="flex items-start gap-4">
+            <div className="min-w-0 flex-1">
+              <WidgetGridLayout
+                catalog={catalog}
+                config={merged}
+                ctx={{ endpointId: '' }}
+                onLayoutChange={onLayoutChange}
+                onRemove={onRemove}
+              />
             </div>
-          )}
+            {libraryOpen && (
+              <WidgetLibraryPanel
+                catalog={catalog}
+                config={merged}
+                onAdd={onAdd}
+                onRemove={onRemove}
+                onClose={() => setLibraryOpen(false)}
+              />
+            )}
+          </div>
 
           <p className="text-[11px] text-muted-foreground">{t('nodeSensors.history.hint')}</p>
         </div>
@@ -246,5 +348,7 @@ function HistoryChart({ points, markLines }: { points: SensorHistoryPoint[]; mar
   }, [points, markLines, ct, t]);
 
   const ref = useEChart(option);
-  return <div ref={ref} className="h-72 w-full" />;
+  // `h-full` : le graphe remplit la carte du widget (redimensionnable) — le
+  // ResizeObserver de useEChart gère le resize react-grid-layout.
+  return <div ref={ref} className="h-full w-full" />;
 }

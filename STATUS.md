@@ -14,7 +14,7 @@
 - App en **HTTPS** (cert auto-signé, SAN localhost + IP VM) ; InfluxDB en HTTPS sur 8181 ; **Explorer** (UI InfluxDB 3) en HTTPS sur 8888
 - Logs / pid : `logs/` (à la racine du projet, rien dans /tmp)
 - Cron : `@reboot` + keepalive minute par minute sur `server.sh start` (idempotent) ; le conteneur InfluxDB se relance seul au boot (`restart: unless-stopped`)
-- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (520 tests : 303 shared + 217 server)
+- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (522 tests : 305 shared + 217 server)
 
 ---
 
@@ -2120,6 +2120,46 @@ reçoivent le widget en bas par le merge.
 ### Docs
 - `skills/hypervision/SKILL.md` (§11.8 — capacity par élément + réemploi, frontmatter mis à jour).
 - `skills/vm-inventory/SKILL.md` (§11 — section « Capacité du cluster » du détail VM, frontmatter mis à jour).
+
+## ✅ Fait — Graphiques personnalisables PARTOUT : Résumé VM + drill-down stockage + historique capteurs (livré, validé Playwright — **commité**)
+
+> **2026-11-19** — « dans le module vue VM, il faut aussi la bibliothèque des graphiques, et pouvoir déplacer, redimensionner, ajouter et supprimer des graphiques. Pour faire simple, partout où il y a des graphiques il faut pouvoir les personnaliser. Et surtout, sauvegarder les emplacements quand l'utilisateur se reconnecte. » → extension du socle `core/widgets` (grille `WidgetGridLayout` + bibliothèque + persistance `/api/user-config`) à **3 nouvelles surfaces**, chacune avec **drag/resize/retirer (→ bibliothèque)/réinsérer/Réinitialiser** et **persistance par compte** (survit à la reconnexion).
+
+### Fondations shared — 3 nouvelles clés de page `user-config`
+- `packages/shared/src/user-config.ts` : `UserConfigPage` + **`vmSummary`** (scope `endpointId/vmid`) / **`storageView`** (scope `endpointId/datastore`) / **`sensorHistory`** (scope = `historyTargetKey` : capteur `node/chip/feature`, disque `node/device`) + type `ScopedPage` + refactor `getScopePage` (lookup `config.pages[page]` au lieu de la ternaire imbriquée) + `parseUserConfig` (les 3 clés dans la boucle de validation). **Zéro modif serveur** (il importe `parseUserConfig` du shared — rebuild shared suffit).
+- i18n : `storage.drilldown.vms` (fr « VMs hébergées » / en « Hosted VMs »).
+- Tests : **2 nouveaux** (`user-config.test.ts` — round-trip + isolation des scopes + parse) → **shared 305** (était 303).
+
+### Partie 1 — Détail VM : onglet Résumé en grille personnalisable (vm-view_v4)
+- `vm-detail.tsx` : **tout l'onglet Résumé** (7 panneaux vSphere + section capacité) → grille `WidgetGridLayout` avec **10 widgets** : `vm-os` / `vm-details` / `vm-hardware` / `vm-interfaces` / `vm-usage` / `vm-related` / `vm-info` (7 panneaux) + `capacity-cpu` / `capacity-ram` / `capacity-disk` (3 `CapacityChartBody` réemployés de `hypervision_v4`).
+- `Panel` (carte + titre) remplacé par **`PanelBody`** (wrapper `<dl>` pour la validité des `<dt>`/`<dd>` de `Row` — le frame de widget fournit la carte + titre + handle de drag + retirer).
+- Scope **`vmSummary « endpointId/vmid »`** (vmid stable au renommage). Layout par défaut = 3 colonnes de panneaux (w4 h3) + rangée capacité (w4 h4). Page `vmSummary`.
+
+### Partie 2 — Stockage : drill-down datastore en grille personnalisable
+- `storage-inventory.tsx` : `DatastorePanels` (2 panneaux côte à côte) **découpé** en `OccupancyChartBody` (graphe, `h-full`) + `CapacityPanelBody` (badge jours/pente) + `VmListBody` (table + « Afficher plus », param `total` pour le compteur shown/total) + **`DatastoreDrilldownGrid`** (3 widgets : `storage-occupancy` w8 h3 / `storage-capacity` w4 h3 / `storage-vms` w12 h5). `VmDrilldown` = `<td colSpan={10}>` contenant la grille.
+- Scope **`storageView « endpointId/datastore »`**. Page `storageView`.
+
+### Partie 3 — Capteurs : historique en widget redimensionnable (node-sensors)
+- `history-dialog.tsx` : la fenêtre « Historique des valeurs » (modal, 1 graphe) → le graphe est un **widget unique** `sensor-history-chart` (w12 h6, minH 4) **redimensionnable** (drag du coin `se-resize`) + toolbar (bibliothèque + Réinitialiser). Le corps gère les états chargement (Skeleton) / erreur / vide / graphe. `HistoryChart` passe de `h-72` fixe à **`h-full`** (le `ResizeObserver` de `useEChart` gère le resize RGL). Le sélecteur de période (31 j / 1 an) + l'en-tête (identité + dernière mesure) restent **hors grille** (en-tête du modal).
+- Scope **`sensorHistory` = `historyTargetKey`** (capteur : `sensorKey` = `node/chip/feature` ; disque SMART : `node/device`). Page `sensorHistory`.
+
+### Fichiers modifiés
+- `packages/shared/src/user-config.ts` (+ 3 clés de page, `ScopedPage`, `parseUserConfig`) · `user-config.test.ts` (+ 2 tests) · `i18n/{fr,en}.ts` (`storage.drilldown.vms`)
+- `packages/web/src/plugins/vm-view_v4/components/vm-detail.tsx` (Partie 1)
+- `packages/web/src/plugins/storage/components/storage-inventory.tsx` (Partie 2)
+- `packages/web/src/plugins/node-sensors/components/history-dialog.tsx` (Partie 3)
+
+### Vérifications effectuées
+- `pnpm --filter @prox4u/shared build` + restart serveur + typecheck web + `vite build` (bundle `index-DIiwS2Zw.js`) : OK.
+- Tests : **shared 305 (+2), server 217**.
+- **Playwright Partie 1** (détail VM LXC #103) : 10 widgets rendus, bibliothèque Affichés 10/Bibliothèque 0, retirer « Objets liés » (→ bibliothèque, 9 affichés) + réinsérer (10), **drag** (vm-os x=0→4 sauvegardé), **reset** (10 widgets, entrée config supprimée), **persistance** (`vmSummary["proxmox/103"]` dans `/api/user-config`) + **persistance à la reconnexion** (rechargement → 9 widgets conservés), 0 erreur console.
+- **Playwright Partie 2** (drill-down `local-lvm` Proxmox) : grille 3 widgets (Occupation + ligne d'allocation 10 % + projection, Capacity planning « à 90 % dans ~1360 j », VMs hébergées 3 VMs), toolbar, bibliothèque Affichés 3/Bibliothèque 0, retirer « Capacity planning » (→ bibliothèque, 2 affichés) + réinsérer (3), **drag** (storage-occupancy x=0→3 sauvegardé), **reset** (3 widgets, entrée supprimée), **persistance** (`storageView["proxmox/local-lvm"]`) + **persistance à la reconnexion**, 0 erreur console.
+- **Playwright Partie 3** (historique disque SMART `proxmox/nvme0n1` + capteur `proxmox/nvme-pci-d200/sensor_1`) : widget graphe rendu (courbe température + `markLine` seuils), toolbar, **redimensionnement** (h=6→9 sauvegardé), **reset** (entrée supprimée), **persistance** (`sensorHistory["proxmox/nvme0n1"]`) + **persistance à la reconnexion** (rechargement → h=9 conservé), 0 erreur console.
+
+### Docs
+- `skills/vm-inventory/SKILL.md` (§12 — Résumé en grille personnalisable, frontmatter mis à jour).
+- `skills/storage/SKILL.md` (§4 — drill-down en grille personnalisable, frontmatter mis à jour).
+- `skills/node-sensors/SKILL.md` (§3.2/§5 — historique en widget redimensionnable, frontmatter mis à jour).
 
 ## ⏳ À faire
 
