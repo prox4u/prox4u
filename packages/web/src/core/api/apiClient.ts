@@ -2,6 +2,7 @@ import type {
   DatastoreHistoryResponse,
   MetricsTimeframe,
   NodeDiskioResponse,
+  NodeHardwareResponse,
   NodeHostHistoryResponse,
   NodeNetResponse,
   NodeSensorsResponse,
@@ -124,6 +125,11 @@ export function fetchNodeSensors(): Promise<NodeSensorsResponse> {
 /** Métriques système hôte (load / iowait / swap / usage par cœur) — dernier point par nœud, Vue d'ensemble. */
 export function fetchNodeSystem(): Promise<NodeSystemResponse> {
   return getJson<NodeSystemResponse>('/api/node-system');
+}
+
+/** Empreinte matérielle par nœud (modèle CPU + DMI) — quasi-statique, page nœud v4. */
+export function fetchNodeHardware(): Promise<NodeHardwareResponse> {
+  return getJson<NodeHardwareResponse>('/api/node-hardware');
 }
 
 /** I/O disque par device PHYSIQUE d'un nœud (counters diskio → débits, buckets) — Vue d'ensemble. */

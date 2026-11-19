@@ -221,6 +221,8 @@ export class Poller {
           cpus: n.cpus,
           memUsedBytes: n.memUsed,
           memTotalBytes: n.memTotal,
+          rootfsUsedBytes: n.rootfsUsed,
+          rootfsTotalBytes: n.rootfsTotal,
           loadavg: n.loadavg,
           version: n.version,
           cpuAllocCores: cpuAllocByNode.get(n.node) ?? 0,

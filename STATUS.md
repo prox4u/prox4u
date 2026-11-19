@@ -14,7 +14,7 @@
 - App en **HTTPS** (cert auto-signé, SAN localhost + IP VM) ; InfluxDB en HTTPS sur 8181 ; **Explorer** (UI InfluxDB 3) en HTTPS sur 8888
 - Logs / pid : `logs/` (à la racine du projet, rien dans /tmp)
 - Cron : `@reboot` + keepalive minute par minute sur `server.sh start` (idempotent) ; le conteneur InfluxDB se relance seul au boot (`restart: unless-stopped`)
-- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (518 tests : 303 shared + 215 server)
+- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (520 tests : 303 shared + 217 server)
 
 ---
 
@@ -2018,6 +2018,45 @@ reçoivent le widget en bas par le merge.
 
 ### Docs
 - `skills/hypervision/SKILL.md` (description + §11.2 « Catalogue 20 widgets » + nouvelle §11.5 « Évolution v4 (en place) ») ; `skills/general/SKILL.md` (compteur 20 widgets).
+
+## ✅ Fait — Détails hôte + Capacité et utilisation sur la page nœud (hypervision_v4) + collecte hw-info Telegraf (livré, validé Playwright — **commité**)
+
+> **2026-11-19** — Sur la page nœud Proxmox (`/e/:endpointId/n/:nodeId`, hypervision_v4), ajout de **deux cartes** inspirées d'une capture vCenter : **« Détails hôte »** (identification hôte + matériel) et **« Capacité et utilisation »** (barres used vs capacité CPU/Mémoire/Stockage), avec **collecte des données manquantes** (modèle CPU + modèle matériel DMI) via Telegraf. Implémenté **en place dans `hypervision_v4`** (dérogation explicite de l'utilisateur à la règle `_vN`).
+
+### Périmètre (arbitrage utilisateur)
+- Périmètre validé : « Détails hôte + Matériel » + « Capacité et utilisation » + « Phase 2 collecte (cpu_names + DMI) » — Phase 2 = maintenant. « Objets associés (cluster) » **non** retenu ; « Configuration » vSphere (HA/FT/EVC) = non applicable Proxmox ; « Balises » / « Attributs personnalisés » barrés par l'utilisateur.
+
+### Phase 2 — Collecte (données manquantes)
+- **1 script `exec` Telegraf unique** `prox4u-telegraf-hw-info.sh` (pattern `dm_names`/`iface_mac`) plutôt que `cpu_names` — déterministe, une source ; lit `/proc/cpuinfo` (`model name`) + `/sys/class/dmi/id/{product_name,sys_vendor,board_name}` → table quasi-statique `node_hardware` (tags `cpu_model`/`product`/`vendor`/`board`, champ `present=1i` obligatoire) ; valeur illisible → `unknown` (mapée en `null` côté serveur — jamais de valeur inventée).
+- **`GET /api/node-hardware`** (`system-routes.ts`) : dernier point par nœud sur `node_hardware` (fenêtre 1 h), cache 5 min `HW_CACHE_TTL_MS`, helper `strOrNull` (`unknown`/vide → null) ; `source: 'empty'` si la table est absente (agent pas encore (re)déployé) → le front affiche « — ».
+- **`NodeHealth`** : `rootfsUsedBytes`/`rootfsTotalBytes` ajoutés (**requis** `number | null`, cohérent avec `mem*`) + mapping poller (déjà lues dans `getNodes()`) → la barre Stockage = rootfs (disque système).
+
+### Phase 1 — Widgets
+- **2 widgets** au catalogue `node.tsx` : `host-details` + `capacity` (w6 h4, minW 4, minH 3) **côte à côte** après les KPIs (y2) ; `vms` décalé y6, graphiques depuis y10 dans `nodeDefaultLayout` (`TOP_IDS` mis à jour). Nouvel user → position défaut ; user existant → ajout en bas par le merge `mergePageConfig`.
+- **`HostDetailsBody`** (`components/node-widgets.tsx`) : identification (hyperviseur, IP, état, uptime, cœurs, NIC, VMs) + empreinte matérielle (modèle CPU + DMI). La version PVE brute `pve-manager/9.1.1/42dba46cf33dac83` est parsée en **« Proxmox VE 9.1.1 »** (helper `pveVersionLabel` — le champ `version` du snapshot est la valeur brute de `pveversion`). Contenu aligné en haut (`content-start`).
+- **`CapacityBody`** + `CapacityRow` : 3 barres used vs capacité (CPU en **cœurs** — pas de fréquence collectée ; Mémoire + Stockage rootfs en octets), tons `usageSeverity` (seuils `overcommit.json`).
+- **i18n** : `node.capacity.*` (10 clés) + `node.hostDetails.*` (10 clés) fr/en.
+
+### Fichiers modifiés
+- `packages/shared/src/system-metrics.ts` (`NodeHardwareRow`/`NodeHardwareResponse`) · `index.ts` (exports) · `types.ts` (`NodeHealth` + rootfs) · `health.test.ts` (rootfs dans `okNode`) · `i18n/{fr,en}.ts` (`node.capacity.*` + `node.hostDetails.*`)
+- `packages/server/src/core/poller.ts` (mapping rootfs) · `modules/nodesensors/system-routes.ts` (`GET /api/node-hardware` + `HW_CACHE_TTL_MS` + `strOrNull` + `hwCache`) · `system-routes.test.ts` (+2 tests)
+- `packages/web/src/core/api/apiClient.ts` (`fetchNodeHardware`) · `plugins/hypervision_v4/components/node-widgets.tsx` (`CapacityRow`/`CapacityBody`/`HostDetailsBody`/`pveVersionLabel` + `nodeDefaultLayout`) · `pages/node.tsx` (imports, `hwRows`/`hwRow` + effet 60 s, 2 defs catalogue, `hwRow` en deps)
+- `deploiement/60-telegraf-nodes.sh` (script hw-info section 5d + `[[inputs.exec]]` + écho dry-run)
+
+### Piège rencontré (corrigé — ne pas réintroduire)
+| Piège | Cause / fix |
+|---|---|
+| `health.test.ts` cassé par les champs `NodeHealth` requis ajoutés | `okNode` complété (`rootfsUsedBytes`/`rootfsTotalBytes`) — même pattern que les ajouts `cpus`/`mem*`/`loadavg` du jalon multi-cluster |
+
+### À faire côté utilisateur
+- **Re-déploiement `deploiement/60-telegraf-nodes.sh` sur les nœuds Proxmox requis** pour activer la collecte hw-info (modèles CPU/matos) — tant que l'agent n'est pas (re)déployé, les modèles s'affichent « — » (comportement attendu et validé).
+
+### Vérifications effectuées
+- `pnpm typecheck` (shared+server+web) + `pnpm test` (**shared 303, server 217** = 520) + `vite build` (bundle `index-CIWliVAZ.js`) : OK.
+- Playwright : login test-admin, page `/e/proxmox/n/proxmox` — 2 widgets présents et bien positionnés (après KPIs, avant table VMs), **0 erreur console** ; Détails hôte (IP 192.168.1.80, ● en ligne, Uptime 4h, Cœurs 24, NIC 13, VMs 7, « Proxmox VE 9.1.1 », modèles « — ») + Capacité (CPU 6.3/24 cœurs, Mémoire 34.7/126 Go, Stockage 13.9/93.9 Go, barres teintées).
+
+### Docs
+- `skills/hypervision/SKILL.md` (2 widgets nœud + endpoint) ; `skills/node-sensors/SKILL.md` (`/api/node-hardware` + script hw-info).
 
 ## ⏳ À faire
 

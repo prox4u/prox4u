@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { NodeDiskioResponse, NodeHostHistoryResponse, NodeNetResponse, NodeSystemResponse, NodeTempsResponse, SmartTempsResponse, ZfsArcResponse } from '@prox4u/shared';
+import type { NodeDiskioResponse, NodeHardwareResponse, NodeHostHistoryResponse, NodeNetResponse, NodeSystemResponse, NodeTempsResponse, SmartTempsResponse, ZfsArcResponse } from '@prox4u/shared';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 import { buildNodeNetIfaces, diskioRateSql, diskioRowsToDevices, hostHistoryMemSql, hostHistorySystemSql, mergeHostHistory, netRateSql, nodeEndpoint, parsePveFwIface, registerNodeSystemRoutes, smartTempsRowsToSeries, smartTempsSql, tempsRowsToSeries, tempsSql, zfsArcRowsToPoints, zfsArcSql } from './system-routes.js';
 
@@ -255,6 +255,68 @@ describe('GET /api/node-system', () => {
     registerNodeSystemRoutes(app2, ctx2, makePoller());
     await app2.ready();
     const res = await app2.inject({ method: 'GET', url: '/api/node-system' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ nodes: [], source: 'empty' });
+    await app2.close();
+    rmSync(dir2, { recursive: true, force: true });
+  });
+});
+
+// --- GET /api/node-hardware ----------------------------------------------------------------
+
+describe('GET /api/node-hardware', () => {
+  let dir: string;
+  let app: FastifyInstance;
+
+  const hwRows = [
+    { node: 'proxmox', cpu_model: 'Intel(R) Xeon(R) Gold 6150 CPU @ 2.70GHz', product: 'Synergy 480 Gen10', vendor: 'Dell Inc.', board: '0K22XX', time: '2026-11-19T14:40:00Z' },
+    { node: 'proxmox', cpu_model: 'Intel(R) Xeon(R) Gold 6150 CPU @ 2.70GHz', product: 'Synergy 480 Gen10', vendor: 'Dell Inc.', board: '0K22XX', time: '2026-11-19T14:39:50Z' }, // plus ancien → ignoré
+    { node: 'ProxSite1', cpu_model: 'unknown', product: 'unknown', vendor: 'QEMU', board: 'unknown', time: '2026-11-19T14:40:00Z' },
+  ];
+
+  beforeEach(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'hw-routes-'));
+    app = Fastify();
+    registerNodeSystemRoutes(
+      app,
+      makeCtx(dir, { 'FROM node_hardware': () => hwRows }),
+      makePoller(),
+    );
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('dernier point par nœud + sentinelle unknown → null (jamais de valeur inventée)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/node-hardware' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as NodeHardwareResponse;
+    expect(body.source).toBe('influx');
+    expect(body.nodes).toHaveLength(2);
+    const proxmox = body.nodes.find((n) => n.node === 'proxmox')!;
+    expect(proxmox).toEqual({
+      node: 'proxmox',
+      cpuModel: 'Intel(R) Xeon(R) Gold 6150 CPU @ 2.70GHz',
+      product: 'Synergy 480 Gen10',
+      vendor: 'Dell Inc.',
+      board: '0K22XX',
+    });
+    const site1 = body.nodes.find((n) => n.node === 'ProxSite1')!;
+    expect(site1.cpuModel).toBeNull(); // unknown → null
+    expect(site1.product).toBeNull();
+    expect(site1.vendor).toBe('QEMU'); // valeur réelle conservée
+    expect(site1.board).toBeNull();
+  });
+
+  it('table absente (agent pas encore redéployé) → empty', async () => {
+    const dir2 = mkdtempSync(path.join(tmpdir(), 'hw-routes-'));
+    const ctx2 = makeCtx(dir2, {});
+    const app2 = Fastify();
+    registerNodeSystemRoutes(app2, ctx2, makePoller());
+    await app2.ready();
+    const res = await app2.inject({ method: 'GET', url: '/api/node-hardware' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ nodes: [], source: 'empty' });
     await app2.close();

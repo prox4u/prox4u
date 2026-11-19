@@ -437,6 +437,10 @@ export interface NodeHealth {
   cpus: number | null;
   memUsedBytes: number | null;
   memTotalBytes: number | null;
+  /** Disque système (rootfs) utilisé (octets) — null si inconnu. */
+  rootfsUsedBytes: number | null;
+  /** Disque système (rootfs) total (octets) — null si inconnu. */
+  rootfsTotalBytes: number | null;
   loadavg: [number, number, number] | null;
   version?: string;
   /** vCPU alloués aux VMs du nœud (templates exclus) — ratio de surallocation CPU */

@@ -47,6 +47,31 @@ export interface NodeSystemResponse {
   source: 'influx' | 'empty';
 }
 
+/**
+ * Empreinte matérielle d'un nœud (quasi-statique — script `exec` Telegraf,
+ * table `node_hardware`) : modèle CPU (`/proc/cpuinfo` `model name`) + DMI
+ * (`/sys/class/dmi/id/{product_name,sys_vendor,board_name}`). Le script tourne
+ * à chaque cycle (10 s) mais les valeurs ne changent qu'au changement de
+ * machine → prox4u lit le dernier point par nœud sur une fenêtre de 1 h.
+ * `null` = illisible (VM sans DMI, /proc/cpuinfo sans `model name`…).
+ */
+export interface NodeHardwareRow {
+  node: string;
+  /** Modèle CPU (ex. `Intel(R) Xeon(R) Gold 6150 CPU @ 2.70GHz`). */
+  cpuModel: string | null;
+  /** Modèle matériel (DMI product_name, ex. `ProLiant DL380 Gen10`). */
+  product: string | null;
+  /** Constructeur (DMI sys_vendor, ex. `HPE`). */
+  vendor: string | null;
+  /** Carte mère (DMI board_name). */
+  board: string | null;
+}
+
+export interface NodeHardwareResponse {
+  nodes: NodeHardwareRow[];
+  source: 'influx' | 'empty';
+}
+
 /** Point d'I/O d'UN device physique du nœud (bucket). */
 export interface NodeDiskioRow {
   /** unix seconds (début de bucket). */
