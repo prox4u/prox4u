@@ -36,7 +36,18 @@ export const USER_CONFIG_SCHEMA_VERSION = 1;
 /** Nombre de colonnes de la grille (breakpoint lg) — borne du clamp géométrie. */
 export const USER_CONFIG_GRID_COLS = 12;
 
-export type UserConfigPage = 'overview' | 'vmView' | 'nodeView' | 'endpointView' | 'nodePage';
+export type UserConfigPage =
+  | 'overview'
+  | 'vmView'
+  | 'nodeView'
+  | 'endpointView'
+  | 'nodePage'
+  | 'vmSummary'
+  | 'storageView'
+  | 'sensorHistory';
+
+/** Clés de page à SCOPE (un layout par scope) — tout sauf `overview` (layout unique). */
+type ScopedPage = Exclude<UserConfigPage, 'overview'>;
 
 /** Position / taille d'un widget dans la grille (coordonnées react-grid-layout). */
 export interface WidgetItem {
@@ -68,6 +79,12 @@ export interface UserConfig {
     endpointView?: Record<string, PageConfig>;
     /** Page nœud (hypervision v4) — un layout par scope « endpointId/nomDuNœud ». */
     nodePage?: Record<string, PageConfig>;
+    /** Résumé VM (vm-view v4) — un layout par scope « endpointId/vmid » (grille personnalisable). */
+    vmSummary?: Record<string, PageConfig>;
+    /** Drill-down datastore (storage) — un layout par scope « endpointId/datastore ». */
+    storageView?: Record<string, PageConfig>;
+    /** Historique capteur / disque SMART (node-sensors) — un layout par scope « node/cible ». */
+    sensorHistory?: Record<string, PageConfig>;
   };
   /** Posé par le serveur à chaque sauvegarde (ISO 8601). */
   lastUpdated: string;
@@ -232,14 +249,7 @@ export function getScopePage(
 ): PageConfig | null {
   if (!config) return null;
   if (page === 'overview') return config.pages.overview ?? null;
-  const map =
-    page === 'vmView'
-      ? config.pages.vmView
-      : page === 'nodeView'
-        ? config.pages.nodeView
-        : page === 'endpointView'
-          ? config.pages.endpointView
-          : config.pages.nodePage;
+  const map = config.pages[page as ScopedPage];
   if (!map || !scope) return null;
   return map[scope] ?? null;
 }
@@ -258,7 +268,7 @@ export function setScopePage(
     base.pages.overview = pageCfg;
   } else {
     if (!scope) return base;
-    const key = page; // 'vmView' | 'nodeView' | 'endpointView' | 'nodePage'
+    const key = page; // ScopedPage — toutes les clés scopées sont Record<string, PageConfig>
     const map = { ...(base.pages[key] ?? {}) };
     map[scope] = pageCfg;
     base.pages[key] = map;
@@ -277,7 +287,7 @@ export function clearScopePage(
   if (page === 'overview') {
     delete base.pages.overview;
   } else if (scope) {
-    const key = page; // 'vmView' | 'nodeView' | 'endpointView' | 'nodePage'
+    const key = page; // ScopedPage — toutes les clés scopées sont Record<string, PageConfig>
     const map = { ...(base.pages[key] ?? {}) };
     delete map[scope];
     if (Object.keys(map).length > 0) base.pages[key] = map;
@@ -332,7 +342,7 @@ export function parseUserConfig(raw: unknown): UserConfig | null {
     if (!pc) return null;
     out.pages.overview = pc;
   }
-  for (const key of ['vmView', 'nodeView', 'endpointView', 'nodePage'] as const) {
+  for (const key of ['vmView', 'nodeView', 'endpointView', 'nodePage', 'vmSummary', 'storageView', 'sensorHistory'] as const) {
     const v = p[key];
     if (v === undefined) continue;
     if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
