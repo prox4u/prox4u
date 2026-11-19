@@ -148,6 +148,14 @@ CSV dans le slot `extra`) — port des graphiques manquants du dashboard ProxMen
   `load.l1/l5/l15`, `swap.used/pct/noSwap`, `smartHealth.{sectors,reallocated,pending,uncorrectable}`)
   — le widget santé réutilise `nodeSensors.{smart,noSmart,healthy,unhealthy,unknown,wear}` et
   `overview.system.cores`.
+- **Réemploi cross-plugin par `hypervision_v4`** : la page nœud unifiée de `hypervision_v4`
+  (skill `hypervision` §11) **importe statiquement** de `node-monitor.tsx` 28 exports
+  (`TIMEFRAMES`, `ALL_COLS`, 7 hooks `useNode*`, 9 exports CSV, 10 corps `*Body`) +
+  `CpuCoresBody` (`cpu-cores-card.tsx`) + `FwDecodeBlock` (`node-net-card.tsx`) pour réutiliser
+  les mêmes graphiques du Monitor nœud dans sa grille. **Piège versionnement** : ces corps sont
+  la source de vérité partagée — un fix futur de l'un d'eux exige **vm-view_v5 + hypervision_v5**
+  (les deux plugins importent le même fichier v4). L'import est statique (bundlé) → fonctionne
+  quel que soit l'état du plugin vm-view (pas de `dependencies` dans le manifest hypervision_v4).
 - **Hors périmètre (ProxMenux)** : latence réseau (plugin Telegraf `ping` — `CAP_NET_RAW`) et
   GPU (plugin `nvidia-smi` absent) — données non collectées.
 - **Validation livrée** : Playwright 34/34 — 6 widgets rendus avec données réelles (CSV exportés

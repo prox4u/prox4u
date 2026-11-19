@@ -50,6 +50,12 @@ export const en: Record<string, string> = {
   'node.kpi.rootfs': 'System disk (rootfs)',
   'node.kpi.load': 'Load average',
   'node.kpi.loadSub': '(1 / 5 / 15 min)',
+  // v4: node page KPI titles (differentiated from the history charts of the
+  // same name — "CPU (live)" vs "CPU").
+  'node.kpi.cpuLive': 'CPU (live)',
+  'node.kpi.ramLive': 'RAM (live)',
+  'node.kpi.diskLive': 'Disk (live)',
+  'node.kpi.loadLive': 'Load (live)',
   'node.vms.title': 'VMs & containers on this node',
   'node.vms.running': '{{n}} running of {{total}}',
   'node.vms.none': 'No VM on this node',

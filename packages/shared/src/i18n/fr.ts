@@ -50,6 +50,12 @@ export const fr: Record<string, string> = {
   'node.kpi.rootfs': 'Disque système (rootfs)',
   'node.kpi.load': 'Charge moyenne',
   'node.kpi.loadSub': '(1 / 5 / 15 min)',
+  // v4 : titres des KPIs de la page nœud (différenciés des graphiques historiques
+  // du même nom — « CPU (instantané) » vs « CPU »).
+  'node.kpi.cpuLive': 'CPU (instantané)',
+  'node.kpi.ramLive': 'RAM (instantané)',
+  'node.kpi.diskLive': 'Disque (instantané)',
+  'node.kpi.loadLive': 'Charge (instantané)',
   'node.vms.title': 'VMs & conteneurs du nœud',
   'node.vms.running': '{{n}} en marche sur {{total}}',
   'node.vms.none': 'Aucune VM sur ce nœud',

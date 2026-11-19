@@ -1,6 +1,6 @@
 ---
 name: hypervision
-description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/ ou hypervision_v3/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card…).
+description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
 ---
 
 # Hypervision — Base de connaissance
@@ -138,3 +138,96 @@ dashboard ProxMenux, en vue parc).
 - **Validation livrée** : Playwright — carte présente dans le default layout (nouvel user),
   valeurs réelles (proxmox ≈ 81 °C/20 capteurs — amdgpu junction — 39 °C/3 disques ;
   ProxSite1/2 « — »), A/B v2 (carte absente).
+
+## 11. `hypervision_v4` (v0.4.0) — Bibliothèque de graphiques sur TOUTES les pages
+
+Copie de la v3 (`plugins/hypervision_v4/`, manifest id `hypervision_v4`, version `0.4.0`,
+export `hypervisionPluginV4`, enregistré dans `core/plugin/plugins.ts`). v1/v2/v3 intactes →
+rollback A/B (`/?v=hypervision_v3` etc.). La vue d'ensemble est **inchangée** (identique à la
+v3). La nouveauté : la **Bibliothèque de graphiques** (grille personnalisable drag/resize/
+bibliothèque/persistance par user — socle `core/widgets`, skill `general` §12) est étendue à
+**deux pages supplémentaires** :
+
+- **Page CLUSTER** (`/e/:endpointId`) : les **17 blocs** du dashboard deviennent des widgets
+  déplaçables/retraitables. Persistance par compte, scope user-config **`endpointView`**
+  (un layout par cluster, clé = `endpointId`).
+- **Page NŒUD** (`/e/:endpointId/n/:nodeId`) : **grille unifiée** — les **4 KPIs** d'état
+  courant + la **table VMs** + **TOUS les graphiques du Monitor nœud** (système, CPU par cœur,
+  I/O par disque, réseau par interface, températures, SMART, ZFS ARC, charge, swap) sont
+  déplaçables/retraitables — **KPIs et table aussi** (exigence explicite). Persistance par
+  compte, scope **`nodePage`** (un layout par `endpointId/nomDuNœud`).
+
+### 11.1. Nouveaux scopes user-config (shared)
+- `UserConfigPage` += `'endpointView' | 'nodePage'` ; `UserConfig.pages` +=
+  `endpointView?: Record<string, PageConfig>` + `nodePage?: Record<string, PageConfig>`.
+- `parseUserConfig` : la boucle de validation passe de `['vmView','nodeView']` à
+  `['vmView','nodeView','endpointView','nodePage']`. `getScopePage` / `setScopePage` /
+  `clearScopePage` gèrent les deux nouvelles clés (même mécanique que vmView/nodeView).
+- **Pas de bump `USER_CONFIG_SCHEMA_VERSION`** (rétro-compatible : une config sans ces clés
+  est valide, une config avec est acceptée).
+- **PIÈGE MAJEUR (bug rencontré)** : le serveur charge `@prox4u/shared` **depuis le dist**
+  (`main: ./dist/index.js`) **au démarrage** (pas de hot-reload). Après avoir ajouté
+  `endpointView`/`nodePage` à shared, il faut **rebuild shared** (`pnpm --filter @prox4u/shared
+  build`) **ET redémarrer le serveur en cours** — sinon l'ancien `parseUserConfig` (sans ces
+  clés) **jette silencieusement la page** au PUT → le serveur répond `pages: {}` vide → le
+  client adopte la réponse vide (`saveNow` fait `set({ config: res.config })`) → la grille
+  repasse aux défauts. Symptôme : le PUT a le bon corps mais la réponse/le GET suivant sont
+  vides. (Le web consomme aussi le dist shared → rebuild obligatoire avant le typecheck web.)
+
+### 11.2. Page cluster — 17 widgets (scope `endpointView`)
+- `pages/endpoint.tsx` convertie en `WidgetGridLayout` (framework `core/widgets`).
+- **Catalogue 17 widgets** = les 17 blocs v1/v3, dans l'ordre de `DEFAULT_LAYOUT`
+  (`store/layout.ts`) : `res-cpu`/`res-ram`/`res-storage`, `kpi-nodes`/`kpi-cpu`/`kpi-storage`/
+  `kpi-vms`, `metrics`, `health`, `pra`, `capacity`, `storage`, `network`, `alerts`, `top`,
+  `nodes`, `overcommit`.
+- **Layout par défaut** = `ENDPOINT_DEFAULT_LAYOUT` = `DEFAULT_LAYOUT.map(i → widgetId)`
+  (les `i` de `DEFAULT_LAYOUT` correspondent exactement aux ids de widgets). `mergePageConfig`
+  gère le catalogue vide (cas `!snapshot`) → grille non rendue avant le snapshot.
+- **Données inchangées** : snapshot WS (5 s) + `loadHeavy`/`loadRisk` (5 min).
+- **Extraction des 10 corps** : chaque composant a un `*Body` exporté (contenu sans
+  `Card`/en-tête) ; la version carte est **refactorisée pour wrapper le corps** (zéro
+  duplication) : `MetricsPanelBody`, `HealthGaugeBody`, `PraPanelBody`, `CapacityChartBody`,
+  `StorageCardBody`, `NetworkCardBody`, `AlertsListBody`, `TopConsumersBody`,
+  `NodesTableBody`, `OvercommitCardBody`. (+ `ResourceChartBody` / `Kpi*Body` déjà présents
+  depuis la v2.) Badges/compteurs d'en-tête → **slot `extra`** du widget (ex. badge Health
+  Score, sévérité PRA, compteur stockage, « 5 min » réseau, « données insuffisantes »
+  surallocation, valeur courante % des `res-*`).
+- `MetricsPanelBody` est **autonome** (son propre état de timeframe + fetch `fetchMetrics`) —
+  le switcher 1h/24h/7j/30j + le badge source vivent dans le corps (l'en-tête de carte ne
+  porte que le titre).
+- **Règle des hooks** : TOUS les hooks avant les early returns — le snapshot est lu avec guard
+  optionnel (`ep?.snapshot`), le catalogue renvoie `[]` si `!snapshot || !ep`.
+
+### 11.3. Page nœud — grille unifiée (scope `nodePage`)
+- `pages/node.tsx` : grille **unifiée** — 4 KPIs + table VMs + tous les graphiques du Monitor
+  nœud, **tous déplaçables/retraitables**.
+- **Réemploi cross-plugin (vm-view_v4)** : les corps de graphiques du Monitor nœud sont
+  **importés statiquement** de `vm-view_v4/components/node-monitor.tsx` (28 exports :
+  `TIMEFRAMES`, `ALL_COLS`, 7 hooks `useNode*`, 9 exports CSV, 10 corps `*Body`) +
+  `CpuCoresBody` (`cpu-cores-card.tsx`) + `FwDecodeBlock` (`node-net-card.tsx`). **Pas de
+  `dependencies: ['vm-view']` dans le manifest** : le loader évalue les dépendances à
+  l'initialisation (ordre sensible — hypervision se charge avant vm-view → échouerait) ;
+  l'import statique est **bundlé** → fonctionne quel que soit l'état de vm-view. **Piège
+  versionnement** : un fix futur de ces corps → vm-view_v5 + hypervision_v5.
+- **Corps KPIs/table locaux** : `components/node-widgets.tsx` → `StatBody` (KPI), `VmTableBody`
+  (table VMs), `nodeDefaultLayout` (rangée 4 KPIs w3 h2 + table VMs w12 h4 + graphiques
+  empilés w12, ordre catalogue).
+- **Titres KPIs différenciés des graphiques** : nouvelles clés i18n
+  `node.kpi.{cpuLive,ramLive,diskLive,loadLive}` (fr « … (instantané) » / en « … (live) ») —
+  évite la collision « CPU » (KPI) vs « CPU » (graphe historique) dans la bibliothèque.
+- **Compteur VMs** : le « N en marche sur M » de l'en-tête v3 de la table est porté par le
+  **slot `extra`** du widget `vms`.
+- **Layout par défaut calculé seulement quand `ready`** : la grille ne se monte qu'après le
+  **premier chargement `node-net`** (`netDone`) — les ids dynamiques `netif-*` (un widget par
+  interface hôte) ne sont connus qu'à ce moment. `defaultLayout`/`merged` = `[]`/`null` avant.
+- **Règle des hooks (bugs corrigés)** : `EChartsOption` importé de **`'echarts'`** (pas
+  `@prox4u/shared`) ; TOUS les useMemos **avant** les early returns (dérivés snapshot avec
+  guards `ep?.snapshot?.…`).
+
+### 11.4. Validation livrée
+- Playwright : page cluster 17 widgets (bons titres), toolbar (Bibliothèque + Réinitialiser),
+  retrait→bibliothèque→réinsertion→reset persistés, **persistance après restart serveur**,
+  A/B v3 (page cluster sans toolbar/boutons retirer, page nœud = ancien design statique sans
+  grille). Page nœud : 21 widgets (4 KPIs + table VMs + 13 graphiques + 3 `netif-*`
+  dynamiques), KPIs/table avec données réelles, retrait persisté (scope `nodePage`).
+- typecheck (shared+server+web) + tests (shared 303, server 215) + vite build OK.

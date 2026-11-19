@@ -1,6 +1,7 @@
 import { hypervisionPlugin } from '../../plugins/hypervision';
 import { hypervisionPluginV2 } from '../../plugins/hypervision_v2';
 import { hypervisionPluginV3 } from '../../plugins/hypervision_v3';
+import { hypervisionPluginV4 } from '../../plugins/hypervision_v4';
 import { networkPlugin } from '../../plugins/network';
 import { storagePlugin } from '../../plugins/storage';
 import { vmViewPlugin } from '../../plugins/vm-view';
@@ -24,8 +25,9 @@ import type { Plugin } from './types';
  */
 export const PLUGINS: Plugin[] = [
   // Famille hypervision : v1 (rollback) + v2 (vue d'ensemble personnalisable par user)
-  // + v3 (bibliothèque complétée : widget températures par nœud, référence ProxMenux).
-  ...(FEATURES.USE_PLUGIN_HYPERVISION ? [hypervisionPlugin, hypervisionPluginV2, hypervisionPluginV3] : []),
+  // + v3 (bibliothèque complétée : widget températures par nœud, référence ProxMenux)
+  // + v4 (bibliothèque sur TOUTES les pages : cluster + nœud — grille unifiée).
+  ...(FEATURES.USE_PLUGIN_HYPERVISION ? [hypervisionPlugin, hypervisionPluginV2, hypervisionPluginV3, hypervisionPluginV4] : []),
   ...(FEATURES.USE_PLUGIN_NETWORK ? [networkPlugin] : []),
   ...(FEATURES.USE_PLUGIN_STORAGE ? [storagePlugin] : []),
   // Famille vm-view : v1 (rollback) + v2 (console web PVE) + v3 (monitors personnalisables par user)
