@@ -1,6 +1,6 @@
 ---
 name: vm-inventory
-description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Quatre versions : v1 (id vm-view), v2 (vm-view_v2, + bouton « Console web » vers l'UI PVE, + détail nœud), v3 (vm-view_v3, + monitors VM/nœud en grilles personnalisables par user — drag/resize/bibliothèque, persistance /api/user-config par VM et par nœud) et v4 (vm-view_v4, + 6 widgets Monitor nœud : températures chips/disques SMART, santé SMART, ZFS ARC, charge moyenne, swap). Use when working on the vm-view plugin family (packages/web/src/plugins/vm-view/, vm-view_v2/, vm-view_v3/ ou vm-view_v4/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O / temps / ZFS ARC / load / swap sections), or the /api/vm-config endpoint.
+description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Quatre versions : v1 (id vm-view), v2 (vm-view_v2, + bouton « Console web » vers l'UI PVE, + détail nœud), v3 (vm-view_v3, + monitors VM/nœud en grilles personnalisables par user — drag/resize/bibliothèque, persistance /api/user-config par VM et par nœud) et v4 (vm-view_v4, + 6 widgets Monitor nœud : températures chips/disques SMART, santé SMART, ZFS ARC, charge moyenne, swap + section « Capacité du cluster » du détail VM (onglet Résumé) — 3 graphiques capacity planning par élément au niveau cluster, réemploi cross-plugin de CapacityChartBody hypervision_v4). Use when working on the vm-view plugin family (packages/web/src/plugins/vm-view/, vm-view_v2/, vm-view_v3/ ou vm-view_v4/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O / temps / ZFS ARC / load / swap sections), or the /api/vm-config endpoint.
 ---
 
 # Inventaire VM — Base de connaissance
@@ -161,6 +161,17 @@ CSV dans le slot `extra`) — port des graphiques manquants du dashboard ProxMen
 - **Validation livrée** : Playwright 34/34 — 6 widgets rendus avec données réelles (CSV exportés
   et parsés : 8 chips, 3 disques + modèles, hit rate vide, `n_cpus`=24, swap total constant),
   A/B v3 (6/6 absents) + v2 (statique), test-user (6/6 visibles).
+- **Détail VM — section « Capacité du cluster » (onglet Résumé)** : `vm-detail.tsx` affiche,
+  sous les panneaux vSphere du Résumé, une section pleine largeur « Capacité du cluster » avec
+  **3 `CapacityChartBody`** (un par élément, prop `metric` — skill `hypervision` §11.8) en grille
+  `md:grid-cols-3`. Données : capacity planning **au niveau cluster** de l'endpoint qui héberge
+  la VM (pas l'usage propre de la VM) — `fetchCapacity(endpointId)` (`/api/capacity?endpoint=`)
+  avec **cache module** (`capacityCache` Map, `CAPACITY_TTL_MS` 5 min) via le hook
+  `useClusterCapacity` → pas de re-fetch en changeant de VM (capacity identique pour toutes les
+  VMs de l'endpoint). **Import cross-plugin** : `vm-detail.tsx` importe `CapacityChartBody`
+  **statiquement** depuis `../../hypervision_v4/components/capacity-chart` — nouvelle direction
+  d'import (l'existant était hypervision_v4 → vm-view_v4), **pas de cycle de modules** (modules
+  distincts), bundlé au build. i18n : `vm.sum.capacity{,.hint}`.
 
 ## 12. Hors périmètre
 - Actions power (start/stop/reboot) — reportées (« plus tard »), token PVE écriture requis.

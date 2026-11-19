@@ -4,7 +4,9 @@ import { ArrowLeft, Container, MonitorSmartphone } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { VmDetailResponse } from '@prox4u/shared';
 import { matchAgentNetsByMac } from '@prox4u/shared';
-import { fetchVmDetail } from '../../../core/api/apiClient';
+import { fetchCapacity, fetchVmDetail } from '../../../core/api/apiClient';
+import type { CapacityResponse } from '../../../core/api/types';
+import { CapacityChartBody } from '../../hypervision_v4/components/capacity-chart';
 import { VmMonitor } from './vm-monitor';
 import { Badge } from '../../../components/ui/badge';
 import { Skeleton } from '../../../components/ui/skeleton';
@@ -25,6 +27,36 @@ interface Props {
 type Tab = 'summary' | 'monitor' | 'config' | 'network' | 'snapshots';
 
 const STATUS_TONE = { running: 'ok', paused: 'warn', stopped: 'default', unknown: 'default' } as const;
+
+// Cache module de la capacity planning par endpoint (TTL 5 min) — la capacity est au
+// niveau CLUSTER (identique pour toutes les VMs de l'endpoint) → pas de re-fetch en
+// changeant de VM. Donnée secondaire : un échec ne casse pas le panneau.
+const CAPACITY_TTL_MS = 5 * 60 * 1000;
+const capacityCache = new Map<string, { at: number; value: CapacityResponse }>();
+
+/** Capacity planning du cluster (endpoint) — pour la section « Capacité du cluster » du Résumé. */
+function useClusterCapacity(endpointId: string): CapacityResponse | null {
+  const [capacity, setCapacity] = useState<CapacityResponse | null>(null);
+  useEffect(() => {
+    const cached = capacityCache.get(endpointId);
+    if (cached && Date.now() - cached.at < CAPACITY_TTL_MS) {
+      setCapacity(cached.value);
+      return;
+    }
+    let alive = true;
+    setCapacity(null); // endpointId changé → reset pendant le fetch
+    fetchCapacity(endpointId)
+      .then((c) => {
+        capacityCache.set(endpointId, { at: Date.now(), value: c });
+        if (alive) setCapacity(c);
+      })
+      .catch((e) => console.warn('chargement capacity (détail VM) en échec', e));
+    return () => {
+      alive = false;
+    };
+  }, [endpointId]);
+  return capacity;
+}
 
 /** Pastille d'état (running/paused/arrêté). */
 function StatusDot({ status }: { status: VmDetailResponse['vm']['status'] }) {
@@ -83,6 +115,8 @@ export function VmDetail({ endpointId, endpointName, vmid, endpointUrl, lastUpda
   const [data, setData] = useState<VmDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('summary');
+  // Capacity planning du cluster (endpoint) — section « Capacité du cluster » du Résumé.
+  const capacity = useClusterCapacity(endpointId);
 
   // Console web : lien vers la console de la VM dans l'UI PVE (nouvel onglet).
   // Absent en mode démo (endpoint sans URL) → bouton désactivé.
@@ -197,6 +231,7 @@ export function VmDetail({ endpointId, endpointName, vmid, endpointUrl, lastUpda
         ) : (
           <>
             {tab === 'summary' && (
+              <>
               <dl className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {/* OS invité */}
                 <Panel title={t('vm.sum.guestOs')}>
@@ -321,6 +356,21 @@ export function VmDetail({ endpointId, endpointName, vmid, endpointUrl, lastUpda
                   <Row label={t('vm.sum.uptime')}>{formatUptime(vm.uptimeSec)}</Row>
                 </Panel>
               </dl>
+
+              {/* Capacité du cluster (capacity planning de l'endpoint — 1 graphe par élément). */}
+              <section className="mt-3 rounded-lg border bg-card">
+                <h3 className="border-b px-3 py-2 text-xs font-semibold" title={t('vm.sum.capacity.hint')}>
+                  {t('vm.sum.capacity')}
+                </h3>
+                <div className="grid gap-3 p-3 md:grid-cols-3">
+                  {(['cpu', 'ram', 'disk'] as const).map((m) => (
+                    <div key={m} className="min-w-0">
+                      <CapacityChartBody capacity={capacity} metric={m} />
+                    </div>
+                  ))}
+                </div>
+              </section>
+              </>
             )}
 
             {/* Monitor : lazy — le composant n'est monté que quand l'onglet est ouvert. */}

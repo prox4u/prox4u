@@ -10,19 +10,28 @@ import { useOvercommitConfig } from '../../../core/data/use-endpoint';
 import type { CapacityResponse } from '../../../core/api/types';
 
 const COLORS: Record<CapacityMetric, string> = { cpu: '#3b82f6', ram: '#8b5cf6', disk: '#0ea5e9' };
+const ALL_METRICS: CapacityMetric[] = ['cpu', 'ram', 'disk'];
 
 function dayLabel(t: number): string {
   return new Date(t * 1000).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
 }
 
-/** CORPS du graphe de capacité — graphe + 3 badges métriques (aucun extra). */
-export function CapacityChartBody({ capacity }: { capacity: CapacityResponse | null }) {
+/**
+ * CORPS du graphe de capacité — graphe + badges métriques (aucun extra).
+ * `metric` absent → les 3 métriques combinées (historique + projection, légende,
+ * 3 badges) — comportement par défaut. `metric` présent → UNE seule métrique
+ * (1 série historique + 1 projection, pas de légende, 1 badge) — widgets
+ * capacity-cpu/ram/disk + détail VM (onglet Résumé).
+ */
+export function CapacityChartBody({ capacity, metric }: { capacity: CapacityResponse | null; metric?: CapacityMetric }) {
   const { t } = useTranslation();
   const config = useOvercommitConfig();
+  const combined = !metric;
+  const badgeMetrics: CapacityMetric[] = metric ? [metric] : ALL_METRICS;
 
   const option = useMemo<EChartsOption | null>(() => {
     if (!capacity) return null;
-    const metrics: CapacityMetric[] = ['cpu', 'ram', 'disk'];
+    const metrics: CapacityMetric[] = metric ? [metric] : ALL_METRICS;
     const allTimes = new Set<number>();
     for (const m of metrics) {
       for (const p of capacity[m].history) allTimes.add(p.time);
@@ -69,13 +78,15 @@ export function CapacityChartBody({ capacity }: { capacity: CapacityResponse | n
     };
 
     return {
-      grid: { left: 40, right: 16, top: 32, bottom: 28 },
+      grid: { left: 40, right: 16, top: combined ? 32 : 12, bottom: 28 },
       tooltip: { trigger: 'axis', valueFormatter: (v) => `${Number(v).toFixed(1)} %` },
-      legend: {
-        top: 0,
-        data: metrics.map((m) => t(`capacity.${m}`)),
-        textStyle: { fontSize: 11 },
-      },
+      legend: combined
+        ? {
+            top: 0,
+            data: metrics.map((m) => t(`capacity.${m}`)),
+            textStyle: { fontSize: 11 },
+          }
+        : undefined,
       xAxis: {
         type: 'category',
         data: times.map(dayLabel),
@@ -88,7 +99,7 @@ export function CapacityChartBody({ capacity }: { capacity: CapacityResponse | n
       },
       series,
     };
-  }, [capacity, t, config]);
+  }, [capacity, metric, combined, t, config]);
 
   const ref = useEChart(option);
 
@@ -97,32 +108,32 @@ export function CapacityChartBody({ capacity }: { capacity: CapacityResponse | n
       {capacity ? (
         <>
           <div ref={ref} className="h-52 w-full" />
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-              {(['cpu', 'ram', 'disk'] as CapacityMetric[]).map((m) => {
-                const fc = capacity[m];
-                return (
-                  <div key={m} className="rounded-lg border p-2 text-xs">
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="font-semibold">{t(`capacity.${m}`)}</span>
-                      {fc.insufficientData ? (
-                        <Badge tone="default">—</Badge>
-                      ) : fc.daysTo90 !== null ? (
-                        <Badge tone={fc.daysTo90 < 30 ? 'crit' : fc.daysTo90 < 90 ? 'warn' : 'ok'}>
-                          {t('capacity.daysTo90', { days: fc.daysTo90 })}
-                        </Badge>
-                      ) : (
-                        <Badge tone="ok">{t('capacity.stable')}</Badge>
-                      )}
-                    </div>
-                    <span className="text-muted-foreground">
-                      {fc.insufficientData
-                        ? 'historique insuffisant (< 7 j)'
-                        : `pente ${fc.slopePerDay >= 0 ? '+' : ''}${fc.slopePerDay.toFixed(2)} %/j`}
-                    </span>
+          <div className={`mt-3 grid gap-2 ${combined ? 'sm:grid-cols-3' : 'grid-cols-1'}`}>
+            {badgeMetrics.map((m) => {
+              const fc = capacity[m];
+              return (
+                <div key={m} className="rounded-lg border p-2 text-xs">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="font-semibold">{t(`capacity.${m}`)}</span>
+                    {fc.insufficientData ? (
+                      <Badge tone="default">—</Badge>
+                    ) : fc.daysTo90 !== null ? (
+                      <Badge tone={fc.daysTo90 < 30 ? 'crit' : fc.daysTo90 < 90 ? 'warn' : 'ok'}>
+                        {t('capacity.daysTo90', { days: fc.daysTo90 })}
+                      </Badge>
+                    ) : (
+                      <Badge tone="ok">{t('capacity.stable')}</Badge>
+                    )}
                   </div>
-                );
-              })}
-            </div>
+                  <span className="text-muted-foreground">
+                    {fc.insufficientData
+                      ? 'historique insuffisant (< 7 j)'
+                      : `pente ${fc.slopePerDay >= 0 ? '+' : ''}${fc.slopePerDay.toFixed(2)} %/j`}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </>
       ) : (
         <div className="flex h-52 items-center justify-center text-sm text-muted-foreground">…</div>
