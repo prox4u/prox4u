@@ -119,6 +119,9 @@ export function EndpointPage() {
       { id: 'kpi-storage', title: t('kpi.storage'), default: { w: 3, h: 2 }, minW: 2, minH: 2, render: () => <KpiStorageBody kpis={kpis} spark={spark} /> },
       { id: 'kpi-vms', title: t('kpi.vms'), default: { w: 3, h: 2 }, minW: 2, minH: 2, render: () => <KpiVmsBody kpis={kpis} spark={spark} /> },
       { id: 'metrics', title: t('metrics.title'), default: { w: 8, h: 3 }, minW: 4, minH: 2, render: () => <MetricsPanelBody endpointId={ep.id} /> },
+      { id: 'metrics-cpu', title: t('metrics.titleCpu'), default: { w: 4, h: 3 }, minW: 3, minH: 2, render: () => <MetricsPanelBody endpointId={ep.id} metric="cpu" /> },
+      { id: 'metrics-ram', title: t('metrics.titleRam'), default: { w: 4, h: 3 }, minW: 3, minH: 2, render: () => <MetricsPanelBody endpointId={ep.id} metric="ram" /> },
+      { id: 'metrics-net', title: t('metrics.titleNet'), default: { w: 4, h: 3 }, minW: 3, minH: 2, render: () => <MetricsPanelBody endpointId={ep.id} metric="net" /> },
       {
         id: 'health',
         title: t('health.score'),

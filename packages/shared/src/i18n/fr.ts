@@ -16,6 +16,9 @@ export const fr: Record<string, string> = {
   'topbar.resetLayout': 'Réinitialiser la disposition',
 
   'metrics.title': 'Métriques du cluster',
+  'metrics.titleCpu': 'Métriques du cluster — CPU',
+  'metrics.titleRam': 'Métriques du cluster — RAM',
+  'metrics.titleNet': 'Métriques du cluster — Réseau',
   'metrics.cpu': 'CPU',
   'metrics.ram': 'RAM',
   'metrics.disk': 'Disque',

@@ -1,6 +1,6 @@
 ---
 name: hypervision
-description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
+description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
 ---
 
 # Hypervision — Base de connaissance
@@ -176,10 +176,11 @@ bibliothèque/persistance par user — socle `core/widgets`, skill `general` §1
 
 ### 11.2. Page cluster — 17 widgets (scope `endpointView`)
 - `pages/endpoint.tsx` convertie en `WidgetGridLayout` (framework `core/widgets`).
-- **Catalogue 17 widgets** = les 17 blocs v1/v3, dans l'ordre de `DEFAULT_LAYOUT`
+- **Catalogue 20 widgets** = les 17 blocs v1/v3, dans l'ordre de `DEFAULT_LAYOUT`
   (`store/layout.ts`) : `res-cpu`/`res-ram`/`res-storage`, `kpi-nodes`/`kpi-cpu`/`kpi-storage`/
   `kpi-vms`, `metrics`, `health`, `pra`, `capacity`, `storage`, `network`, `alerts`, `top`,
-  `nodes`, `overcommit`.
+  `nodes`, `overcommit` **+ 3 graphiques métriques unitaires** `metrics-cpu`/`metrics-ram`/
+  `metrics-net` (voir §11.5).
 - **Layout par défaut** = `ENDPOINT_DEFAULT_LAYOUT` = `DEFAULT_LAYOUT.map(i → widgetId)`
   (les `i` de `DEFAULT_LAYOUT` correspondent exactement aux ids de widgets). `mergePageConfig`
   gère le catalogue vide (cas `!snapshot`) → grille non rendue avant le snapshot.
@@ -231,3 +232,42 @@ bibliothèque/persistance par user — socle `core/widgets`, skill `general` §1
   grille). Page nœud : 21 widgets (4 KPIs + table VMs + 13 graphiques + 3 `netif-*`
   dynamiques), KPIs/table avec données réelles, retrait persisté (scope `nodePage`).
 - typecheck (shared+server+web) + tests (shared 303, server 215) + vite build OK.
+
+### 11.5. Évolution v4 (en place) — graphiques métriques unitaires + tooltip date/heure
+Modification de la v4 **en place** (dérogation à la règle `_vN` — pas de v5 ; la v4 reste la
+version courante, rollback A/B `?v=hypervision_v3`). Deux ajouts sur `MetricsPanelBody`
+(`components/metrics-panel.tsx`, local à hypervision — pas de couplage cross-plugin) :
+
+- **Graphiques métriques unitaires du cluster** : `MetricsPanelBody` reçoit une prop
+  `metric: 'all' | 'cpu' | 'ram' | 'net'` (défaut `'all'` = combiné, comportement inchangé).
+  - `'cpu'` / `'ram'` → une seule série, axe unique en % (0–100).
+  - `'net'` → rx/tx, axe unique en o/s (`formatBps` : Ko/s, Mo/s, Go/s).
+  - `'all'` → combiné (CPU + RAM + réseau, double axe) — inchangé.
+  - Séries/axes construits conditionnellement (`LineSeriesOption[]`, `yAxis[]`) ; `grid.right`
+    56 seulement en combiné (axe droit), 40 sinon.
+  - **3 nouveaux widgets** au catalogue `endpoint.tsx` : `metrics-cpu` / `metrics-ram` /
+    `metrics-net` (w4 h3, minW 3, minH 2), titres i18n `metrics.titleCpu` / `titleRam` /
+    `titleNet` (fr « Métriques du cluster — CPU/RAM/Réseau » / en « Cluster metrics — … »).
+    **Pas dans `DEFAULT_LAYOUT`** → nouvel utilisateur : dans la **bibliothèque** ; utilisateur
+    existant : ajoutés **en bas de grille par le merge** (comportement `mergePageConfig` §3).
+- **Export CSV (unitaires uniquement)** : bouton `ExportCsvButton` (slot du corps, à côté du
+  switcher de timeframe) + fonction locale `exportClusterCsv` via `downloadCsvFile`
+  (`lib/monitor-charts.ts` — **pas** d'import cross-plugin de `exportNodeCsv`). Fichier
+  `cluster-metrics-<endpointId>-<metric>-<tf>-<date>.csv`, header `timestamp,<colonnes>`
+  (cpu_pct / ram_pct / net_in_bps+net_out_bps). Le combiné (`'all'`) n'a **pas** de bouton
+  export (exigence : unitaires uniquement).
+- **Tooltip date/heure** (fix) : `tooltip.formatter` (remplace `valueFormatter`) — en-tête =
+  `tooltipTimeLabel` (1h/24h → `JJ/MM/AAAA HH:MM`, 7j/30j → `JJ/MM/AAAA`) **au lieu du
+  timestamp unix brut** ; valeurs formatées **par série** (CPU/RAM en %, RX/TX en o/s via
+  `formatBps` — corrige le bug du combiné qui affichait le réseau en %). Pattern identique au
+  `tooltipFormatter` du Monitor nœud vm-view_v4.
+- **Piège canvas ECharts après resize de viewport** : si un widget est ajouté puis le viewport
+  redimensionné, le canvas peut rester à la taille initiale (23 px) — le `ResizeObserver` du
+  hook `useEChart` propage le resize, mais un **re-navigation** (remontage) garantit la bonne
+  taille. Vérifier la taille du canvas avant de tester le tooltip au survol.
+- **Validation livrée** : Playwright — 3 widgets unitaires dans la bibliothèque, ajout→grille,
+  rendu (CPU % bleu, RAM % violet, Réseau o/s Ko/s RX vert/TX jaune), **tooltip date/heure**
+  (`19/11/2026 12:23` + `CPU : 16.9 %` ; combiné : CPU/RAM en % + RX/TX en Ko/s), export CSV
+  (`cluster-metrics-proxmox-cpu-hour-*.csv`, 60 lignes), combiné inchangé (4 séries, double
+  axe, sans export), 0 erreur console, page nœud v4 intacte. typecheck + tests (shared 303,
+  server 215) + vite build OK.
