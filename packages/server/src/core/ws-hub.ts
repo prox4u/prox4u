@@ -8,6 +8,9 @@ import type { MultiDashboardSnapshot } from '@prox4u/shared';
  */
 export class WsHub {
   private wss: WebSocketServer | null = null;
+  /** Dernier snapshot connu — renvoyé IMMÉDIATEMENT à un client qui se connecte
+   *  (sans attendre le tick poller suivant, 5 s) : reconnexion/rechargement rapide. */
+  private lastSnapshot: MultiDashboardSnapshot | null = null;
 
   /**
    * `verifyClient` rejette les upgrades non autorisés AVANT le handshake
@@ -25,10 +28,16 @@ export class WsHub {
     });
     this.wss.on('connection', (ws) => {
       ws.on('error', () => ws.close());
+      // Snapshot immédiat au connect (le commentaire de classe le promettait déjà —
+      // avant, le client attendait le tick 5 s suivant → reconnexion perçue lente).
+      if (this.lastSnapshot) {
+        ws.send(JSON.stringify({ type: 'snapshot', data: this.lastSnapshot }));
+      }
     });
   }
 
   broadcast(snapshot: MultiDashboardSnapshot): void {
+    this.lastSnapshot = snapshot;
     if (!this.wss) return;
     const payload = JSON.stringify({ type: 'snapshot', data: snapshot });
     for (const client of this.wss.clients) {
