@@ -16,6 +16,9 @@ export const en: Record<string, string> = {
   'topbar.resetLayout': 'Reset layout',
 
   'metrics.title': 'Cluster metrics',
+  'metrics.titleCpu': 'Cluster metrics — CPU',
+  'metrics.titleRam': 'Cluster metrics — RAM',
+  'metrics.titleNet': 'Cluster metrics — Network',
   'metrics.cpu': 'CPU',
   'metrics.ram': 'RAM',
   'metrics.disk': 'Disk',

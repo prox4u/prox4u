@@ -1986,6 +1986,39 @@ reçoivent le widget en bas par le merge.
 ### Docs
 - `skills/hypervision/SKILL.md` §11 (nouveau) + description ; `skills/general/SKILL.md` §12 (scopes + pages + piège rebuild shared) ; `skills/vm-inventory/SKILL.md` §11 (note réemploi cross-plugin).
 
+## ✅ Fait — Graphiques métriques unitaires du cluster + tooltip date/heure : `hypervision_v4` en place (livré, validé Playwright — **commité**)
+
+> **2026-11-19** — Sur la page cluster `/e/:endpointId` (hypervision_v4), ajout à la bibliothèque de graphiques de **graphiques métriques unitaires** « Métriques du cluster » — un par métrique (**CPU**, **RAM**, **Réseau** rx/tx) — et correction du **tooltip au survol** : affichage de la **date/heure lisible** (et non le timestamp unix brut) sur tous les graphiques métriques (unitaires ET combiné). Implémenté **en place dans `hypervision_v4`** (dérogation explicite de l'utilisateur à la règle `_vN` — pas de v5) ; le widget combiné « Métriques du cluster » est conservé.
+
+### Périmètre
+- **3 nouveaux widgets** au catalogue `endpoint.tsx` : `metrics-cpu` / `metrics-ram` / `metrics-net` (w4 h3, minW 3, minH 2) — **pas dans `DEFAULT_LAYOUT`** → nouvel utilisateur : dans la **bibliothèque** ; utilisateur existant : ajoutés **en bas de grille par le merge** `mergePageConfig` (comportement existant, validé).
+- **`MetricsPanelBody`** (`components/metrics-panel.tsx`, local à hypervision — pas de couplage cross-plugin) reçoit une prop `metric: 'all' | 'cpu' | 'ram' | 'net'` (défaut `'all'` = combiné, comportement inchangé) :
+  - `'cpu'` / `'ram'` → une seule série, axe unique en % (0–100) ;
+  - `'net'` → rx/tx, axe unique en o/s (`formatBps` : Ko/s, Mo/s, Go/s) ;
+  - `'all'` → combiné (CPU + RAM + réseau, double axe) — inchangé.
+  - Séries/axes construits conditionnellement (`LineSeriesOption[]`, `yAxis[]`) ; `grid.right` 56 seulement en combiné (axe droit), 40 sinon.
+- **Export CSV (unitaires uniquement)** : bouton `ExportCsvButton` (à côté du switcher de timeframe) + fonction locale `exportClusterCsv` via `downloadCsvFile` (`lib/monitor-charts.ts` — **pas** d'import cross-plugin de `exportNodeCsv` de vm-view_v4). Fichier `cluster-metrics-<endpointId>-<metric>-<tf>-<date>.csv`, header `timestamp,<colonnes>` (`cpu_pct` / `ram_pct` / `net_in_bps`+`net_out_bps`). Le combiné n'a **pas** de bouton export (exigence : unitaires uniquement).
+- **Tooltip date/heure** (fix) : `tooltip.formatter` (remplace `valueFormatter`) — en-tête `tooltipTimeLabel` (1h/24h → `JJ/MM/AAAA HH:MM`, 7j/30j → `JJ/MM/AAAA`) **au lieu du timestamp unix brut** ; valeurs formatées **par série** (CPU/RAM en %, RX/TX en o/s — corrige le bug du combiné qui affichait le réseau en %). Pattern identique au `tooltipFormatter` du Monitor nœud vm-view_v4.
+- **i18n** : `metrics.titleCpu` / `titleRam` / `titleNet` (fr « Métriques du cluster — CPU/RAM/Réseau » / en « Cluster metrics — CPU/RAM/Network »).
+
+### Fichiers modifiés
+- `packages/web/src/plugins/hypervision_v4/components/metrics-panel.tsx` (prop `metric`, `tooltipTimeLabel`, `exportClusterCsv`, `ExportCsvButton` unitaires, séries/axes conditionnels)
+- `packages/web/src/plugins/hypervision_v4/pages/endpoint.tsx` (+3 widgets au catalogue → 20)
+- `packages/shared/src/i18n/{fr,en}.ts` (+3 clés `metrics.title*`)
+- **Aucun changement serveur** (`/api/metrics` inchangé).
+
+### Piège rencontré (corrigé — ne pas réintroduire)
+| Piège | Cause / fix |
+|---|---|
+| Canvas ECharts à 23 px après ajout d'un widget + resize du viewport | Le `ResizeObserver` du hook `useEChart` propage le resize, mais le canvas peut rester à la taille initiale. Une **re-navigation** (remontage) garantit la bonne taille. Vérifier la taille du canvas avant de tester le tooltip au survol. |
+
+### Vérifications effectuées
+- `pnpm typecheck` (shared+server+web) + `pnpm test` (shared 303, server 215) + `vite build` : OK.
+- Playwright : 3 widgets unitaires dans la bibliothèque ; ajout→grille ; rendu (CPU % bleu, RAM % violet, Réseau o/s Ko/s RX vert/TX jaune) ; **tooltip unitaire** `19/11/2026 12:23` + `CPU : 16.9 %` ; **tooltip combiné** `19/11/2026 12:24` + CPU/RAM en % + RX/TX en Ko/s ; export CSV validé (`cluster-metrics-proxmox-cpu-hour-2026-11-19.csv`, header `timestamp,cpu_pct`, 60 lignes) ; combiné inchangé (4 séries, double axe, sans export) ; 0 erreur console nouveau build ; page nœud v4 intacte (0 erreur).
+
+### Docs
+- `skills/hypervision/SKILL.md` (description + §11.2 « Catalogue 20 widgets » + nouvelle §11.5 « Évolution v4 (en place) ») ; `skills/general/SKILL.md` (compteur 20 widgets).
+
 ## ⏳ À faire
 
 ### À tester / à aborder
