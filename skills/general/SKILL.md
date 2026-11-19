@@ -24,7 +24,7 @@ Application web d'**hypervision multi-endpoints** pour Proxmox VE : dashboard vC
 | État | zustand (`store/theme`, `store/layout`, `store/user-config`, `core/data/dashboard`) |
 | i18n | i18next + ressources dans `@proxmox/shared` (fr/en), persisté localStorage |
 | Historique | InfluxDB 3 Core (**externe en prod**) — repli RRD Proxmox si pas de token |
-| Licence | **Apache 2.0** (2026-11-19) — texte officiel dans `LICENSE` (racine), champ `license: Apache-2.0` dans les 4 package.json, section README ; copyright Jérôme ROBERT |
+| Licence | **Apache 2.0** (2026-11-19) — texte officiel dans `LICENSE` (racine), champ `license: Apache-2.0` dans les 4 package.json, section README ; copyright **CIETED EURL** (Jérôme ROBERT) — www.cieted.fr · www.prox4u.fr |
 
 ## 2. Architecture plugin (cœur de l'app)
 
