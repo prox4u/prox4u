@@ -4,6 +4,10 @@ Dashboard web de supervision pour cluster **Proxmox VE 9** : vue DSI/manager (KP
 
 > Web dashboard for a **Proxmox VE 9** cluster: management view (KPIs, Health Score, multi-site PRA, capacity planning) and operations view (historical metrics, network topology, storage, alarms).
 
+Projet de **CIETED EURL** — [www.cieted.fr](https://www.cieted.fr) · Produit [Prox4u](http://www.prox4u.fr/)
+
+*A **CIETED EURL** project — [www.cieted.fr](https://www.cieted.fr) · [Prox4u](http://www.prox4u.fr/) product*
+
 ---
 
 ## Documentation / Documentation
@@ -447,6 +451,6 @@ VITE_USE_PLUGIN_STORAGE=false pnpm dev   # désactive le module stockage
 
 ## Licence / License
 
-Projet publié sous licence **Apache License 2.0** — voir [`LICENSE`](./LICENSE).
+Projet de **CIETED EURL** ([www.cieted.fr](https://www.cieted.fr) · [www.prox4u.fr](http://www.prox4u.fr/)) publié sous licence **Apache License 2.0** — voir [`LICENSE`](./LICENSE).
 
-*Project released under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).*
+*A **CIETED EURL** project ([www.cieted.fr](https://www.cieted.fr) · [www.prox4u.fr](http://www.prox4u.fr/)) released under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).*
