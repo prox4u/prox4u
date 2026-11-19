@@ -27,7 +27,11 @@
  * `endpointView` / `nodePage` (hypervision v4) = un layout par scope
  * « endpointId » (dashboard cluster) / « endpointId/nomDuNœud » (page nœud —
  * grille unifiée KPIs + table VMs + graphiques, catalogue distinct de
- * `nodeView` → scope séparé pour ne pas polluer les bibliothèques).
+ * `nodeView` → scope séparé pour ne pas polluer les bibliothèques) ;
+ * `vmSummary` / `nodeSummary` (vm-view v4) = Résumé VM / Résumé nœud en grille
+ * personnalisable, un layout par scope « endpointId/vmid » /
+ * « endpointId/nomDuNœud » (⚠️ le renommage d'un nœud remet son Résumé à zéro,
+ * même arbitrage que `nodeView`).
  */
 
 /** Version du schéma de config — à incrémenter à chaque changement incompatible. */
@@ -43,6 +47,7 @@ export type UserConfigPage =
   | 'endpointView'
   | 'nodePage'
   | 'vmSummary'
+  | 'nodeSummary'
   | 'storageView'
   | 'sensorHistory';
 
@@ -81,6 +86,8 @@ export interface UserConfig {
     nodePage?: Record<string, PageConfig>;
     /** Résumé VM (vm-view v4) — un layout par scope « endpointId/vmid » (grille personnalisable). */
     vmSummary?: Record<string, PageConfig>;
+    /** Résumé nœud (vm-view v4) — un layout par scope « endpointId/nomDuNœud » (grille personnalisable). */
+    nodeSummary?: Record<string, PageConfig>;
     /** Drill-down datastore (storage) — un layout par scope « endpointId/datastore ». */
     storageView?: Record<string, PageConfig>;
     /** Historique capteur / disque SMART (node-sensors) — un layout par scope « node/cible ». */
@@ -342,7 +349,7 @@ export function parseUserConfig(raw: unknown): UserConfig | null {
     if (!pc) return null;
     out.pages.overview = pc;
   }
-  for (const key of ['vmView', 'nodeView', 'endpointView', 'nodePage', 'vmSummary', 'storageView', 'sensorHistory'] as const) {
+  for (const key of ['vmView', 'nodeView', 'endpointView', 'nodePage', 'vmSummary', 'nodeSummary', 'storageView', 'sensorHistory'] as const) {
     const v = p[key];
     if (v === undefined) continue;
     if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;

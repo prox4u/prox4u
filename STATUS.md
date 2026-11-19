@@ -14,7 +14,7 @@
 - App en **HTTPS** (cert auto-signé, SAN localhost + IP VM) ; InfluxDB en HTTPS sur 8181 ; **Explorer** (UI InfluxDB 3) en HTTPS sur 8888
 - Logs / pid : `logs/` (à la racine du projet, rien dans /tmp)
 - Cron : `@reboot` + keepalive minute par minute sur `server.sh start` (idempotent) ; le conteneur InfluxDB se relance seul au boot (`restart: unless-stopped`)
-- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (522 tests : 305 shared + 217 server)
+- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (531 tests : 307 shared + 224 server)
 
 ---
 
@@ -2160,6 +2160,44 @@ reçoivent le widget en bas par le merge.
 - `skills/vm-inventory/SKILL.md` (§12 — Résumé en grille personnalisable, frontmatter mis à jour).
 - `skills/storage/SKILL.md` (§4 — drill-down en grille personnalisable, frontmatter mis à jour).
 - `skills/node-sensors/SKILL.md` (§3.2/§5 — historique en widget redimensionnable, frontmatter mis à jour).
+
+## ✅ Fait — Bibliothèque de graphiques pour le détail NŒUD Proxmox : Résumé nœud en grille + capacity planning niveau nœud (livré, validé Playwright — **commité**)
+
+> **2026-11-19** — « je veux aussi une bibliothèque de graphiques pour un nœud proxmox. Pour faire simple, comme pour une VM, pour la liste des graphiques avec les capacités planning. » → extension du socle `core/widgets` (grille `WidgetGridLayout` + bibliothèque + persistance `/api/user-config`) à l'**onglet Résumé du détail nœud** (`vm-view_v4`), avec un **capacity planning au NIVEAU NŒUD** (nouvel endpoint serveur) — arbitrage utilisateur : niveau nœud (pas cluster) + 4 KPIs + 3 capacity planning.
+
+### Serveur — nouvel endpoint `GET /api/node-capacity?endpoint=&node=` (capacity planning niveau nœud)
+- `packages/server/src/modules/dashboard/routes.ts` : `computeNodeCapacity` (calqué sur `computeCapacity` du cluster mais **filtré sur un seul nœud** — pas d'agrégation cross-nœuds) :
+  - **InfluxDB** (primaire) : `node_metrics` `WHERE node='…' AND clusterFilter`, `date_bin(1 day)`, `GROUP BY t` → `dailyByNode` **réutilisé tel quel** (filtré sur un nœud = moyenne journalière de ce nœud). **disk = rootfs du nœud** (`disk_pct`) — pas de surcharge `storage_metrics` (concept stockage VM du cluster). `buildForecast` (shared, réutilisé — ≥7 j sinon `insufficientData`).
+  - **Repli RRD** : `getRrddata('node')` → `nodeDailyFromRrd` (cpu ×100, mem/memTotal, rootfs/rootfsTotal, moyenne journalière nœud unique). Nœud absent/offline → tout `insufficientData`.
+  - **Fonctions pures exportées + testées** : `nodeCapacityFromDaily(days, source)` (construit la `CapacityResponse` — 3 `buildForecast`) + `nodeDailyFromRrd(points, node)`.
+  - **Route** : résolution endpoint (404) + **validation du nœud** (`getNodes()` — 404 si inconnu) + param `node` requis (400) + cache `nodeCapacityCache` clé `${ep.id}/${node}` (5 min). Renvoie **`CapacityResponse`** (même forme que le cluster → `CapacityChartBody` réemployé tel quel). Échappement `sqlQuote(nodeName)`.
+- Tests : **7 nouveaux** (`routes.test.ts` — `nodeCapacityFromDaily` : 3 prévisions + source, <7 j → insufficientData, vide ; `nodeDailyFromRrd` : conversion cpu/ram/disk, moyenne journalière + tri, null ignorées, capacité nulle) → **server 224** (était 217).
+
+### Shared — nouvelle clé de page `nodeSummary`
+- `packages/shared/src/user-config.ts` : `UserConfigPage` + **`nodeSummary`** (scope `endpointId/nomDuNœud`) + champ `pages.nodeSummary` + `parseUserConfig` (clé dans la boucle) + commentaire de scopes (⚠️ renommage de nœud → layout à zéro, même arbitrage que `nodeView`). **Zéro modif serveur** (import `parseUserConfig`).
+- Tests : **2 nouveaux** (`user-config.test.ts` — round-trip + isolation vis-à-vis de `nodeView` + parse) → **shared 307** (était 305).
+
+### Web — `node-detail.tsx` : onglet Résumé en grille personnalisable (vm-view_v4)
+- `node-detail.tsx` : **tout l'onglet Résumé** (4 `StatCard`) → grille `WidgetGridLayout` avec **7 widgets** : `kpi-cpu` / `kpi-ram` / `kpi-disk` / `kpi-load` (corps = **`KpiBody`** : grand chiffre + sous-texte + `Progress` teinte overcommit — le frame fournit la carte + titre + handle + retirer) + `capacity-cpu` / `capacity-ram` / `capacity-disk` (3 `CapacityChartBody` réemployés de `hypervision_v4`).
+- **Nouveau hook `useNodeCapacity(endpointId, nodeName)`** (cache module `nodeCapacityCache` Map, `NODE_CAPACITY_TTL_MS` 5 min) → `fetchNodeCapacity` (`/api/node-capacity?endpoint=&node=`) ajouté dans `apiClient.ts`.
+- Scope **`nodeSummary « endpointId/nomDuNœud »`** (⚠️ renommage de nœud → layout à zéro). Layout par défaut = rangée 4 KPIs (w3 h2) + rangée 3 capacity (w4 h4). Page `nodeSummary`.
+- `StatCard` (icône + label + carte) supprimée — remplacée par `KpiBody` (le frame de widget fournit la carte + le titre).
+
+### Fichiers modifiés
+- `packages/server/src/modules/dashboard/routes.ts` (+ `computeNodeCapacity`, `nodeCapacityFromDaily`, `nodeDailyFromRrd`, route `/api/node-capacity`, `nodeCapacityCache`) · `routes.test.ts` (+ 7 tests)
+- `packages/shared/src/user-config.ts` (+ `nodeSummary`) · `user-config.test.ts` (+ 2 tests)
+- `packages/web/src/core/api/apiClient.ts` (+ `fetchNodeCapacity`)
+- `packages/web/src/plugins/vm-view_v4/components/node-detail.tsx` (Résumé → grille 7 widgets + `useNodeCapacity` + `KpiBody`)
+
+### Vérifications effectuées
+- `pnpm --filter @prox4u/shared build` + restart serveur + typecheck serveur/web + `vite build` (bundle `index-Cg8JLtgd.js`) : OK.
+- Tests : **shared 307 (+2), server 224 (+7)**.
+- **API** (session test-admin) : `/api/node-capacity?endpoint=proxmox&node=proxmox` → `source: influx`, cpu daysTo90=48 pente 1.387, disk (rootfs) 14.9 %, ram daysTo90=null (stable) ; nœud inconnu → **404**, param `node` manquant → **400**, endpoint inconnu → **404**.
+- **Playwright** (nœud `proxmox`) : 7 widgets rendus (4 KPIs + 3 capacity avec données réelles : CPU « à 90 % dans ~48 j, pente +1.39 %/j », RAM « tendance stable », Disque rootfs « ~1467 j »), bibliothèque Affichés 7/Bibliothèque 0, retirer « Capacity planning — RAM » (→ bibliothèque, 6 affichés) + réinsérer (7), **drag** (kpi-cpu déplacé, reflow, sauvegardé), **reset** (7 widgets, scope supprimé, `endpointView` préservé), **persistance** (`nodeSummary["proxmox/proxmox"]` dans `/api/user-config`) + **persistance à la reconnexion** (rechargement → layout dragué conservé), 0 erreur console.
+
+### Docs
+- `skills/vm-inventory/SKILL.md` (§13 — Résumé nœud en grille + §13.1 endpoint `/api/node-capacity`, frontmatter mis à jour).
+- `skills/api/SKILL.md` (ligne `/api/node-capacity` + frontmatter mis à jour).
 
 ## ⏳ À faire
 

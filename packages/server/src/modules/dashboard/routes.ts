@@ -281,6 +281,91 @@ async function computeCapacity(ctx: AppContext, poller: Poller, ep: EndpointRunt
   };
 }
 
+/**
+ * Capacity planning d'un NŒUD à partir de sa série journalière (cpu/ram/disk en
+ * % de la capacité du nœud). disk = rootfs du nœud (pas le stockage VM du cluster).
+ * Réutilise buildForecast (shared) — même forme de réponse que le cluster.
+ */
+export function nodeCapacityFromDaily(
+  days: { time: number; cpuPct: number; ramPct: number; diskPct: number }[],
+  source: MetricSource,
+): CapacityResponse {
+  return {
+    cpu: buildForecast('cpu', days.map((d) => ({ time: d.time, value: d.cpuPct }))),
+    ram: buildForecast('ram', days.map((d) => ({ time: d.time, value: d.ramPct }))),
+    disk: buildForecast('disk', days.map((d) => ({ time: d.time, value: d.diskPct }))),
+    source,
+  };
+}
+
+/**
+ * Moyennes journalières (cpu/ram/disk en %) d'un nœud unique depuis ses points
+ * RRD. cpu = fraction 0–1 → ×100 ; ram = mem/memTotal ; disk = rootfs (disk/rootfsTotal).
+ */
+export function nodeDailyFromRrd(
+  points: RrddataPoint[],
+  node: PveNodeStatus,
+): { time: number; cpuPct: number; ramPct: number; diskPct: number }[] {
+  const byDay = new Map<number, { cpu: [number, number]; ram: [number, number]; disk: [number, number] }>();
+  for (const p of points) {
+    const day = Math.floor(p.time / DAY_SEC);
+    const e = byDay.get(day) ?? { cpu: [0, 0], ram: [0, 0], disk: [0, 0] };
+    if (p.cpu !== null) {
+      e.cpu[0] += p.cpu * 100;
+      e.cpu[1] += 1;
+    }
+    if (p.mem !== null && node.memTotal) {
+      e.ram[0] += (p.mem / node.memTotal) * 100;
+      e.ram[1] += 1;
+    }
+    if (p.disk !== null && node.rootfsTotal) {
+      e.disk[0] += (p.disk / node.rootfsTotal) * 100;
+      e.disk[1] += 1;
+    }
+    byDay.set(day, e);
+  }
+  return [...byDay.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([day, e]) => ({
+      time: day * DAY_SEC,
+      cpuPct: round1(e.cpu[1] ? e.cpu[0] / e.cpu[1] : 0),
+      ramPct: round1(e.ram[1] ? e.ram[0] / e.ram[1] : 0),
+      diskPct: round1(e.disk[1] ? e.disk[0] / e.disk[1] : 0),
+    }));
+}
+
+/**
+ * Capacity planning au NIVEAU NŒUD : mêmes prévisions que le cluster mais sur la
+ * série d'un seul nœud (pas d'agrégation cross-nœuds). disk = rootfs du nœud.
+ * InfluxDB (node_metrics filtré sur le nœud) → repli RRD (rrddata du nœud).
+ */
+async function computeNodeCapacity(ctx: AppContext, ep: EndpointRuntime, nodeName: string): Promise<CapacityResponse> {
+  if (influxReady(ctx)) {
+    try {
+      const rows = await ctx.influx.querySql<NodeAggRow>(
+        ctx.influx.aggDb,
+        `SELECT date_bin(INTERVAL '1 day', time) AS t, node,
+                AVG(cpu_pct) AS cpu_pct, AVG(ram_pct) AS ram_pct, AVG(disk_pct) AS disk_pct
+         FROM node_metrics WHERE time >= now() - INTERVAL '30 days' AND node = '${sqlQuote(nodeName)}' AND ${clusterFilter(ctx, ep.id)}
+         GROUP BY t, node ORDER BY t`,
+      );
+      const days = dailyByNode(rows);
+      if (days.length > 0) {
+        return nodeCapacityFromDaily(days, 'influx');
+      }
+    } catch (err) {
+      ctx.logger.warn(`node-capacity(${ep.id}/${nodeName}) : InfluxDB indisponible → repli RRD (${(err as Error).message})`);
+    }
+  }
+  const nodes = (await ep.source.getNodes()).filter((n) => n.online);
+  const node = nodes.find((n) => n.node === nodeName);
+  if (!node) {
+    return nodeCapacityFromDaily([], 'rrd');
+  }
+  const points = await ep.source.getRrddata('node', node.node, undefined, 'month');
+  return nodeCapacityFromDaily(nodeDailyFromRrd(points, node), 'rrd');
+}
+
 async function computeTrends(ctx: AppContext, ep: EndpointRuntime): Promise<TrendsResponse> {
   let trend7d: TrendPoint[] | null = null;
   let fromInflux = false;
@@ -583,6 +668,7 @@ async function computeOvercommitRisk(
 
 export function registerDashboard(app: FastifyInstance, ctx: AppContext, poller: Poller): void {
   const capacityCache = new Map<string, CacheEntry<CapacityResponse>>();
+  const nodeCapacityCache = new Map<string, CacheEntry<CapacityResponse>>();
   const trendsCache = new Map<string, CacheEntry<TrendsResponse>>();
   const metricsCache = new Map<string, CacheEntry<MetricsResponse>>();
   const riskCache = new Map<string, CacheEntry<OvercommitRiskResponse>>();
@@ -625,6 +711,33 @@ export function registerDashboard(app: FastifyInstance, ctx: AppContext, poller:
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
     const value = await computeCapacity(ctx, poller, ep);
     capacityCache.set(ep.id, { at: Date.now(), value });
+    return value;
+  });
+
+  /**
+   * Capacity planning au NIVEAU NŒUD (?endpoint=&node=) : mêmes prévisions que
+   * /api/capacity mais sur la série d'un seul nœud (disk = rootfs du nœud).
+   * 404 si le nœud n'existe pas sur l'endpoint.
+   */
+  app.get('/api/node-capacity', async (req, reply) => {
+    const q = req.query as { endpoint?: string; node?: string };
+    const ep = resolveEndpoint(ctx, q.endpoint, reply);
+    if (!ep) return;
+    const nodeName = q.node;
+    if (!nodeName) {
+      reply.code(400).send({ error: 'missing node param' });
+      return;
+    }
+    const nodes = await ep.source.getNodes();
+    if (!nodes.some((n) => n.node === nodeName)) {
+      reply.code(404).send({ error: `unknown node: ${nodeName}` });
+      return;
+    }
+    const key = `${ep.id}/${nodeName}`;
+    const cached = nodeCapacityCache.get(key);
+    if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+    const value = await computeNodeCapacity(ctx, ep, nodeName);
+    nodeCapacityCache.set(key, { at: Date.now(), value });
     return value;
   });
 
