@@ -2090,6 +2090,37 @@ reçoivent le widget en bas par le merge.
 ### Docs
 - `skills/hypervision/SKILL.md` (§11.7 — sélecteur de cluster + matrice nœuds, frontmatter mis à jour).
 
+## ✅ Fait — Capacity planning par élément (page cluster) + « Capacité du cluster » dans le détail VM (livré, validé Playwright — **commité**)
+
+> **2026-11-19** — Le graphe de capacité de la page cluster traçait **CPU + RAM + disque ensemble** (3 lignes historiques + 3 projections + 3 badges) — illisible en production. Ajout de **3 graphiques par élément** (un par métrique), **100 % frontend** (zéro nouvelle API — `CapacityResponse` déjà chargée par `loadHeavy`), implémentés **en place dans `hypervision_v4`** (dérogation à la règle `_vN`) + réemploi dans le détail VM.
+
+### Périmètre (arbitrage utilisateur)
+- Question posée : « pour la vue d'ensemble du cluster proxmox, il faut du capacity planning dans un graphique séparé. Actuellement il y a un graphique avec cpu/ram/disk. On garde le graphique avec les 3 éléments, mais on crée un graphique capacity planning par élément. Idem pour la vue résumé des VM, il faudra ces 3 graphiques. » Clarifications : « vue résumé des VM » = **détail d'une VM, onglet Résumé** (vm-view_v4) ; les 3 graphiques montrent la **capacity planning du cluster** (endpoint de la VM), pas l'usage propre de la VM.
+
+### Partie 1 — Page cluster : 3 graphiques par élément
+- `CapacityChartBody` (`hypervision_v4/components/capacity-chart.tsx`) reçoit une prop **`metric?: CapacityMetric`** : **absente** → les 3 combinées (comportement **inchangé** — le widget `capacity` du layout par défaut reste tel quel) ; **présente** → **UNE seule métrique** (1 série historique + 1 projection en pointillés, 1 couleur, pas de légende, 1 badge + pente).
+- **3 nouveaux widgets** `capacity-cpu` / `capacity-ram` / `capacity-disk` (w4 h3, minW 3, minH 2) au catalogue `endpoint.tsx` — **pas dans `DEFAULT_LAYOUT`** (pattern `metrics-cpu/ram/net`) : nouvel user → bibliothèque ; user existant → ajoutés en bas par le merge.
+
+### Partie 2 — Détail VM : section « Capacité du cluster » (onglet Résumé)
+- `vm-view_v4/components/vm-detail.tsx` : section pleine largeur sous les panneaux vSphere — **3 `CapacityChartBody`** (prop `metric`) en grille `md:grid-cols-3`.
+- Données : `fetchCapacity(endpointId)` (capacity **au niveau cluster**) avec **cache module** (`capacityCache` Map, `CAPACITY_TTL_MS` 5 min) via le hook `useClusterCapacity` → pas de re-fetch en changeant de VM.
+- **Réemploi cross-plugin** : import **statique** de `CapacityChartBody` depuis `../../hypervision_v4/components/capacity-chart` — nouvelle direction d'import (l'existant était hypervision_v4 → vm-view_v4), pas de cycle de modules, bundlé au build.
+
+### Fichiers modifiés
+- `packages/shared/src/i18n/{fr,en}.ts` (`capacity.titleCpu/titleRam/titleDisk`, `vm.sum.capacity{,.hint}`)
+- `packages/web/src/plugins/hypervision_v4/components/capacity-chart.tsx` (prop `metric`)
+- `packages/web/src/plugins/hypervision_v4/pages/endpoint.tsx` (+ 3 widgets `capacity-cpu/ram/disk`)
+- `packages/web/src/plugins/vm-view_v4/components/vm-detail.tsx` (imports + `useClusterCapacity` + section Résumé)
+
+### Vérifications effectuées
+- `pnpm --filter @prox4u/shared build` + restart serveur + typecheck web + `vite build` (bundle `index-7C2_GKJC.js`) : OK.
+- Tests : **shared 303, server 217** = 520 (inchangé — pas de suite de tests web).
+- Playwright : page cluster `/e/proxmox` — 3 widgets dans la grille (ajoutés en bas par le merge, user existant), chacun **1 série + 1 projection + 1 badge** (CPU « à 90 % dans ~49 j » pente +1.38 %/j, RAM « tendance stable » pente −0.59 %/j, Disque « à 90 % dans ~280 j » pente +0.21 %/j), widget combiné inchangé ; détail VM (LXC #103) — section « Capacité du cluster » dans le Résumé avec les 3 graphiques (données du cluster) ; 0 erreur console.
+
+### Docs
+- `skills/hypervision/SKILL.md` (§11.8 — capacity par élément + réemploi, frontmatter mis à jour).
+- `skills/vm-inventory/SKILL.md` (§11 — section « Capacité du cluster » du détail VM, frontmatter mis à jour).
+
 ## ⏳ À faire
 
 ### À tester / à aborder

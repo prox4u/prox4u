@@ -150,6 +150,11 @@ export function EndpointPage() {
         render: () => <PraPanelBody pra={snapshot.pra} />,
       },
       { id: 'capacity', title: t('capacity.title'), default: { w: 6, h: 3 }, minW: 3, minH: 2, render: () => <CapacityChartBody capacity={capacity ?? null} /> },
+      // Capacity planning par élément (1 série + 1 projection + 1 badge) — pas dans
+      // DEFAULT_LAYOUT : nouvel user → bibliothèque ; user existant → bas par le merge.
+      { id: 'capacity-cpu', title: t('capacity.titleCpu'), default: { w: 4, h: 3 }, minW: 3, minH: 2, render: () => <CapacityChartBody capacity={capacity ?? null} metric="cpu" /> },
+      { id: 'capacity-ram', title: t('capacity.titleRam'), default: { w: 4, h: 3 }, minW: 3, minH: 2, render: () => <CapacityChartBody capacity={capacity ?? null} metric="ram" /> },
+      { id: 'capacity-disk', title: t('capacity.titleDisk'), default: { w: 4, h: 3 }, minW: 3, minH: 2, render: () => <CapacityChartBody capacity={capacity ?? null} metric="disk" /> },
       {
         id: 'storage',
         title: t('storageCard.title'),

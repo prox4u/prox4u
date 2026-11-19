@@ -1,6 +1,6 @@
 ---
 name: hypervision
-description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut) + page nœud : cartes « Détails hôte » (identification hôte + matériel CPU/DMI via /api/node-hardware) et « Capacité et utilisation » (barres used vs capacité CPU/Mémoire/Stockage) + vue d'ensemble production multi-clusters : sélecteur de cluster sur les 3 graphiques 7 j (« Tous les clusters »/[cluster] — courbes, valeur courante et ligne d'allocation suivent le cluster, /api/metrics?endpoint= déjà supportée, 100 % frontend) + carte « Nœuds — tous les clusters » (matrice : une ligne par nœud groupés par cluster, État/CPU/RAM/Disque/VMs, teintes usageSeverity overcommit.json, clic → page nœud, snapshot WS zéro API). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
+description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut) + page nœud : cartes « Détails hôte » (identification hôte + matériel CPU/DMI via /api/node-hardware) et « Capacité et utilisation » (barres used vs capacité CPU/Mémoire/Stockage) + vue d'ensemble production multi-clusters : sélecteur de cluster sur les 3 graphiques 7 j (« Tous les clusters »/[cluster] — courbes, valeur courante et ligne d'allocation suivent le cluster, /api/metrics?endpoint= déjà supportée, 100 % frontend) + carte « Nœuds — tous les clusters » (matrice : une ligne par nœud groupés par cluster, État/CPU/RAM/Disque/VMs, teintes usageSeverity overcommit.json, clic → page nœud, snapshot WS zéro API) + capacity planning par élément (3 widgets capacity-cpu/ram/disk 1 série + 1 projection + 1 badge, réemployés dans le détail VM vm-view_v4). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
 ---
 
 # Hypervision — Base de connaissance
@@ -347,3 +347,35 @@ frontend** (zéro nouvelle API, zéro changement serveur) :
   (nom de cluster sur 1re ligne du groupe), teintes (89 % disque ProxSite1 warn), VMs
   6/7·0/1·0/1, clic → `/e/proxmox/n/proxmox` ; 0 erreur console. typecheck + tests
   (shared 303, server 217) + vite build OK.
+
+### 11.8. Évolution v4 (en place) — Capacity planning par élément (page cluster) + réemploi dans le détail VM
+Le graphe de capacité de la page cluster traçait **CPU + RAM + disque ensemble** (3 lignes
+historiques + 3 projections + 3 badges) — illisible en production. Ajout de **3 graphiques
+par élément** (un par métrique), **100 % frontend** (zéro nouvelle API — `CapacityResponse`
+déjà chargée par `loadHeavy`), implémentés **en place dans `hypervision_v4`** (dérogation à
+la règle `_vN`).
+
+- **`CapacityChartBody`** (`components/capacity-chart.tsx`) reçoit une prop
+  **`metric?: CapacityMetric`** :
+  - **absente** → les 3 combinées (historique + projection, légende, 3 badges) —
+    comportement **inchangé** (le widget `capacity` du layout par défaut reste tel quel) ;
+  - **présente** → **UNE seule métrique** : 1 série historique + 1 projection en pointillés,
+    1 couleur (`COLORS[metric]`), **pas de légende** (`grid.top` réduit 32→12), **1 seul
+    badge** (« à 90 % dans ~N j » / « tendance stable ») + pente.
+- **3 nouveaux widgets** au catalogue `endpoint.tsx` : `capacity-cpu` / `capacity-ram` /
+  `capacity-disk` (w4 h3, minW 3, minH 2) — **pas dans `DEFAULT_LAYOUT`** (même pattern que
+  `metrics-cpu`/`metrics-ram`/`metrics-net` §11.5) : nouvel user → **bibliothèque** ; user
+  existant → ajoutés **en bas par le merge** `mergePageConfig`.
+- **Réemploi cross-plugin dans le détail VM** (skill `vm-inventory`) : le corps est importé
+  **statiquement** depuis `vm-view_v4/components/vm-detail.tsx`
+  (`import { CapacityChartBody } from '../../hypervision_v4/components/capacity-chart'`) —
+  même pattern que l'import inverse existant (`node.tsx` → `node-monitor.tsx`), **pas de
+  cycle de modules** (modules distincts), bundlé au build → fonctionne quel que soit l'ordre
+  de chargement des plugins. Voir skill `vm-inventory` § (détail VM — Capacité du cluster).
+- **i18n** : `capacity.titleCpu` / `capacity.titleRam` / `capacity.titleDisk` (fr/en).
+- **Validation livrée** : Playwright — page cluster : 3 widgets dans la grille (ajoutés en bas
+  par le merge, user existant), chacun **1 série + 1 projection + 1 badge** (CPU « à 90 % dans
+  ~49 j » pente +1.38 %/j, RAM « tendance stable » pente −0.59 %/j, Disque « à 90 % dans
+  ~280 j » pente +0.21 %/j), widget combiné inchangé ; détail VM (LXC #103) : section
+  « Capacité du cluster » dans l'onglet Résumé avec les 3 graphiques (données du cluster) ;
+  0 erreur console. typecheck + tests (shared 303, server 217) + vite build OK.

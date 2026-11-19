@@ -200,6 +200,9 @@ export const fr: Record<string, string> = {
   'pra.ram': '{{size}}',
 
   'capacity.title': 'Capacity planning — 30 jours',
+  'capacity.titleCpu': 'Capacity planning — CPU',
+  'capacity.titleRam': 'Capacity planning — RAM',
+  'capacity.titleDisk': 'Capacity planning — Disque',
   'capacity.cpu': 'CPU',
   'capacity.ram': 'RAM',
   'capacity.disk': 'Disque',
@@ -604,6 +607,8 @@ export const fr: Record<string, string> = {
   'vm.sum.vmClass': 'Classe VM',
   'vm.sum.vmId': 'ID VM',
   'vm.sum.uptime': 'Uptime',
+  'vm.sum.capacity': 'Capacité du cluster',
+  'vm.sum.capacity.hint': 'Capacity planning du cluster (endpoint) qui héberge la VM — historique 30 j + projection.',
 
   'common.of': 'sur',
   'common.days': '{{n}} j',
