@@ -3,11 +3,11 @@ import { useTranslation } from 'react-i18next';
 import type { EChartsOption } from 'echarts';
 import { AlertTriangle, ArrowLeft, Download, Loader2 } from 'lucide-react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import type { MetricsTimeframe, MetricsResponse, NodeSystemRow, WidgetItem } from '@prox4u/shared';
+import type { MetricsTimeframe, MetricsResponse, NodeHardwareRow, NodeSystemRow, WidgetItem } from '@prox4u/shared';
 import { addWidget, mergePageConfig, removeWidget, overcommitTone } from '@prox4u/shared';
 import { useDashboard } from '../../../core/data/dashboard';
 import { useEndpoint, useOvercommitConfig } from '../../../core/data/use-endpoint';
-import { fetchMetrics, fetchNodeSystem } from '../../../core/api/apiClient';
+import { fetchMetrics, fetchNodeHardware, fetchNodeSystem } from '../../../core/api/apiClient';
 import { Badge } from '../../../components/ui/badge';
 import { Skeleton } from '../../../components/ui/skeleton';
 import { formatBytes, formatUptime } from '../../../lib/utils';
@@ -54,7 +54,7 @@ import {
 } from '../../vm-view_v4/components/node-monitor';
 import { CpuCoresBody } from '../../vm-view_v4/components/cpu-cores-card';
 import { FwDecodeBlock } from '../../vm-view_v4/components/node-net-card';
-import { StatBody, VmTableBody, nodeDefaultLayout } from '../components/node-widgets';
+import { CapacityBody, HostDetailsBody, StatBody, VmTableBody, nodeDefaultLayout } from '../components/node-widgets';
 
 /** Tick de rafraîchissement des graphiques (identique au Monitor nœud vm-view_v4). */
 const REFRESH_MS = 60_000;
@@ -150,6 +150,27 @@ export function NodePage() {
     };
   }, []);
   const sysRow = sysRows.find((r) => r.node === nodeId);
+
+  // ── Empreinte matérielle (modèle CPU + DMI) — quasi-statique, widget « Détails hôte » ──
+  const [hwRows, setHwRows] = useState<NodeHardwareRow[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetchNodeHardware()
+        .then((r) => {
+          if (!cancelled) setHwRows(r.nodes);
+        })
+        .catch((err) => console.warn('chargement node-hardware en échec', err));
+    };
+    load();
+    const id = setInterval(load, REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+  const hwRow = hwRows.find((r) => r.node === nodeId);
 
   // ── Dérivés du snapshot (guards optionnels — AVANT les early returns) ──
   const node = ep?.snapshot?.nodes.find((n) => n.node === nodeId);
@@ -258,6 +279,45 @@ export function NodePage() {
           <StatBody
             value={node.online && node.loadavg ? node.loadavg[0].toFixed(2) : '—'}
             sub={node.online && node.loadavg ? `${node.loadavg.map((v) => v.toFixed(2)).join(' / ')} ${t('node.kpi.loadSub')}` : '—'}
+          />
+        ),
+      },
+      {
+        id: 'host-details',
+        title: t('node.hostDetails.title'),
+        default: { w: 6, h: 4 },
+        minW: 4,
+        minH: 3,
+        render: () => (
+          <HostDetailsBody
+            version={node.version}
+            ip={node.ip}
+            online={node.online}
+            uptimeSec={node.uptimeSec}
+            cpus={node.cpus}
+            nicCount={ifaces.length}
+            vmCount={vms.length}
+            cpuModel={hwRow?.cpuModel ?? null}
+            product={hwRow?.product ?? null}
+            vendor={hwRow?.vendor ?? null}
+            board={hwRow?.board ?? null}
+          />
+        ),
+      },
+      {
+        id: 'capacity',
+        title: t('node.capacity.title'),
+        default: { w: 6, h: 4 },
+        minW: 4,
+        minH: 3,
+        render: () => (
+          <CapacityBody
+            cpuPct={node.cpuPct}
+            cpus={node.cpus}
+            memUsedBytes={node.memUsedBytes}
+            memTotalBytes={node.memTotalBytes}
+            rootfsUsedBytes={node.rootfsUsedBytes}
+            rootfsTotalBytes={node.rootfsTotalBytes}
           />
         ),
       },
@@ -456,6 +516,7 @@ export function NodePage() {
     usedCores,
     sysRow,
     sysLoading,
+    hwRow,
     data,
     hasData,
     diskioData,

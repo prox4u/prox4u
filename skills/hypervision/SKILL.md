@@ -1,6 +1,6 @@
 ---
 name: hypervision
-description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
+description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut) + page nœud : cartes « Détails hôte » (identification hôte + matériel CPU/DMI via /api/node-hardware) et « Capacité et utilisation » (barres used vs capacité CPU/Mémoire/Stockage). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
 ---
 
 # Hypervision — Base de connaissance
@@ -210,9 +210,11 @@ bibliothèque/persistance par user — socle `core/widgets`, skill `general` §1
   l'initialisation (ordre sensible — hypervision se charge avant vm-view → échouerait) ;
   l'import statique est **bundlé** → fonctionne quel que soit l'état de vm-view. **Piège
   versionnement** : un fix futur de ces corps → vm-view_v5 + hypervision_v5.
-- **Corps KPIs/table locaux** : `components/node-widgets.tsx` → `StatBody` (KPI), `VmTableBody`
-  (table VMs), `nodeDefaultLayout` (rangée 4 KPIs w3 h2 + table VMs w12 h4 + graphiques
-  empilés w12, ordre catalogue).
+- **Corps KPIs/table/cartes locaux** : `components/node-widgets.tsx` → `StatBody` (KPI),
+  `VmTableBody` (table VMs), `CapacityBody` + `CapacityRow` (barres used vs capacité),
+  `HostDetailsBody` (+ helper `pveVersionLabel`), `nodeDefaultLayout` (rangée 4 KPIs w3 h2
+  + rangée `host-details`/`capacity` w6 h4 côte à côte + table VMs w12 h4 + graphiques
+  empilés w12, ordre catalogue — voir §11.6).
 - **Titres KPIs différenciés des graphiques** : nouvelles clés i18n
   `node.kpi.{cpuLive,ramLive,diskLive,loadLive}` (fr « … (instantané) » / en « … (live) ») —
   évite la collision « CPU » (KPI) vs « CPU » (graphe historique) dans la bibliothèque.
@@ -271,3 +273,33 @@ version courante, rollback A/B `?v=hypervision_v3`). Deux ajouts sur `MetricsPan
   (`cluster-metrics-proxmox-cpu-hour-*.csv`, 60 lignes), combiné inchangé (4 séries, double
   axe, sans export), 0 erreur console, page nœud v4 intacte. typecheck + tests (shared 303,
   server 215) + vite build OK.
+
+### 11.6. Évolution v4 (en place) — « Détails hôte » + « Capacité et utilisation » (page nœud)
+Deux cartes inspirées d'une capture vCenter, sur la **page nœud** (`/e/:endpointId/n/:nodeId`),
+implémentées **en place** dans `hypervision_v4` (dérogation à la règle `_vN`).
+
+- **2 nouveaux widgets** au catalogue `node.tsx` : `host-details` + `capacity` (w6 h4,
+  minW 4, minH 3) **côte à côte** après les KPIs (y2) ; `vms` décalé y6, graphiques depuis
+  y10 dans `nodeDefaultLayout` (`TOP_IDS` mis à jour). Nouvel user → position défaut ; user
+  existant → ajout en bas par le merge `mergePageConfig`.
+- **`HostDetailsBody`** : identification hôte (hyperviseur, IP, état, uptime, cœurs, NIC,
+  VMs) + empreinte matérielle (modèle CPU + DMI : product/vendor/board). La version PVE brute
+  `pve-manager/9.1.1/42dba46cf33dac83` est parsée en **« Proxmox VE 9.1.1 »** par le helper
+  `pveVersionLabel` (le champ `version` du snapshot est la valeur brute de `pveversion`).
+  Contenu aligné en haut (`content-start`).
+- **`CapacityBody`** + `CapacityRow` : 3 barres used vs capacité — CPU en **cœurs** (pas de
+  fréquence collectée), Mémoire + Stockage **rootfs** en octets — tons `usageSeverity`
+  (seuils `overcommit.json`). Données 100 % snapshot nœud (PVE), aucune requête supplémentaire.
+- **Données manquantes (Phase 2)** : modèle CPU + modèle matériel DMI collectés par Telegraf
+  (script `exec` `prox4u-telegraf-hw-info.sh` → table quasi-statique `node_hardware`) et servis
+  par **`GET /api/node-hardware`** (dernier point par nœud, fenêtre 1 h, cache 5 min,
+  `strOrNull` mappe `unknown` → null). `source: 'empty'` si la table est absente (agent pas
+  encore (re)déployé) → les modèles s'affichent « — ». Voir skill `node-sensors`.
+- **`NodeHealth`** : `rootfsUsedBytes`/`rootfsTotalBytes` ajoutés (requis `number | null`) +
+  mapping poller → la barre Stockage = rootfs (disque système).
+- **i18n** : `node.capacity.*` (10 clés) + `node.hostDetails.*` (10 clés) fr/en.
+- **Validation livrée** : Playwright — 2 widgets présents et bien positionnés (après KPIs,
+  avant table VMs), 0 erreur console ; Détails hôte (IP, ● en ligne, Uptime, Cœurs 24, NIC 13,
+  VMs 7, « Proxmox VE 9.1.1 », modèles « — ») + Capacité (CPU 6.3/24 cœurs, Mémoire 34.7/126 Go,
+  Stockage 13.9/93.9 Go, barres teintées). typecheck + tests (shared 303, server 217) + vite
+  build OK.

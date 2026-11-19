@@ -226,6 +226,36 @@ else
   echo "[dry-run] installerait le script $IFACE_MAC_SCRIPT (mapping interface hôte → MAC)"
 fi
 
+# ── 5d. Empreinte matérielle (modèle CPU + DMI, consommé par le plugin exec) ──
+# L'API PVE n'expose ni le modèle CPU ni le modèle de machine. Le plugin exec
+# exécute ce script à chaque cycle et écrit la table quasi statique
+# `node_hardware` (cpu_model + product + vendor + board) : prox4u l'utilise
+# pour la carte « Détails hôte » de la page nœud (identification matérielle).
+# Quasi-statique (change au remplacement de machine) ; prox4u lit le dernier
+# point par nœud sur une fenêtre de 1 h. `unknown` = illisible (VM sans DMI).
+HW_INFO_SCRIPT=/usr/local/lib/prox4u-telegraf-hw-info.sh
+if [[ $DRY_RUN -eq 0 ]]; then
+  cat > "$HW_INFO_SCRIPT" <<'EOS'
+#!/usr/bin/env bash
+# Prox4u — empreinte matérielle (table node_hardware pour Telegraf).
+# Sortie : line protocol InfluxDB (tags cpu_model + product + vendor + board).
+# Le champ présent=1i est obligatoire : une ligne line-protocol sans champ
+# n'est pas valide. Valeur illisible → `unknown` (le serveur la mappe en null).
+esc() { printf '%s' "$1" | sed 's/"/\\"/g'; }
+val() { local v="${1:-}"; [[ -n "$v" ]] || v="unknown"; esc "$v"; }
+cpu_model="$(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)" || cpu_model=""
+product="$(cat /sys/class/dmi/id/product_name 2>/dev/null)" || product=""
+vendor="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null)" || vendor=""
+board="$(cat /sys/class/dmi/id/board_name 2>/dev/null)" || board=""
+printf 'node_hardware cpu_model="%s",product="%s",vendor="%s",board="%s" present=1i\n' \
+  "$(val "$cpu_model")" "$(val "$product")" "$(val "$vendor")" "$(val "$board")"
+EOS
+  chmod 755 "$HW_INFO_SCRIPT"
+  ok "script empreinte matérielle installé → $HW_INFO_SCRIPT"
+else
+  echo "[dry-run] installerait le script $HW_INFO_SCRIPT (empreinte matérielle CPU + DMI)"
+fi
+
 if [[ $DRY_RUN -eq 1 ]]; then
   # Aperçu sans écrire (et sans exposer le token en clair sur la console).
   cat <<EOF
@@ -233,7 +263,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   agent         : interval=10s, hostname=$NODE_TAG
   global_tags   : node=$NODE_TAG, node_source=telegraf
   outputs.influxdb_v2 : $INFLUX_URL (bucket=$INFLUX_BUCKET, org=$INFLUX_ORG, insecure_skip_verify=true)
-  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system, net, exec (dm_names, iface_mac)
+  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system, net, exec (dm_names, iface_mac, hw_info)
   (token masqué)
 EOF
 else
@@ -298,6 +328,14 @@ cat > "$CONF" <<EOF
 # (node, iface) sur une fenêtre de 1 h.
 [[inputs.exec]]
   commands = ["/usr/local/lib/prox4u-telegraf-iface-mac.sh"]
+  data_format = "influx"
+  timeout = "10s"
+
+# ── Empreinte matérielle (table node_hardware) — modèle CPU + DMI ──
+# Quasi-statique : prox4u lit le dernier point par nœud (fenêtre 1 h) pour la
+# carte « Détails hôte » de la page nœud (identification matérielle).
+[[inputs.exec]]
+  commands = ["/usr/local/lib/prox4u-telegraf-hw-info.sh"]
   data_format = "influx"
   timeout = "10s"
 

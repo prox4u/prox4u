@@ -9,6 +9,8 @@ import type {
   NodeNetIface,
   NodeNetResponse,
   NodeNetRow,
+  NodeHardwareResponse,
+  NodeHardwareRow,
   NodeSystemResponse,
   NodeSystemRow,
   NodeTempsResponse,
@@ -41,6 +43,8 @@ import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 
 export const SYS_CACHE_TTL_MS = 60_000;
 export const DISKIO_CACHE_TTL_MS = 5 * 60_000;
+/** Empreinte matérielle quasi-statique → cache long (5 min). */
+export const HW_CACHE_TTL_MS = 5 * 60_000;
 
 /** Ligne brute InfluxDB (valeurs typées au parse, jamais de SQL injection). */
 export type InfluxRow = Record<string, string | number | null>;
@@ -79,6 +83,18 @@ function num(v: unknown): number | null {
 
 function clamp(v: number, lo = 0, hi = 100): number {
   return Math.min(hi, Math.max(lo, v));
+}
+
+/**
+ * Chaîne ou null — `null` pour null/undefined, chaîne vide, ou la sentinelle
+ * `unknown` (valeur illisible côté agent : DMI absent en VM, /proc/cpuinfo
+ * sans `model name`…). Jamais de valeur inventée.
+ */
+function strOrNull(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s || s === 'unknown') return null;
+  return s;
 }
 
 function influxReady(ctx: AppContext): boolean {
@@ -411,6 +427,7 @@ export function nodeEndpoint(ctx: AppContext, poller: Poller, node: string): End
  */
 export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, poller: Poller): void {
   const sysCache = new Map<string, { at: number; value: NodeSystemResponse }>();
+  const hwCache = new Map<string, { at: number; value: NodeHardwareResponse }>();
   const diskioCache = new Map<string, { at: number; value: NodeDiskioResponse }>();
   const netCache = new Map<string, { at: number; value: NodeNetResponse }>();
   const tempsCache = new Map<string, { at: number; value: NodeTempsResponse }>();
@@ -509,6 +526,51 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
       }
     }
     sysCache.set('all', { at: Date.now(), value: body });
+    reply.send(body);
+  });
+
+  /**
+   * GET /api/node-hardware — empreinte matérielle par nœud (modèle CPU + DMI) :
+   * dernier point par nœud sur la table quasi-statique `node_hardware` (script
+   * `exec` Telegraf, fenêtre 1 h). Cache 5 min. `source: 'empty'` si la table
+   * est absente (agent pas encore (re)déployé) — le front affiche alors « — ».
+   */
+  app.get('/api/node-hardware', async (_req, reply) => {
+    const cached = hwCache.get('all');
+    if (cached && Date.now() - cached.at < HW_CACHE_TTL_MS) {
+      reply.send(cached.value);
+      return;
+    }
+    let body: NodeHardwareResponse = { nodes: [], source: 'empty' };
+    if (influxReady(ctx)) {
+      try {
+        const rows = await ctx.influx!.querySql<InfluxRow>(
+          ctx.influx!.rawDb,
+          `SELECT node, cpu_model, product, vendor, board, time
+           FROM node_hardware WHERE time >= now() - INTERVAL '1 hour' ORDER BY time DESC`,
+        );
+        const byNode = new Map<string, InfluxRow>();
+        for (const r of rows) {
+          const k = String(r.node ?? '');
+          if (k && !byNode.has(k)) byNode.set(k, r);
+        }
+        const nodes: NodeHardwareRow[] = [];
+        for (const [node, r] of byNode) {
+          nodes.push({
+            node,
+            cpuModel: strOrNull(r.cpu_model),
+            product: strOrNull(r.product),
+            vendor: strOrNull(r.vendor),
+            board: strOrNull(r.board),
+          });
+        }
+        nodes.sort((a, b) => a.node.localeCompare(b.node));
+        body = { nodes, source: nodes.length > 0 ? 'influx' : 'empty' };
+      } catch (err) {
+        ctx.logger.warn(`node-hardware : InfluxDB indisponible (${(err as Error).message})`);
+      }
+    }
+    hwCache.set('all', { at: Date.now(), value: body });
     reply.send(body);
   });
 

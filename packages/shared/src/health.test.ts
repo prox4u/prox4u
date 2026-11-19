@@ -14,6 +14,8 @@ const okNode = (node: string): NodeHealth => ({
   cpus: 32,
   memUsedBytes: 1,
   memTotalBytes: 2,
+  rootfsUsedBytes: 1,
+  rootfsTotalBytes: 2,
   loadavg: [1, 1, 1],
   cpuAllocCores: 0,
   ramAllocBytes: 0,
