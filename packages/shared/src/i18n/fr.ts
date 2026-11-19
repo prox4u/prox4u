@@ -434,6 +434,7 @@ export const fr: Record<string, string> = {
   'storage.vmShown': '{{shown}}/{{total}} VMs',
   'storage.drilldown.occupancy': 'Occupation',
   'storage.drilldown.capacity': 'Capacity planning',
+  'storage.drilldown.vms': 'VMs hébergées',
   'storage.drilldown.noData': 'Aucun historique enregistré pour ce datastore (le poller l’enregistre en continu — les courbes se remplissent au fil des ticks).',
   'storage.drilldown.insufficient': 'historique insuffisant (< 7 j)',
   'storage.kind.shared': 'Partagé',

@@ -200,6 +200,23 @@ describe('scopes (vmView / nodeView)', () => {
     expect(cfg.pages.endpointView).toBeUndefined();
     expect(getScopePage(cfg, 'nodePage', 'ep1/pve1')).toEqual({ layout: [item('kpi-cpu')], library: ['vms'] });
   });
+
+  it('vmSummary / storageView / sensorHistory : round-trip + isolation des scopes', () => {
+    let cfg: UserConfig = setScopePage(null, 'vmSummary', 'ep1/103', { layout: [item('vm-os')], library: ['capacity'] });
+    cfg = setScopePage(cfg, 'storageView', 'ep1/local-lvm', { layout: [item('storage-occupancy')], library: [] });
+    cfg = setScopePage(cfg, 'sensorHistory', 'pve1/cpu-core-0', { layout: [], library: ['history'] });
+    expect(getScopePage(cfg, 'vmSummary', 'ep1/103')).toEqual({ layout: [item('vm-os')], library: ['capacity'] });
+    expect(getScopePage(cfg, 'storageView', 'ep1/local-lvm')).toEqual({ layout: [item('storage-occupancy')], library: [] });
+    expect(getScopePage(cfg, 'sensorHistory', 'pve1/cpu-core-0')).toEqual({ layout: [], library: ['history'] });
+    // Isolation : vmSummary ne lit pas vmView (Monitor) et inversement.
+    cfg = setScopePage(cfg, 'vmView', 'ep1/103', { layout: [item('cpu')], library: [] });
+    expect(getScopePage(cfg, 'vmView', 'ep1/103')).toEqual({ layout: [item('cpu')], library: [] });
+    expect(getScopePage(cfg, 'vmSummary', 'ep1/103')).toEqual({ layout: [item('vm-os')], library: ['capacity'] });
+    // clearScopePage supprime le scope puis la map vidée.
+    cfg = clearScopePage(cfg, 'storageView', 'ep1/local-lvm');
+    expect(cfg.pages.storageView).toBeUndefined();
+    expect(getScopePage(cfg, 'vmSummary', 'ep1/103')).toEqual({ layout: [item('vm-os')], library: ['capacity'] });
+  });
 });
 
 describe('parseUserConfig (validation serveur)', () => {
@@ -211,6 +228,9 @@ describe('parseUserConfig (validation serveur)', () => {
       nodeView: { 'ep1/pve1': { layout: [], library: ['net'] } },
       endpointView: { ep1: { layout: [item('res-cpu')], library: [] } },
       nodePage: { 'ep1/pve1': { layout: [item('kpi-cpu')], library: ['vms'] } },
+      vmSummary: { 'ep1/103': { layout: [item('vm-os')], library: ['capacity'] } },
+      storageView: { 'ep1/local-lvm': { layout: [item('storage-occupancy')], library: [] } },
+      sensorHistory: { 'pve1/cpu-core-0': { layout: [], library: ['history'] } },
     },
   };
 
@@ -223,6 +243,18 @@ describe('parseUserConfig (validation serveur)', () => {
       parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { endpointView: 'nope' } }),
     ).toBeNull();
     expect(parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { nodePage: { 'a/b': 'nope' } } })).toBeNull();
+  });
+
+  it('parse les scopes vmSummary / storageView / sensorHistory', () => {
+    const parsed = parseUserConfig(JSON.parse(JSON.stringify(valid)))!;
+    expect(parsed.pages.vmSummary?.['ep1/103']).toEqual({ layout: [item('vm-os')], library: ['capacity'] });
+    expect(parsed.pages.storageView?.['ep1/local-lvm']).toEqual({ layout: [item('storage-occupancy')], library: [] });
+    expect(parsed.pages.sensorHistory?.['pve1/cpu-core-0']).toEqual({ layout: [], library: ['history'] });
+    // Une forme invalide dans un nouveau scope → rejet (400).
+    expect(
+      parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { vmSummary: 'nope' } }),
+    ).toBeNull();
+    expect(parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { sensorHistory: { 'a/b': 'nope' } } })).toBeNull();
   });
 
   it('accepte une config valide et clame la géométrie', () => {
