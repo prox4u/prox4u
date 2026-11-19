@@ -444,3 +444,9 @@ VITE_USE_PLUGIN_STORAGE=false pnpm dev   # désactive le module stockage
 2. L'ajouter au tableau `core/plugin/plugins.ts` (import explicite + gating par flag).
 3. Déclarer le flag dans `core/config/features.ts`.
 4. Les routes et l'entrée de menu sont automatiques (manifest).
+
+## Licence / License
+
+Projet publié sous licence **Apache License 2.0** — voir [`LICENSE`](./LICENSE).
+
+*Project released under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).*

@@ -1,6 +1,7 @@
 {
   "name": "prox4u-web",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@12.4.2",
   "scripts": {
