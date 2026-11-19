@@ -145,6 +145,11 @@ export const en: Record<string, string> = {
   'overview.cpubars.none': 'No per-core data (host agent down?).',
   'overview.col.endpoint': 'Proxmox',
   'overview.hint': 'Monitoring of all Proxmox servers: aggregated resources, cluster and node health, alerts, and overcommit risk.',
+  'overview.allClusters': 'All clusters',
+  'overview.cluster': 'Cluster',
+  'overview.nodesMatrix': 'Nodes — all clusters',
+  'overview.nodesMatrix.hint': 'Current usage per node (Proxmox API, live) — coloring by overcommit.json usage thresholds. Click a node: node page.',
+  'overview.nodesMatrix.none': 'No known node (snapshots pending?).',
 
   'endpoint.noData': 'No data for this Proxmox server',
   'endpoint.stale': 'Proxmox server unreachable — last known data ({{error}})',

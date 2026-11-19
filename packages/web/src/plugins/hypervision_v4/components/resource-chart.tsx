@@ -33,8 +33,12 @@ function timeLabel(t: number): string {
  * `ResourceChartBody` = corps de carte (graphe seul) — utilisé par la vue
  * d'ensemble v2 (grille personnalisable : la frame fournit en-tête/drag).
  * `ResourceChart` = carte complète (en-tête + corps) — page détail endpoint.
+ *
+ * `kpis` optionnel : vue d'ensemble avec un cluster sélectionné mais sans
+ * snapshot (endpoint en erreur) → pas de valeur courante ni de ligne
+ * d'allocation (jamais de valeur inventée), couleur neutre.
  */
-export function ResourceChartBody({ metric, endpointId, kpis }: { metric: ResourceMetric; endpointId?: string; kpis: KpiSummary }) {
+export function ResourceChartBody({ metric, endpointId, kpis }: { metric: ResourceMetric; endpointId?: string; kpis?: KpiSummary | null }) {
   const { t } = useTranslation();
   const theme = useTheme((s) => s.theme);
   const config = useOvercommitConfig();
@@ -53,11 +57,12 @@ export function ResourceChartBody({ metric, endpointId, kpis }: { metric: Resour
   }, [endpointId]);
 
   const ct = chartTheme(theme);
-  const current = metric === 'cpu' ? kpis.cpuPct : metric === 'ram' ? kpis.ramPct : kpis.storagePct;
-  const sev = usageSeverity(current, config);
+  const current = kpis ? resourceCurrent(metric, kpis) : null;
+  const sev: Severity = current === null ? 'ok' : usageSeverity(current, config);
 
   /** Allocation % (alloué / physique) — canon computeOvercommit() ; null si non applicable. */
   const allocPct = useMemo(() => {
+    if (!kpis) return null;
     const report = computeOvercommit(kpis, config);
     const ratio = metric === 'cpu' ? report.cpu.ratio : metric === 'ram' ? report.ram.ratio : report.disk.ratio;
     return ratio === null ? null : ratio * 100;

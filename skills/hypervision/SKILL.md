@@ -1,6 +1,6 @@
 ---
 name: hypervision
-description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut) + page nœud : cartes « Détails hôte » (identification hôte + matériel CPU/DMI via /api/node-hardware) et « Capacité et utilisation » (barres used vs capacité CPU/Mémoire/Stockage). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
+description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut) + page nœud : cartes « Détails hôte » (identification hôte + matériel CPU/DMI via /api/node-hardware) et « Capacité et utilisation » (barres used vs capacité CPU/Mémoire/Stockage) + vue d'ensemble production multi-clusters : sélecteur de cluster sur les 3 graphiques 7 j (« Tous les clusters »/[cluster] — courbes, valeur courante et ligne d'allocation suivent le cluster, /api/metrics?endpoint= déjà supportée, 100 % frontend) + carte « Nœuds — tous les clusters » (matrice : une ligne par nœud groupés par cluster, État/CPU/RAM/Disque/VMs, teintes usageSeverity overcommit.json, clic → page nœud, snapshot WS zéro API). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
 ---
 
 # Hypervision — Base de connaissance
@@ -143,10 +143,11 @@ dashboard ProxMenux, en vue parc).
 
 Copie de la v3 (`plugins/hypervision_v4/`, manifest id `hypervision_v4`, version `0.4.0`,
 export `hypervisionPluginV4`, enregistré dans `core/plugin/plugins.ts`). v1/v2/v3 intactes →
-rollback A/B (`/?v=hypervision_v3` etc.). La vue d'ensemble est **inchangée** (identique à la
-v3). La nouveauté : la **Bibliothèque de graphiques** (grille personnalisable drag/resize/
-bibliothèque/persistance par user — socle `core/widgets`, skill `general` §12) est étendue à
-**deux pages supplémentaires** :
+rollback A/B (`/?v=hypervision_v3` etc.). La vue d'ensemble est initialement inchangée
+(identique à la v3) — voir **§11.7** pour l'évolution production multi-clusters (sélecteur de
+cluster sur les graphiques 7 j + matrice nœuds tous clusters). La nouveauté : la
+**Bibliothèque de graphiques** (grille personnalisable drag/resize/bibliothèque/persistance par
+user — socle `core/widgets`, skill `general` §12) est étendue à **deux pages supplémentaires** :
 
 - **Page CLUSTER** (`/e/:endpointId`) : les **17 blocs** du dashboard deviennent des widgets
   déplaçables/retraitables. Persistance par compte, scope user-config **`endpointView`**
@@ -303,3 +304,46 @@ implémentées **en place** dans `hypervision_v4` (dérogation à la règle `_vN
   VMs 7, « Proxmox VE 9.1.1 », modèles « — ») + Capacité (CPU 6.3/24 cœurs, Mémoire 34.7/126 Go,
   Stockage 13.9/93.9 Go, barres teintées). typecheck + tests (shared 303, server 217) + vite
   build OK.
+
+### 11.7. Évolution v4 (en place) — Vue d'ensemble production multi-clusters (sélecteur de cluster + matrice nœuds)
+La vue d'ensemble (`/`) est adaptée à la production **multi-clusters multi-nœuds** : les 3
+graphiques 7 j agrégés perdaient leur sens (moyenne de clusters hétérogènes — la ligne
+« allocation 150 % » agrégée ne correspond à aucun cluster réel). Deux ajouts, **100 %
+frontend** (zéro nouvelle API, zéro changement serveur) :
+
+- **A — Sélecteur de cluster sur les graphiques 7 j** : `Select` (ui/input) dans l'**en-tête
+  de page** (à côté de `WidgetToolbar`), label `overview.cluster` — options « Tous les
+  clusters » (`'all'`) + un item par endpoint. État **page** `resEndpointId` (non persisté —
+  la personnalisation user-config ne stocke que le layout) :
+  - `resEp = eps.find(e => e.id === resEndpointId)` → **fallback auto** « Tous » si
+    l'endpoint disparaît (le select redébarque sur `'all'` au rendu suivant) ;
+  - `resKpis = resEp ? (resEp.snapshot?.kpis ?? null) : kpis` (agrégat pour `'all'`) → les 3
+    widgets `res-*` passent `endpointId={resEp?.id}` + `kpis={resKpis}` à
+    `ResourceChartBody` : les **courbes** (`/api/metrics?endpoint=<id>` déjà supportée), la
+    **valeur courante** (slot `extra`) et la **ligne d'allocation** suivent le cluster choisi ;
+  - `ResourceChartBody.kpis` devient **optionnel** (`KpiSummary | null | undefined`) :
+    cluster sans snapshot (endpoint en erreur) → pas de valeur courante / pas de ligne
+    d'allocation, couleur neutre (jamais de valeur inventée).
+  - **Les KPIs restent agrégés** (par design — le sélecteur ne pilote que les 3 graphiques 7 j).
+- **C — Matrice nœuds tous clusters** (`components/node-matrix-card.tsx` →
+  `NodeMatrixBody`) : une ligne par nœud, **groupés par cluster** (clusters ET nœuds triés
+  par nom, le nom du cluster n'est affiché que sur la **première ligne** du groupe), colonnes
+  Cluster · Nœud (**lien** `/e/:endpointId/n/:nodeId`) · État (● `nodes.online` / badge crit
+  `nodes.offline`) · CPU · RAM · Disque (teintes `usageSeverity` — seuils d'usage
+  `overcommit.json`) · VMs (en marche/total depuis `snapshot.vms` filtrées par nœud). Nœud
+  hors ligne → cellules « — ». `overflow-y-auto` (production : 50+ nœuds). **Données :
+  snapshot WS uniquement** (`NodeHealth` + `VmSummary`) — zéro requête supplémentaire.
+- **Layout par défaut** : `nodes-matrix` (w12 h4, minW 6, minH 3) inséré à **y5** (après la
+  rangée KPIs — la vue « qui chauffe en ce moment ») ; `sys-nodes`/`temp-nodes`/endpoints/
+  alertes/table décalés de 4. User existant → ajout **en bas par le merge** (comportement
+  inchangé, cf. piège §10/§11.3).
+- **i18n** : `overview.allClusters`, `overview.cluster`, `overview.nodesMatrix{,.hint,.none}`
+  (fr/en) ; le reste réutilise `topbar.nodes`, `common.state`, `metrics.disk`, `nodes.online`,
+  `nodes.offline`.
+- **Validation livrée** : Playwright (2 endpoints, 3 nœuds) — sélecteur présent (3 options),
+  bascule sur ClusterProxmox → valeurs courantes = celles du cluster (CPU 1 %/RAM 10 %/
+  Disque 98 % = table endpoints) + courbes du cluster (disque 98 % rouge, allocation 42 %
+  CPU/20 % RAM au lieu de l'agrégat) ; retour « Tous » → agrégat ; matrice : 3 lignes groupées
+  (nom de cluster sur 1re ligne du groupe), teintes (89 % disque ProxSite1 warn), VMs
+  6/7·0/1·0/1, clic → `/e/proxmox/n/proxmox` ; 0 erreur console. typecheck + tests
+  (shared 303, server 217) + vite build OK.

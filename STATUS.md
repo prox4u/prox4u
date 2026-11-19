@@ -2059,6 +2059,37 @@ reçoivent le widget en bas par le merge.
 ### Docs
 - `skills/hypervision/SKILL.md` (2 widgets nœud + endpoint) ; `skills/node-sensors/SKILL.md` (`/api/node-hardware` + script hw-info).
 
+## ✅ Fait — Vue d'ensemble production multi-clusters : sélecteur de cluster sur les graphiques 7 j + matrice nœuds tous clusters (hypervision_v4) (livré, validé Playwright — **commité**)
+
+> **2026-11-19** — La vue d'ensemble (`/`, hypervision_v4) est adaptée à la production **multi-clusters multi-nœuds** : les 3 graphiques 7 j agrégés perdaient leur sens (moyenne de clusters hétérogènes — la ligne « allocation 150 % » agrégée ne correspond à aucun cluster réel). Deux ajouts, **100 % frontend** (zéro nouvelle API, zéro changement serveur), implémentés **en place dans `hypervision_v4`** (dérogation à la règle `_vN`).
+
+### Périmètre (arbitrage utilisateur)
+- Question posée : « dans vue d'ensemble, je ne sais pas si ces informations sont utiles, car en production il faudra gérer plusieurs vrais clusters avec des multi-nœuds » (capture des 3 graphiques 7 j agrégés). Choix utilisateur : **A + C (recommandé)** — A : sélecteur de cluster sur les 3 graphiques 7 j ; C : carte matrice nœuds tous clusters. Non retenu : B (graphiques retirés du layout par défaut), A seul, C seul.
+
+### A — Sélecteur de cluster sur les graphiques 7 j
+- `Select` (ui/input) dans l'**en-tête de page** (à côté de `WidgetToolbar`), label `overview.cluster` — options « Tous les clusters » (`'all'`) + un item par endpoint. État **page** `resEndpointId` (non persisté — user-config ne stocke que le layout) ; `resEp = eps.find(...)` → **fallback auto** « Tous » si l'endpoint disparaît.
+- `resKpis = resEp ? (resEp.snapshot?.kpis ?? null) : kpis` → les 3 widgets `res-*` passent `endpointId` + `kpis` à `ResourceChartBody` : courbes (`/api/metrics?endpoint=<id>` déjà supportée), valeur courante (slot `extra`) et ligne d'allocation suivent le cluster.
+- `ResourceChartBody.kpis` devient **optionnel** : cluster sans snapshot → pas de valeur courante / pas de ligne d'allocation, couleur neutre (jamais de valeur inventée).
+- **Les KPIs restent agrégés** (par design — le sélecteur ne pilote que les 3 graphiques 7 j).
+
+### C — Matrice nœuds tous clusters
+- `components/node-matrix-card.tsx` → `NodeMatrixBody` : une ligne par nœud, **groupés par cluster** (triés par nom, nom du cluster sur la 1re ligne du groupe), colonnes Cluster · Nœud (lien `/e/:endpointId/n/:nodeId`) · État (● en ligne / badge crit hors ligne) · CPU · RAM · Disque (teintes `usageSeverity` — seuils `overcommit.json`) · VMs (en marche/total depuis `snapshot.vms` filtrées par nœud). Hors ligne → « — ». `overflow-y-auto` (50+ nœuds en production). **Données : snapshot WS uniquement** (`NodeHealth` + `VmSummary`) — zéro requête supplémentaire.
+- Widget `nodes-matrix` (w12 h4, minW 6, minH 3) **dans `overviewDefaultLayout` à y5** (après la rangée KPIs — la vue « qui chauffe en ce moment ») ; `sys-nodes`/`temp-nodes`/endpoints/alertes/table décalés de 4. User existant → ajout en bas par le merge.
+
+### Fichiers modifiés
+- `packages/shared/src/i18n/{fr,en}.ts` (`overview.allClusters`, `overview.cluster`, `overview.nodesMatrix{,.hint,.none}`)
+- `packages/web/src/plugins/hypervision_v4/components/node-matrix-card.tsx` (nouveau — `NodeMatrixBody`)
+- `packages/web/src/plugins/hypervision_v4/components/resource-chart.tsx` (`kpis` optionnel)
+- `packages/web/src/plugins/hypervision_v4/pages/overview.tsx` (état `resEndpointId` + `Select` en-tête, `resEp`/`resKpis` dérivés, catalogue `res-*` + `nodes-matrix`, `overviewDefaultLayout` y5)
+
+### Vérifications effectuées
+- `pnpm --filter @prox4u/shared build` + restart serveur + typecheck web + `vite build` (bundle `index-Dv12jOqv.js`) : OK.
+- Tests : **shared 303, server 217** = 520 (inchangé — pas de suite de tests web).
+- Playwright (2 endpoints, 3 nœuds) : sélecteur présent (3 options) ; bascule ClusterProxmox → valeurs courantes = celles du cluster (CPU 1 %/RAM 10 %/Disque 98 % = table endpoints) + courbes du cluster (disque 98 % rouge, allocation 42 % CPU/20 % RAM au lieu de l'agrégat 150 %) ; retour « Tous » → agrégat ; matrice : 3 lignes groupées (nom de cluster sur 1re ligne du groupe), teintes (89 % disque ProxSite1 warn), VMs 6/7·0/1·0/1, clic → `/e/proxmox/n/proxmox` ; 0 erreur console.
+
+### Docs
+- `skills/hypervision/SKILL.md` (§11.7 — sélecteur de cluster + matrice nœuds, frontmatter mis à jour).
+
 ## ⏳ À faire
 
 ### À tester / à aborder

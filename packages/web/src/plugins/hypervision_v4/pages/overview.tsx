@@ -18,9 +18,11 @@ import { useMulti, useOvercommitConfig } from '../../../core/data/use-endpoint';
 import { useDashboard } from '../../../core/data/dashboard';
 import { fetchNodeSensors, fetchNodeSystem } from '../../../core/api/apiClient';
 import { ResourceChartBody, resourceCurrent } from '../components/resource-chart';
+import { NodeMatrixBody } from '../components/node-matrix-card';
 import { SystemNodesBody } from '../components/system-nodes-card';
 import { TempNodesBody } from '../components/temp-nodes-card';
 import { Badge } from '../../../components/ui/badge';
+import { Select } from '../../../components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader } from '../../../components/ui/table';
 import { KpiCpuRamBody, KpiNodesBody, KpiStorageBody, KpiVmsBody } from '../components/kpi-row';
 import { useUserConfig } from '../../../store/user-config';
@@ -35,8 +37,15 @@ import { layoutsEqual, type CoreWidgetDef } from '../../../core/widgets/types';
  * persistance par user (GET/PUT/DELETE /api/user-config, page « overview »).
  *
  * Catalogue de widgets :
- *  - res-cpu / res-ram / res-storage : graphes ressources 7 j (agrégat) ;
+ *  - res-cpu / res-ram / res-storage : graphes ressources 7 j — SÉLECTEUR DE
+ *    CLUSTER dans l'en-tête de page (« Tous les clusters » / un cluster) :
+ *    courbes, valeur courante et ligne d'allocation suivent le cluster choisi
+ *    (API /api/metrics?endpoint=<id> déjà supportée — 100 % frontend) ;
  *  - kpi-nodes / kpi-cpu / kpi-storage / kpi-vms : cartes KPI ;
+ *  - NOUVEAUTÉ v4 (production multi-clusters) :
+ *    - nodes-matrix : matrice nœuds tous clusters (une ligne par nœud, groupés
+ *      par cluster, usage CPU/RAM/disque teinté selon overcommit.json, VMs
+ *      en marche/total, clic → page nœud — données du snapshot WS, zéro API) ;
  *  - sys-nodes : tableau Système cross-node (agent hôte Telegraf) ;
  *  - NOUVEAUTÉ v3 (bibliothèque complétée, référence ProxMenux) :
  *    - temp-nodes : températures par nœud (max capteurs + max disques SMART,
@@ -47,22 +56,26 @@ import { layoutsEqual, type CoreWidgetDef } from '../../../core/widgets/types';
  *  - alerts / table : alertes + inventaire endpoints.
  *
  * Les positions persistées priment ; le layout par défaut est le « design
- * validé » v1 + la rangée temp-nodes v3 (overviewDefaultLayout). Pour les
- * layouts déjà sauvegardés (v2), le widget s'ajoute en bas par le merge.
- * Les scopes user-config sont inchangés entre v2 et v3.
+ * validé » v1 + la rangée temp-nodes v3 + la rangée nodes-matrix v4
+ * (overviewDefaultLayout). Pour les layouts déjà sauvegardés (v2/v3), le
+ * widget s'ajoute en bas par le merge. Les scopes user-config sont inchangés.
  */
 
 /**
- * Layout par défaut de la vue d'ensemble : graphes ressources en tête, rangée de KPIs,
- * rangée système (Système par nœud — tableau cross-node agent hôte, pleine largeur, h=5),
- * rangée températures par nœud (v3 — capteurs + disques SMART, pleine largeur, h=4),
- * cartes endpoints (3/rangée), puis alertes + table. I/O disques par device et CPU par
- * cœur vivent dans le Monitor du nœud (Vue VM) — drill-down d'un nœud.
- * NB : v3 = v2 + la rangée temp-nodes ; les positions persistées priment (le widget
- * s'ajoute en bas par le merge pour les layouts déjà sauvegardés).
+ * Layout par défaut de la vue d'ensemble : graphes ressources en tête (avec
+ * sélecteur de cluster dans l'en-tête de page), rangée de KPIs, matrice nœuds
+ * tous clusters (v4 — pleine largeur, h=4), rangée système (Système par nœud —
+ * tableau cross-node agent hôte, pleine largeur, h=5), rangée températures par
+ * nœud (v3 — capteurs + disques SMART, pleine largeur, h=4), cartes endpoints
+ * (3/rangée), puis alertes + table. I/O disques par device et CPU par cœur
+ * vivent dans le Monitor du nœud (Vue VM) — drill-down d'un nœud.
+ * NB : v4 = v3 + la rangée nodes-matrix ; les positions persistées priment (le
+ * widget s'ajoute en bas par le merge pour les layouts déjà sauvegardés).
  */
 function overviewDefaultLayout(eps: EndpointSnapshot[]): WidgetItem[] {
-  const SYS_ROW_Y = 5;
+  const MATRIX_ROW_Y = 5;
+  const MATRIX_ROW_H = 4;
+  const SYS_ROW_Y = MATRIX_ROW_Y + MATRIX_ROW_H;
   const SYS_ROW_H = 5;
   const TEMP_ROW_Y = SYS_ROW_Y + SYS_ROW_H;
   const TEMP_ROW_H = 4;
@@ -83,6 +96,7 @@ function overviewDefaultLayout(eps: EndpointSnapshot[]): WidgetItem[] {
     { widgetId: 'kpi-cpu', x: 3, y: 3, w: 3, h: 2 },
     { widgetId: 'kpi-storage', x: 6, y: 3, w: 3, h: 2 },
     { widgetId: 'kpi-vms', x: 9, y: 3, w: 3, h: 2 },
+    { widgetId: 'nodes-matrix', x: 0, y: MATRIX_ROW_Y, w: 12, h: MATRIX_ROW_H },
     { widgetId: 'sys-nodes', x: 0, y: SYS_ROW_Y, w: 12, h: SYS_ROW_H },
     { widgetId: 'temp-nodes', x: 0, y: TEMP_ROW_Y, w: 12, h: TEMP_ROW_H },
     ...epItems,
@@ -384,6 +398,16 @@ export function OverviewPage() {
   // seul (epIdsKey) laisserait des valeurs figées tant que les endpoints ne changent pas.
   const kpis = useMemo(() => aggregateKpis(eps), [eps]);
 
+  // Sélecteur de cluster des graphes 7 j : 'all' = agrégat (moyenne pondérée),
+  // sinon l'endpoint choisi. Fallback auto si l'endpoint disparaît (find → null
+  // → le select redébarque sur 'all' au prochain rendu).
+  const [resEndpointId, setResEndpointId] = useState('all');
+  const resEp = resEndpointId === 'all' ? null : (eps.find((e) => e.id === resEndpointId) ?? null);
+  // KPIs du cluster sélectionné (valeur courante + ligne d'allocation des
+  // graphes) — null si l'endpoint n'a pas de snapshot (jamais de valeur
+  // inventée) ; agrégat pour 'all'.
+  const resKpis = resEp ? (resEp.snapshot?.kpis ?? null) : kpis;
+
   // Catalogue de widgets (statiques + ep-<id> dynamiques) — les closures de
   // rendu capturent les données courantes ; l'IDENTITÉ du catalogue change à
   // chaque push, d'où la clé (ids) pour les memo de merge / de grille.
@@ -398,7 +422,8 @@ export function OverviewPage() {
         minW: 3,
         minH: 2,
         extra: () => {
-          const current = resourceCurrent(metric, kpis);
+          if (!resKpis) return <span className="text-sm text-muted-foreground">—</span>;
+          const current = resourceCurrent(metric, resKpis);
           const sev = usageSeverity(current, config);
           return (
             <span className={`text-sm font-semibold tabular-nums ${sev === 'crit' ? 'text-crit' : sev === 'warn' ? 'text-warn' : 'text-ok'}`}>
@@ -406,7 +431,7 @@ export function OverviewPage() {
             </span>
           );
         },
-        render: () => <ResourceChartBody metric={metric} kpis={kpis} />,
+        render: () => <ResourceChartBody metric={metric} endpointId={resEp?.id} kpis={resKpis} />,
       });
     }
     defs.push(
@@ -414,6 +439,16 @@ export function OverviewPage() {
       { id: 'kpi-cpu', title: t('kpi.cpuRam'), default: { w: 3, h: 2 }, minW: 2, minH: 2, render: () => <KpiCpuRamBody kpis={kpis} spark={[]} /> },
       { id: 'kpi-storage', title: t('kpi.storage'), default: { w: 3, h: 2 }, minW: 2, minH: 2, render: () => <KpiStorageBody kpis={kpis} spark={[]} /> },
       { id: 'kpi-vms', title: t('kpi.vms'), default: { w: 3, h: 2 }, minW: 2, minH: 2, render: () => <KpiVmsBody kpis={kpis} spark={[]} /> },
+      // v4 : matrice nœuds tous clusters (snapshot WS — zéro API supplémentaire).
+      {
+        id: 'nodes-matrix',
+        title: t('overview.nodesMatrix'),
+        subtitle: t('overview.nodesMatrix.hint'),
+        default: { w: 12, h: 4 },
+        minW: 6,
+        minH: 3,
+        render: () => <NodeMatrixBody eps={eps} />,
+      },
       {
         id: 'sys-nodes',
         title: t('overview.system'),
@@ -453,7 +488,7 @@ export function OverviewPage() {
       { id: 'table', title: t('overview.endpoints'), default: { w: 7, h: 3 }, minW: 6, minH: 2, render: () => <EndpointsTableBody eps={eps} /> },
     );
     return defs;
-  }, [eps, kpis, sysRows, sysLoading, sensorsData, sensorsLoading, t, config]);
+  }, [eps, kpis, resEndpointId, sysRows, sysLoading, sensorsData, sensorsLoading, t, config]);
 
   const catalogKey = useMemo(() => catalog.map((c) => c.id).join(','), [catalog]);
   const defaultLayout = useMemo(() => overviewDefaultLayout(epIdsKey ? eps : []), [epIdsKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -510,12 +545,31 @@ export function OverviewPage() {
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">{t('overview.hint')}</p>
           <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-muted-foreground/80">{t('widgets.customize.hint')}</p>
         </div>
-        <WidgetToolbar
-          libraryOpen={libraryOpen}
-          onToggleLibrary={() => setLibraryOpen((o) => !o)}
-          onReset={onReset}
-          libraryCount={merged.library.length}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Sélecteur de cluster des graphes 7 j (res-cpu / res-ram / res-storage). */}
+          <label className="text-xs text-muted-foreground" htmlFor="overview-cluster-select">
+            {t('overview.cluster')}
+          </label>
+          <Select
+            id="overview-cluster-select"
+            value={resEp ? resEp.id : 'all'}
+            onChange={(e) => setResEndpointId(e.target.value)}
+            className="w-44"
+          >
+            <option value="all">{t('overview.allClusters')}</option>
+            {eps.map((ep) => (
+              <option key={ep.id} value={ep.id}>
+                {ep.name}
+              </option>
+            ))}
+          </Select>
+          <WidgetToolbar
+            libraryOpen={libraryOpen}
+            onToggleLibrary={() => setLibraryOpen((o) => !o)}
+            onReset={onReset}
+            libraryCount={merged.library.length}
+          />
+        </div>
       </div>
 
       <div className="flex items-start gap-4">
