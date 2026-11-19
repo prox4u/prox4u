@@ -17,8 +17,11 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import {
+  addWidget,
   buildStorageInventory,
   buildStorageInventoryAll,
+  mergePageConfig,
+  removeWidget,
   sortStorageRows,
   storageSeverity,
   usageSeverity,
@@ -30,6 +33,7 @@ import {
   type StorageRowAll,
   type StorageSort,
   type StorageSortKey,
+  type WidgetItem,
 } from '@prox4u/shared';
 import { fetchStorageDatastoreHistory } from '../../../core/api/apiClient';
 import { useOvercommitConfig } from '../../../core/data/use-endpoint';
@@ -39,6 +43,12 @@ import { chartTheme } from '../../../lib/chart-theme';
 import { Badge } from '../../../components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/table';
 import { cn, formatBytes } from '../../../lib/utils';
+import { useUserConfig } from '../../../store/user-config';
+import type { CoreWidgetDef } from '../../../core/widgets/types';
+import { layoutsEqual } from '../../../core/widgets/types';
+import { WidgetGridLayout } from '../../../core/widgets/widget-grid';
+import { WidgetLibraryPanel } from '../../../core/widgets/widget-library';
+import { WidgetToolbar } from '../../../core/widgets/widget-toolbar';
 
 interface Props {
   endpoints: StorageInventoryEndpoint[];
@@ -516,7 +526,7 @@ function RowCells({
   );
 }
 
-/** Drill-down VMs d'un datastore (LUN sans VG, VG enfant ou datastore autonome). */
+/** Drill-down d'un datastore (LUN sans VG, VG enfant ou datastore autonome) — grille personnalisable. */
 function VmDrilldown({
   row,
   hist,
@@ -528,57 +538,10 @@ function VmDrilldown({
   vmLimit: number;
   onShowMore: () => void;
 }) {
-  const { t } = useTranslation();
-  const shown = row.vms.slice(0, vmLimit);
-  const hasMore = row.vms.length > shown.length;
   return (
     <tr className="bg-muted/30">
       <td colSpan={10} className="px-6 py-3">
-        <DatastorePanels hist={hist} allocPct={row.total > 0 ? (row.diskAllocated / row.total) * 100 : null} />
-        <div className="mt-3">
-          {row.vms.length === 0 ? (
-            <div className="text-[11px] text-muted-foreground">{t('storage.noVms')}</div>
-          ) : (
-            <>
-              <Table>
-                <TableHeader>
-                  <tr>
-                    <TableHead>{t('storage.col.vm')}</TableHead>
-                    <TableHead>{t('storage.col.vmid')}</TableHead>
-                    <TableHead className="text-right">{t('storage.col.disk')}</TableHead>
-                    <TableHead>{t('storage.col.vmnode')}</TableHead>
-                    <TableHead>{t('common.state')}</TableHead>
-                  </tr>
-                </TableHeader>
-                <TableBody>
-                  {shown.map((v) => (
-                    <tr key={v.vmid}>
-                      <TableCell className="text-xs font-medium">{v.name}</TableCell>
-                      <TableCell className="text-xs tabular-nums text-muted-foreground">{v.vmid}</TableCell>
-                      <TableCell className="text-right font-mono text-[11px] tabular-nums">{formatBytes(v.diskBytes)}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{v.node}</TableCell>
-                      <TableCell>
-                        <Badge tone={v.status === 'running' ? 'ok' : 'default'}>{t(`storage.vmstatus.${v.status === 'running' ? 'running' : 'stopped'}`)}</Badge>
-                      </TableCell>
-                    </tr>
-                  ))}
-                </TableBody>
-              </Table>
-              {hasMore && (
-                <div className="mt-2 flex items-center justify-between">
-                  <span className="text-[11px] tabular-nums text-muted-foreground">{t('storage.vmShown', { shown: shown.length, total: row.vms.length })}</span>
-                  <button
-                    type="button"
-                    onClick={onShowMore}
-                    className="rounded-md border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    {t('storage.showMore')}
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+        <DatastoreDrilldownGrid row={row} hist={hist} vmLimit={vmLimit} onShowMore={onShowMore} />
       </td>
     </tr>
   );
@@ -590,13 +553,13 @@ const SEV_COLOR: Record<Severity, string> = { ok: '#10b981', warn: '#f59e0b', cr
 const ALLOC_COLOR = '#6366f1';
 
 /**
- * Panneaux du drill-down datastore — même style que les graphs « monitor »
- * (resource-chart) : ligne colorée par sévérité de l'occupation courante, aire en
- * dégradé, bandes de seuil discrètes, ligne d'allocation indigo pointillée
- * (diskAllocated/total), occupation courante en haut à droite. + capacity planning
- * (jours avant 90 %, pente). Vide tant que le poller n'a pas d'historique.
+ * CORPS du graphe d'occupation du drill-down datastore (widget `storage-occupancy`) —
+ * même style que les graphs « monitor » (resource-chart) : ligne colorée par sévérité de
+ * l'occupation courante, aire en dégradé, bandes de seuil discrètes, ligne d'allocation
+ * indigo pointillée (diskAllocated/total), occupation courante en haut à droite.
+ * Vide tant que le poller n'a pas d'historique.
  */
-function DatastorePanels({ hist, allocPct }: { hist: DatastoreHistoryEntry | undefined; allocPct: number | null }) {
+function OccupancyChartBody({ hist, allocPct }: { hist: DatastoreHistoryEntry | undefined; allocPct: number | null }) {
   const { t } = useTranslation();
   const config = useOvercommitConfig();
   const theme = useTheme((s) => s.theme);
@@ -691,48 +654,228 @@ function DatastorePanels({ hist, allocPct }: { hist: DatastoreHistoryEntry | und
   }, [hist, allocPct, color, ct, t, config]);
 
   const ref = useEChart(option);
-  const fc = hist?.forecast;
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[1fr_220px]">
-      <div className="rounded-lg border bg-card p-2">
-        <div className="mb-1 flex items-center justify-between">
-          <span className="text-xs font-semibold">{t('storage.drilldown.occupancy')}</span>
-          {current !== null && (
-            <span className={`text-sm font-semibold tabular-nums ${sev === 'crit' ? 'text-crit' : sev === 'warn' ? 'text-warn' : 'text-ok'}`}>
-              {current.toFixed(0)} %
-            </span>
-          )}
-        </div>
-        {!option ? (
-          <div className="flex h-32 items-center justify-center px-4 text-center text-[11px] text-muted-foreground">
-            {t('storage.drilldown.noData')}
-          </div>
-        ) : (
-          <div ref={ref} className="h-32 w-full" />
+    <div className="flex h-full flex-col">
+      <div className="mb-1 flex items-center justify-between">
+        {current !== null && (
+          <span className={`text-sm font-semibold tabular-nums ${sev === 'crit' ? 'text-crit' : sev === 'warn' ? 'text-warn' : 'text-ok'}`}>
+            {current.toFixed(0)} %
+          </span>
         )}
       </div>
-      <div className="rounded-lg border bg-card p-2">
-        <div className="mb-1 text-xs font-semibold">{t('storage.drilldown.capacity')}</div>
-        {!fc ? (
-          <div className="text-[11px] text-muted-foreground">—</div>
-        ) : (
-          <div className="space-y-1.5 text-[11px]">
-            {fc.insufficientData ? (
-              <Badge tone="default">{t('storage.drilldown.insufficient')}</Badge>
-            ) : fc.daysTo90 !== null ? (
-              <Badge tone={fc.daysTo90 < 30 ? 'crit' : fc.daysTo90 < 90 ? 'warn' : 'ok'}>
-                {t('capacity.daysTo90', { days: fc.daysTo90 })}
-              </Badge>
-            ) : (
-              <Badge tone="ok">{t('capacity.stable')}</Badge>
-            )}
-            <div className="text-muted-foreground">
-              {fc.insufficientData
-                ? '—'
-                : `pente ${fc.slopePerDay >= 0 ? '+' : ''}${fc.slopePerDay.toFixed(2)} %/j`}
-            </div>
+      {!option ? (
+        <div className="flex min-h-[120px] flex-1 items-center justify-center px-4 text-center text-[11px] text-muted-foreground">
+          {t('storage.drilldown.noData')}
+        </div>
+      ) : (
+        <div ref={ref} className="min-h-[120px] w-full flex-1" />
+      )}
+    </div>
+  );
+}
+
+/** CORPS du panneau capacity planning du drill-down (widget `storage-capacity`). */
+function CapacityPanelBody({ hist }: { hist: DatastoreHistoryEntry | undefined }) {
+  const { t } = useTranslation();
+  const fc = hist?.forecast;
+  return (
+    <div className="p-1">
+      {!fc ? (
+        <div className="text-[11px] text-muted-foreground">—</div>
+      ) : (
+        <div className="space-y-1.5 text-[11px]">
+          {fc.insufficientData ? (
+            <Badge tone="default">{t('storage.drilldown.insufficient')}</Badge>
+          ) : fc.daysTo90 !== null ? (
+            <Badge tone={fc.daysTo90 < 30 ? 'crit' : fc.daysTo90 < 90 ? 'warn' : 'ok'}>
+              {t('capacity.daysTo90', { days: fc.daysTo90 })}
+            </Badge>
+          ) : (
+            <Badge tone="ok">{t('capacity.stable')}</Badge>
+          )}
+          <div className="text-muted-foreground">
+            {fc.insufficientData
+              ? '—'
+              : `pente ${fc.slopePerDay >= 0 ? '+' : ''}${fc.slopePerDay.toFixed(2)} %/j`}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** CORPS de la liste des VMs hébergées (widget `storage-vms`) — table + « Afficher plus ». */
+function VmListBody({
+  vms,
+  total,
+  hasMore,
+  onShowMore,
+}: {
+  vms: StorageRowAll['vms'];
+  total: number;
+  hasMore: boolean;
+  onShowMore: () => void;
+}) {
+  const { t } = useTranslation();
+  if (vms.length === 0) {
+    return <div className="px-1 py-2 text-[11px] text-muted-foreground">{t('storage.noVms')}</div>;
+  }
+  return (
+    <div className="flex h-full flex-col">
+      <Table>
+        <TableHeader>
+          <tr>
+            <TableHead>{t('storage.col.vm')}</TableHead>
+            <TableHead>{t('storage.col.vmid')}</TableHead>
+            <TableHead className="text-right">{t('storage.col.disk')}</TableHead>
+            <TableHead>{t('storage.col.vmnode')}</TableHead>
+            <TableHead>{t('common.state')}</TableHead>
+          </tr>
+        </TableHeader>
+        <TableBody>
+          {vms.map((v) => (
+            <tr key={v.vmid}>
+              <TableCell className="text-xs font-medium">{v.name}</TableCell>
+              <TableCell className="text-xs tabular-nums text-muted-foreground">{v.vmid}</TableCell>
+              <TableCell className="text-right font-mono text-[11px] tabular-nums">{formatBytes(v.diskBytes)}</TableCell>
+              <TableCell className="text-xs text-muted-foreground">{v.node}</TableCell>
+              <TableCell>
+                <Badge tone={v.status === 'running' ? 'ok' : 'default'}>{t(`storage.vmstatus.${v.status === 'running' ? 'running' : 'stopped'}`)}</Badge>
+              </TableCell>
+            </tr>
+          ))}
+        </TableBody>
+      </Table>
+      {hasMore && (
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-[11px] tabular-nums text-muted-foreground">{t('storage.vmShown', { shown: vms.length, total })}</span>
+          <button
+            type="button"
+            onClick={onShowMore}
+            className="rounded-md border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {t('storage.showMore')}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Drill-down datastore PERSONNALISABLE — grille de widgets (framework core/widgets) :
+ * occupation + capacity planning + VMs hébergées. Persistance /api/user-config par
+ * compte et par datastore (scope « endpointId/datastore ») → survit à la reconnexion.
+ */
+function DatastoreDrilldownGrid({
+  row,
+  hist,
+  vmLimit,
+  onShowMore,
+}: {
+  row: StorageRowAll;
+  hist: DatastoreHistoryEntry | undefined;
+  vmLimit: number;
+  onShowMore: () => void;
+}) {
+  const { t } = useTranslation();
+  const scope = `${row.endpointId}/${row.storage}`;
+  const stored = useUserConfig((s) => s.config?.pages.storageView?.[scope] ?? null);
+  const updatePage = useUserConfig((s) => s.updatePage);
+  const clearPage = useUserConfig((s) => s.clearPage);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+
+  const shown = row.vms.slice(0, vmLimit);
+  const hasMore = row.vms.length > shown.length;
+  const allocPct = row.total > 0 ? (row.diskAllocated / row.total) * 100 : null;
+
+  const catalog = useMemo<CoreWidgetDef[]>(
+    () => [
+      {
+        id: 'storage-occupancy',
+        title: t('storage.drilldown.occupancy'),
+        default: { w: 8, h: 3 },
+        minW: 4,
+        minH: 2,
+        render: () => <OccupancyChartBody hist={hist} allocPct={allocPct} />,
+      },
+      {
+        id: 'storage-capacity',
+        title: t('storage.drilldown.capacity'),
+        default: { w: 4, h: 3 },
+        minW: 3,
+        minH: 2,
+        render: () => <CapacityPanelBody hist={hist} />,
+      },
+      {
+        id: 'storage-vms',
+        title: t('storage.drilldown.vms'),
+        default: { w: 12, h: 5 },
+        minW: 6,
+        minH: 2,
+        render: () => <VmListBody vms={shown} total={row.vms.length} hasMore={hasMore} onShowMore={onShowMore} />,
+      },
+    ],
+    [t, hist, allocPct, shown, hasMore, onShowMore],
+  );
+
+  const catalogKey = useMemo(() => catalog.map((c) => c.id).join(','), [catalog]);
+  const defaultLayout = useMemo<WidgetItem[]>(
+    () => [
+      { widgetId: 'storage-occupancy', x: 0, y: 0, w: 8, h: 3 },
+      { widgetId: 'storage-capacity', x: 8, y: 0, w: 4, h: 3 },
+      { widgetId: 'storage-vms', x: 0, y: 3, w: 12, h: 5 },
+    ],
+    [],
+  );
+  const merged = useMemo(
+    () => mergePageConfig(stored, catalog, defaultLayout),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stored, catalogKey, defaultLayout],
+  );
+
+  const onLayoutChange = (layout: WidgetItem[]) => {
+    if (layoutsEqual(layout, merged.layout)) return;
+    updatePage('storageView', scope, { layout, library: merged.library });
+  };
+  const onRemove = (widgetId: string) => {
+    updatePage('storageView', scope, removeWidget(merged, widgetId));
+  };
+  const onAdd = (widgetId: string) => {
+    const def = catalog.find((c) => c.id === widgetId);
+    if (def) updatePage('storageView', scope, addWidget(merged, def));
+  };
+  const onReset = () => clearPage('storageView', scope);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-end">
+        <WidgetToolbar
+          libraryOpen={libraryOpen}
+          onToggleLibrary={() => setLibraryOpen((o) => !o)}
+          onReset={onReset}
+          libraryCount={merged.library.length}
+        />
+      </div>
+      <div className="flex items-start gap-4">
+        <div className="min-w-0 flex-1">
+          <WidgetGridLayout
+            catalog={catalog}
+            config={merged}
+            ctx={{ endpointId: row.endpointId }}
+            onLayoutChange={onLayoutChange}
+            onRemove={onRemove}
+          />
+        </div>
+        {libraryOpen && (
+          <WidgetLibraryPanel
+            catalog={catalog}
+            config={merged}
+            onAdd={onAdd}
+            onRemove={onRemove}
+            onClose={() => setLibraryOpen(false)}
+          />
         )}
       </div>
     </div>
