@@ -5,7 +5,7 @@ description: Runbook production de Prox4u — kit de déploiement autonome (depl
 
 # Prox4u — Runbook production
 
-> Procédure complète : `deploiement/DEPLOY.md` (FR/EN) — ce skill est le condensé de référence et de dépannage.
+> Procédure complète : `deploiement/DEPLOY.md` (FR) + `deploiement/DEPLOY.en.md` (EN) — ce skill est le condensé de référence et de dépannage.
 
 ## 1. Architecture cible
 - Serveur applicatif (hors infra Proxmox) : `/opt/prox4u`, app Node.js sur **:8080** (HTTPS si `TLS_CERT` défini), user système `proxmox`.
