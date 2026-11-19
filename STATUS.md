@@ -2202,8 +2202,10 @@ reçoivent le widget en bas par le merge.
 ## ⏳ À faire
 
 ### À tester / à aborder
-- [ ] **Module « Alarmes & Centreon » (centreon-nsca)** : pas encore testé de bout en bout — le daemon NSCA n'est pas installé sur cet environnement (seul le client `send_nsca` l'est) → la réception côté Centreon n'est pas encore validée (script `scripts/nsca-test.sh` fourni).
-- [ ] **Gestion des utilisateurs** : pas encore abordée.
+- [ ] **Module « Alarmes & Centreon » (centreon-nsca)** : pas encore testé de bout en bout — le daemon NSCA n'est pas installé sur cet environnement (seul le client `send_nsca` l'est) → la réception côté Centreon n'est pas encore validée (script `scripts/nsca-test.sh` fourni). → **GitHub issue #1**
+- [ ] **Gestion des utilisateurs** : pas encore abordée. → **GitHub issue #2**
+
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · #2 Gestion des utilisateurs · #3 P1 quorum · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur. Labels : `validation` / `feature` / `decision`.
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
 TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète dans la skill
