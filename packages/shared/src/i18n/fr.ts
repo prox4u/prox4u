@@ -145,6 +145,11 @@ export const fr: Record<string, string> = {
   'overview.cpubars.none': 'Aucune donnée par cœur (agent hôte inactif ?).',
   'overview.col.endpoint': 'Proxmox',
   'overview.hint': 'Supervision de tous les serveurs Proxmox : ressources agrégées, état de santé des clusters et nœuds, alertes et risque de surallocation.',
+  'overview.allClusters': 'Tous les clusters',
+  'overview.cluster': 'Cluster',
+  'overview.nodesMatrix': 'Nœuds — tous les clusters',
+  'overview.nodesMatrix.hint': 'Usage courant par nœud (API Proxmox, live) — teintes selon les seuils d’usage d’overcommit.json. Clic sur un nœud : page du nœud.',
+  'overview.nodesMatrix.none': 'Aucun nœud connu (snapshots en attente ?).',
 
   'endpoint.noData': 'Aucune donnée pour ce serveur Proxmox',
   'endpoint.stale': 'Serveur Proxmox injoignable — dernières données connues ({{error}})',
