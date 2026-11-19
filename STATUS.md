@@ -1,6 +1,6 @@
 # Prox4u — État d'avancement
 
-> **Dernière mise à jour : 2026-11-14**
+> **Dernière mise à jour : 2026-11-19**
 > Application de supervision vCenter-like pour Proxmox VE (managers/DSI).
 > Conception de référence : `.opencode/skills/proxmox-web/SKILL.md`
 
@@ -14,7 +14,7 @@
 - App en **HTTPS** (cert auto-signé, SAN localhost + IP VM) ; InfluxDB en HTTPS sur 8181 ; **Explorer** (UI InfluxDB 3) en HTTPS sur 8888
 - Logs / pid : `logs/` (à la racine du projet, rien dans /tmp)
 - Cron : `@reboot` + keepalive minute par minute sur `server.sh start` (idempotent) ; le conteneur InfluxDB se relance seul au boot (`restart: unless-stopped`)
-- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (516 tests : 301 shared + 215 server)
+- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (518 tests : 303 shared + 215 server)
 
 ---
 
@@ -1953,6 +1953,38 @@ reçoivent le widget en bas par le merge.
 
 ### Rattaché — site vitrine (repo séparé)
 - Le site vitrine `www.prox4u.fr` (repo `prox4u_web/prox4u_web`) a sa propre skill : `skills/website/SKILL.md` dans **son** repo — renvoi croisé ajouté dans `skills/README.md` §4.2 (commit `1b8e5da`).
+
+## ✅ Fait — Bibliothèque de graphiques sur TOUTES les pages hypervision : `hypervision_v4` (livré, validé API + Playwright — **commité**)
+
+> **2026-11-19** — Élargissement de la « Bibliothèque de graphiques » (grilles personnalisables drag/resize/bibliothèque/persistance par user) à **deux pages supplémentaires** : la page **cluster** `/e/:endpointId` (17 blocs) et la page **nœud** `/e/:endpointId/n/:nodeId` (grille unifiée — KPIs + table VMs + tous les graphiques du Monitor nœud, **KPIs et table aussi déplaçables/retraitables**). Implémenté en **`hypervision_v4`** (v0.4.0) ; v1/v2/v3 intactes (rollback A/B `?v=hypervision_v3`). Vue d'ensemble inchangée.
+
+### Nouveaux scopes user-config (shared)
+- `UserConfigPage` += `endpointView` (dashboard cluster, clé `endpointId`) + `nodePage` (page nœud, clé `endpointId/nomDuNœud` — **catalogue distinct de `nodeView`** → scope séparé pour ne pas polluer les bibliothèques).
+- `parseUserConfig` / `getScopePage` / `setScopePage` / `clearScopePage` gèrent les deux nouvelles clés. **Pas de bump `USER_CONFIG_SCHEMA_VERSION`** (rétro-compatible). +2 tests (27 au total dans `user-config.test.ts`).
+
+### Page cluster — 17 widgets (scope `endpointView`)
+- `pages/endpoint.tsx` convertie en `WidgetGridLayout` ; catalogue 17 widgets = les 17 blocs v1/v3 dans l'ordre de `DEFAULT_LAYOUT` ; layout par défaut = `DEFAULT_LAYOUT.map(i → widgetId)`.
+- **Extraction des 10 corps** (`*Body` exportés, version carte refactorisée pour wrapper le corps — zéro duplication) : `MetricsPanelBody` (autonome : propre état de timeframe + fetch), `HealthGaugeBody`, `PraPanelBody`, `CapacityChartBody`, `StorageCardBody`, `NetworkCardBody`, `AlertsListBody`, `TopConsumersBody`, `NodesTableBody`, `OvercommitCardBody`. Badges/compteurs d'en-tête → slot `extra`.
+- Données inchangées : snapshot WS (5 s) + `loadHeavy`/`loadRisk` (5 min).
+
+### Page nœud — grille unifiée (scope `nodePage`)
+- `pages/node.tsx` : 4 KPIs + table VMs + 13 graphiques + widgets `netif-*` dynamiques (1 par interface hôte), **tous déplaçables/retraitables**.
+- **Réemploi cross-plugin (vm-view_v4)** : 28 exports importés statiquement de `node-monitor.tsx` (hooks, corps, exports CSV, `TIMEFRAMES`, `ALL_COLS`) + `CpuCoresBody` + `FwDecodeBlock`. **Pas de `dependencies` dans le manifest** (import statique bundlé — le loader évalue les dépendances à l'initialisation, ordre sensible). **Piège versionnement** : un fix de ces corps → vm-view_v5 + hypervision_v5.
+- `components/node-widgets.tsx` : `StatBody` (KPI), `VmTableBody` (table), `nodeDefaultLayout`.
+- **Titres KPIs différenciés** : nouvelles clés i18n `node.kpi.{cpuLive,ramLive,diskLive,loadLive}` (fr « … (instantané) » / en « … (live) ») — évite la collision « CPU » KPI vs « CPU » graphe.
+- Layout par défaut calculé seulement quand `ready` (premier chargement `node-net` — ids dynamiques `netif-*`).
+
+### Vérifications effectuées
+- `pnpm typecheck` (shared+server+web) + `pnpm test` (shared 303, server 215) + `vite build` : OK.
+- Playwright : page cluster 17 widgets (bons titres) + toolbar (Bibliothèque + Réinitialiser) ; retrait→bibliothèque→réinsertion→reset **persistés** ; **persistance après restart serveur** ; A/B v3 (page cluster sans toolbar/boutons retirer, page nœud = ancien design statique sans grille). Page nœud : 21 widgets (4 KPIs + table VMs + 13 graphiques + 3 `netif-*`), KPIs/table avec données réelles, retrait persisté (scope `nodePage`).
+
+### Piège majeur rencontré (corrigé — ne pas réintroduire)
+| Piège | Cause / fix |
+|---|---|
+| Retrait non persisté (PUT bon corps → réponse `pages: {}` vide → grille repasse aux défauts) | Le serveur charge `@prox4u/shared` **depuis le dist** au démarrage (pas de hot-reload). L'ancien `parseUserConfig` (sans `endpointView`/`nodePage`) **jetait silencieusement** la page au PUT. Fix : **rebuild shared** (`pnpm --filter @prox4u/shared build`) **+ redémarrer le serveur en cours**. Le web consomme aussi le dist shared → rebuild obligatoire avant le typecheck web. (Sessions auth en mémoire → le restart déconnecte, re-login.) |
+
+### Docs
+- `skills/hypervision/SKILL.md` §11 (nouveau) + description ; `skills/general/SKILL.md` §12 (scopes + pages + piège rebuild shared) ; `skills/vm-inventory/SKILL.md` §11 (note réemploi cross-plugin).
 
 ## ⏳ À faire
 

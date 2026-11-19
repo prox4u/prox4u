@@ -49,7 +49,7 @@ import { WidgetToolbar } from '../../../core/widgets/widget-toolbar';
 import { ExportCsvButton } from '../../../core/widgets/export-csv-button';
 import { widgetIdFrom, layoutsEqual, type CoreWidgetDef } from '../../../core/widgets/types';
 
-const TIMEFRAMES: MetricsTimeframe[] = ['hour', 'day', 'week', 'month'];
+export const TIMEFRAMES: MetricsTimeframe[] = ['hour', 'day', 'week', 'month'];
 /** Auto-refresh pendant que l'onglet est ouvert (données pushées toutes les 5 s côté serveur). */
 const REFRESH_MS = 60_000;
 /** Hauteur d'un graphe I/O disques dans la carte (2 graphiques liés par widget). */
@@ -87,7 +87,7 @@ interface Props {
 
 /** I/O disques du nœud (Telegraf) — fetch hoisté au niveau monitor (le catalogue
  *  a besoin des données pour le slot « export CSV » du widget `diskio`). */
-function useNodeDiskio(node: string, timeframe: MetricsTimeframe) {
+export function useNodeDiskio(node: string, timeframe: MetricsTimeframe) {
   const [data, setData] = useState<NodeDiskioResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
@@ -119,7 +119,7 @@ function useNodeDiskio(node: string, timeframe: MetricsTimeframe) {
 /** Réseau par interface du nœud (Telegraf + PVE) — fetch hoisté au niveau monitor
  *  (le catalogue a besoin de la LISTE DES INTERFACES pour les widgets dynamiques
  *  `netif-<iface>`). `done` = premier chargement terminé (la grille se monte alors). */
-function useNodeNet(node: string, timeframe: MetricsTimeframe) {
+export function useNodeNet(node: string, timeframe: MetricsTimeframe) {
   const [data, setData] = useState<NodeNetResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [done, setDone] = useState(false);
@@ -153,7 +153,7 @@ function useNodeNet(node: string, timeframe: MetricsTimeframe) {
 }
 
 /** Températures par chip (Telegraf sensors) — fetch hoisté (catalogue v4). */
-function useNodeTemps(node: string, timeframe: MetricsTimeframe) {
+export function useNodeTemps(node: string, timeframe: MetricsTimeframe) {
   const [data, setData] = useState<NodeTempsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
@@ -183,7 +183,7 @@ function useNodeTemps(node: string, timeframe: MetricsTimeframe) {
 }
 
 /** Températures disques SMART (Telegraf smart_device) — fetch hoisté (catalogue v4). */
-function useSmartTemps(node: string, timeframe: MetricsTimeframe) {
+export function useSmartTemps(node: string, timeframe: MetricsTimeframe) {
   const [data, setData] = useState<SmartTempsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
@@ -213,7 +213,7 @@ function useSmartTemps(node: string, timeframe: MetricsTimeframe) {
 }
 
 /** ZFS ARC (taille + max + hit rate) — fetch hoisté (catalogue v4). */
-function useZfsArc(node: string, timeframe: MetricsTimeframe) {
+export function useZfsArc(node: string, timeframe: MetricsTimeframe) {
   const [data, setData] = useState<ZfsArcResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
@@ -244,7 +244,7 @@ function useZfsArc(node: string, timeframe: MetricsTimeframe) {
 
 /** Charge 1/5/15 + swap (Telegraf system + mem) — un fetch pour les deux widgets
  *  (widgets « Charge moyenne » et « Swap », catalogue v4). */
-function useNodeHostHistory(node: string, timeframe: MetricsTimeframe) {
+export function useNodeHostHistory(node: string, timeframe: MetricsTimeframe) {
   const [data, setData] = useState<NodeHostHistoryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
@@ -275,7 +275,7 @@ function useNodeHostHistory(node: string, timeframe: MetricsTimeframe) {
 
 /** Métriques locales Telegraf LIVE (SMART, capteurs, ZFS, unités) — sans timeframe
  *  (état courant, 1 min de cache serveur) : le widget « Santé disques (SMART) ». */
-function useNodeSensorsLive() {
+export function useNodeSensorsLive() {
   const [data, setData] = useState<NodeSensorsResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -303,7 +303,7 @@ function useNodeSensorsLive() {
 }
 
 /** Colonnes CSV par point — l'export général couvre les 5 champs, chaque graphe les siens. */
-const ALL_COLS: { label: string; get: (p: MetricsPoint) => number | null }[] = [
+export const ALL_COLS: { label: string; get: (p: MetricsPoint) => number | null }[] = [
   { label: 'cpu_pct', get: (p) => p.cpuPct },
   { label: 'ram_pct', get: (p) => p.ramPct },
   { label: 'disk_rootfs_pct', get: (p) => p.storagePct },
@@ -312,7 +312,7 @@ const ALL_COLS: { label: string; get: (p: MetricsPoint) => number | null }[] = [
 ];
 
 /** Export CSV d'un sous-ensemble des colonnes générales (on exporte ce qu'on voit). */
-function exportNodeCsv(
+export function exportNodeCsv(
   data: MetricsResponse | null,
   node: string,
   tf: MetricsTimeframe,
@@ -332,7 +332,7 @@ function exportNodeCsv(
 }
 
 /** Export CSV du CPU par cœur — une ligne par cœur. */
-function exportCpuCoresCsv(row: NodeSystemRow): void {
+export function exportCpuCoresCsv(row: NodeSystemRow): void {
   const cores = row.cores ?? [];
   if (cores.length === 0) return;
   const header = ['core', 'usage_pct', 'user_pct', 'system_pct', 'iowait_pct'];
@@ -341,7 +341,7 @@ function exportCpuCoresCsv(row: NodeSystemRow): void {
 }
 
 /** Export CSV de l'I/O disques du nœud (tous devices). */
-function exportNodeDiskioCsv(data: NodeDiskioResponse | null, node: string, timeframe: MetricsTimeframe): void {
+export function exportNodeDiskioCsv(data: NodeDiskioResponse | null, node: string, timeframe: MetricsTimeframe): void {
   if (!data || data.devices.length === 0) return;
   const header = ['timestamp', 'device', 'read_bps', 'write_bps', 'iops', 'busy_pct', 'await_ms'];
   const rows = [...data.devices]
@@ -359,7 +359,7 @@ function exportNodeDiskioCsv(data: NodeDiskioResponse | null, node: string, time
 }
 
 /** Export CSV du trafic d'UNE interface hôte sur le timeframe affiché. */
-function exportNodeNetIfaceCsv(iface: NodeNetIface, rows: NodeNetRow[], node: string, timeframe: MetricsTimeframe): void {
+export function exportNodeNetIfaceCsv(iface: NodeNetIface, rows: NodeNetRow[], node: string, timeframe: MetricsTimeframe): void {
   const header = ['timestamp', 'in_bps', 'out_bps'];
   const body = [...rows]
     .sort((a, b) => a.t - b.t)
@@ -368,7 +368,7 @@ function exportNodeNetIfaceCsv(iface: NodeNetIface, rows: NodeNetRow[], node: st
 }
 
 /** Export CSV des températures par chip (une ligne par (chip, bucket)). */
-function exportNodeTempsCsv(data: NodeTempsResponse | null, node: string, tf: MetricsTimeframe): void {
+export function exportNodeTempsCsv(data: NodeTempsResponse | null, node: string, tf: MetricsTimeframe): void {
   if (!data || data.series.length === 0) return;
   const rows: string[][] = [];
   for (const s of data.series) for (const p of s.points) rows.push([new Date(p.t * 1000).toISOString(), s.chip, String(p.temp)]);
@@ -377,7 +377,7 @@ function exportNodeTempsCsv(data: NodeTempsResponse | null, node: string, tf: Me
 }
 
 /** Export CSV des températures disques SMART (une ligne par (device, bucket)). */
-function exportSmartTempsCsv(data: SmartTempsResponse | null, node: string, tf: MetricsTimeframe): void {
+export function exportSmartTempsCsv(data: SmartTempsResponse | null, node: string, tf: MetricsTimeframe): void {
   if (!data || data.series.length === 0) return;
   const rows: string[][] = [];
   for (const s of data.series)
@@ -387,7 +387,7 @@ function exportSmartTempsCsv(data: SmartTempsResponse | null, node: string, tf: 
 }
 
 /** Export CSV ZFS ARC (taille en octets + hit rate % — null = série masquée). */
-function exportZfsArcCsv(data: ZfsArcResponse | null, node: string, tf: MetricsTimeframe): void {
+export function exportZfsArcCsv(data: ZfsArcResponse | null, node: string, tf: MetricsTimeframe): void {
   if (!data || data.points.length === 0) return;
   const rows = data.points.map((p) => [
     new Date(p.t * 1000).toISOString(),
@@ -399,7 +399,7 @@ function exportZfsArcCsv(data: ZfsArcResponse | null, node: string, tf: MetricsT
 }
 
 /** Export CSV charge + swap — `scope` = colonnes (load et/ou swap). */
-function exportHostHistoryCsv(data: NodeHostHistoryResponse | null, node: string, tf: MetricsTimeframe, scope: 'load' | 'swap'): void {
+export function exportHostHistoryCsv(data: NodeHostHistoryResponse | null, node: string, tf: MetricsTimeframe, scope: 'load' | 'swap'): void {
   if (!data || data.points.length === 0) return;
   const cols: string[] = scope === 'load' ? ['load1', 'load5', 'load15', 'n_cpus'] : ['swap_used_bytes', 'swap_total_bytes'];
   const get = (p: NodeHostHistoryResponse['points'][number], c: string): string => {
@@ -415,7 +415,7 @@ function exportHostHistoryCsv(data: NodeHostHistoryResponse | null, node: string
 }
 
 /** Export CSV santé disques SMART (état courant — une ligne par disque). */
-function exportSmartHealthCsv(devices: SmartDevice[], node: string): void {
+export function exportSmartHealthCsv(devices: SmartDevice[], node: string): void {
   if (devices.length === 0) return;
   const rows = devices.map((d) => [
     d.node,
@@ -433,7 +433,7 @@ function exportSmartHealthCsv(devices: SmartDevice[], node: string): void {
 }
 
 /** Corps de carte graphe générique (CPU/RAM/rootfs/réseau PVE). */
-function StaticChartBody({ option, loading, hasData }: { option: EChartsOption | null; loading: boolean; hasData: boolean }) {
+export function StaticChartBody({ option, loading, hasData }: { option: EChartsOption | null; loading: boolean; hasData: boolean }) {
   const ref = useEChart(option);
   return (
     <div className="flex h-full flex-col">
@@ -575,7 +575,7 @@ function fmtTempTooltip(tf: MetricsTimeframe) {
  * Corps « Températures CPU & chips » (v4) — une courbe par chip (la plus haute
  * température du chip par bucket, lm-sensors). État vide : aucun capteur.
  */
-function HostTempsBody({ data, loading, timeframe }: { data: NodeTempsResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
+export function HostTempsBody({ data, loading, timeframe }: { data: NodeTempsResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
   const { t } = useTranslation();
   const theme = useTheme((s) => s.theme);
   const ct = chartTheme(theme);
@@ -627,7 +627,7 @@ function HostTempsBody({ data, loading, timeframe }: { data: NodeTempsResponse |
  * capteur (les disques à 0 °C sont exclus côté requête) + ligne de référence
  * au seuil critique 80 °C (convention page Capteurs nœuds).
  */
-function SmartTempsBody({ data, loading, timeframe }: { data: SmartTempsResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
+export function SmartTempsBody({ data, loading, timeframe }: { data: SmartTempsResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
   const { t } = useTranslation();
   const theme = useTheme((s) => s.theme);
   const ct = chartTheme(theme);
@@ -679,7 +679,7 @@ function SmartTempsBody({ data, loading, timeframe }: { data: SmartTempsResponse
  * de référence + hit rate % (axe droit, MASQUÉ si tous les compteurs sont à 0 —
  * pattern ProxMenux : pas de série inventée sur un node sans pool ZFS actif).
  */
-function ZfsArcBody({ data, loading, timeframe }: { data: ZfsArcResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
+export function ZfsArcBody({ data, loading, timeframe }: { data: ZfsArcResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
   const { t } = useTranslation();
   const theme = useTheme((s) => s.theme);
   const ct = chartTheme(theme);
@@ -751,7 +751,7 @@ function ZfsArcBody({ data, loading, timeframe }: { data: ZfsArcResponse | null;
  * Le nombre de cœurs est rappelé sous le titre : la charge se lit par rapport
  * à la capacité (load = nCœurs ≈ saturation).
  */
-function LoadBody({ data, loading, timeframe }: { data: NodeHostHistoryResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
+export function LoadBody({ data, loading, timeframe }: { data: NodeHostHistoryResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
   const { t } = useTranslation();
   const theme = useTheme((s) => s.theme);
   const ct = chartTheme(theme);
@@ -801,7 +801,7 @@ function LoadBody({ data, loading, timeframe }: { data: NodeHostHistoryResponse 
  * Deux états vides distincts : aucune mesure (agent inactif) vs swap TOTAL = 0
  * (pas de swap configuré — normal sur beaucoup de nœuds PVE).
  */
-function SwapBody({ data, loading, timeframe }: { data: NodeHostHistoryResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
+export function SwapBody({ data, loading, timeframe }: { data: NodeHostHistoryResponse | null; loading: boolean; timeframe: MetricsTimeframe }) {
   const { t } = useTranslation();
   const theme = useTheme((s) => s.theme);
   const ct = chartTheme(theme);
@@ -866,7 +866,7 @@ function SwapBody({ data, loading, timeframe }: { data: NodeHostHistoryResponse 
  * timeframe) : badge santé tri-state, température (0 °C = pas de capteur → « — »),
  * usure NVMe / secteurs défectueux (rouge si > 0), heures de fonctionnement.
  */
-function SmartHealthBody({ devices, loading, node }: { devices: SmartDevice[]; loading: boolean; node: string }) {
+export function SmartHealthBody({ devices, loading, node }: { devices: SmartDevice[]; loading: boolean; node: string }) {
   const { t } = useTranslation();
   const rows = useMemo(
     () => devices.filter((d) => d.node === node).sort((a, b) => a.device.localeCompare(b.device, undefined, { numeric: true })),
@@ -914,7 +914,7 @@ function SmartHealthBody({ devices, loading, node }: { devices: SmartDevice[]; l
 }
 
 /** Corps « Système (nœud) » : état courant — load 1/5/15, iowait, swap, uptime. */
-function NodeSystemBody({ row, loading }: { row: NodeSystemRow | undefined; loading: boolean }) {
+export function NodeSystemBody({ row, loading }: { row: NodeSystemRow | undefined; loading: boolean }) {
   const { t } = useTranslation();
   return (
     <div className="flex h-full flex-col">
@@ -941,7 +941,7 @@ interface DevicePoint {
 }
 const PALETTE = ['diskRead', 'diskWrite', 'cpu', 'ram', 'netIn', 'disk'] as const;
 
-function NodeDiskioBody({
+export function NodeDiskioBody({
   data,
   loading,
   timeframe,
@@ -1148,7 +1148,7 @@ function NodeDiskioBody({
  * Corps d'UNE interface du nœud : type/état (ligne discrète, conservé du titre v2)
  * + trafic RX/TX en octets/s. État vide : aucune mesure sur la fenêtre.
  */
-function NodeNetIfaceBody({
+export function NodeNetIfaceBody({
   iface,
   rows,
   hasAnyPoints,

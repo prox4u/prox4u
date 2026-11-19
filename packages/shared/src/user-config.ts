@@ -23,7 +23,11 @@
  *
  * Scopes : `overview` = un seul layout ; `vmView` / `nodeView` = un layout par
  * scope (VM = « endpoint/vmid » — le vmid est stable au renommage ; nœud =
- * « endpoint/nomDuNœud » — le hostname est le seul identifiant nœud PVE).
+ * « endpoint/nomDuNœud » — le hostname est le seul identifiant nœud PVE) ;
+ * `endpointView` / `nodePage` (hypervision v4) = un layout par scope
+ * « endpointId » (dashboard cluster) / « endpointId/nomDuNœud » (page nœud —
+ * grille unifiée KPIs + table VMs + graphiques, catalogue distinct de
+ * `nodeView` → scope séparé pour ne pas polluer les bibliothèques).
  */
 
 /** Version du schéma de config — à incrémenter à chaque changement incompatible. */
@@ -32,7 +36,7 @@ export const USER_CONFIG_SCHEMA_VERSION = 1;
 /** Nombre de colonnes de la grille (breakpoint lg) — borne du clamp géométrie. */
 export const USER_CONFIG_GRID_COLS = 12;
 
-export type UserConfigPage = 'overview' | 'vmView' | 'nodeView';
+export type UserConfigPage = 'overview' | 'vmView' | 'nodeView' | 'endpointView' | 'nodePage';
 
 /** Position / taille d'un widget dans la grille (coordonnées react-grid-layout). */
 export interface WidgetItem {
@@ -60,6 +64,10 @@ export interface UserConfig {
     vmView?: Record<string, PageConfig>;
     /** Monitor nœud — un layout par scope « endpoint/nomDuNœud ». */
     nodeView?: Record<string, PageConfig>;
+    /** Dashboard cluster (hypervision v4) — un layout par scope « endpointId ». */
+    endpointView?: Record<string, PageConfig>;
+    /** Page nœud (hypervision v4) — un layout par scope « endpointId/nomDuNœud ». */
+    nodePage?: Record<string, PageConfig>;
   };
   /** Posé par le serveur à chaque sauvegarde (ISO 8601). */
   lastUpdated: string;
@@ -224,7 +232,14 @@ export function getScopePage(
 ): PageConfig | null {
   if (!config) return null;
   if (page === 'overview') return config.pages.overview ?? null;
-  const map = page === 'vmView' ? config.pages.vmView : config.pages.nodeView;
+  const map =
+    page === 'vmView'
+      ? config.pages.vmView
+      : page === 'nodeView'
+        ? config.pages.nodeView
+        : page === 'endpointView'
+          ? config.pages.endpointView
+          : config.pages.nodePage;
   if (!map || !scope) return null;
   return map[scope] ?? null;
 }
@@ -243,7 +258,7 @@ export function setScopePage(
     base.pages.overview = pageCfg;
   } else {
     if (!scope) return base;
-    const key = page; // 'vmView' | 'nodeView'
+    const key = page; // 'vmView' | 'nodeView' | 'endpointView' | 'nodePage'
     const map = { ...(base.pages[key] ?? {}) };
     map[scope] = pageCfg;
     base.pages[key] = map;
@@ -262,7 +277,7 @@ export function clearScopePage(
   if (page === 'overview') {
     delete base.pages.overview;
   } else if (scope) {
-    const key = page; // 'vmView' | 'nodeView'
+    const key = page; // 'vmView' | 'nodeView' | 'endpointView' | 'nodePage'
     const map = { ...(base.pages[key] ?? {}) };
     delete map[scope];
     if (Object.keys(map).length > 0) base.pages[key] = map;
@@ -317,7 +332,7 @@ export function parseUserConfig(raw: unknown): UserConfig | null {
     if (!pc) return null;
     out.pages.overview = pc;
   }
-  for (const key of ['vmView', 'nodeView'] as const) {
+  for (const key of ['vmView', 'nodeView', 'endpointView', 'nodePage'] as const) {
     const v = p[key];
     if (v === undefined) continue;
     if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;

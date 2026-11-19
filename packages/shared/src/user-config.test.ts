@@ -185,6 +185,21 @@ describe('scopes (vmView / nodeView)', () => {
     expect(getScopePage(cfg, 'overview')).toEqual({ layout: [item('res-cpu')], library: [] });
     expect(getScopePage(clearScopePage(cfg, 'overview', undefined), 'overview')).toBeNull();
   });
+
+  it('endpointView / nodePage (hypervision v4) : round-trip + isolation des scopes', () => {
+    let cfg: UserConfig = setScopePage(null, 'endpointView', 'ep1', { layout: [item('res-cpu')], library: ['pra'] });
+    cfg = setScopePage(cfg, 'nodePage', 'ep1/pve1', { layout: [item('kpi-cpu')], library: ['vms'] });
+    expect(getScopePage(cfg, 'endpointView', 'ep1')).toEqual({ layout: [item('res-cpu')], library: ['pra'] });
+    expect(getScopePage(cfg, 'nodePage', 'ep1/pve1')).toEqual({ layout: [item('kpi-cpu')], library: ['vms'] });
+    // Isolation : nodePage ne lit pas nodeView (catalogues distincts) et inversement.
+    cfg = setScopePage(cfg, 'nodeView', 'ep1/pve1', { layout: [item('system')], library: [] });
+    expect(getScopePage(cfg, 'nodeView', 'ep1/pve1')).toEqual({ layout: [item('system')], library: [] });
+    expect(getScopePage(cfg, 'nodePage', 'ep1/pve1')).toEqual({ layout: [item('kpi-cpu')], library: ['vms'] });
+    // clearScopePage supprime le scope puis la map vidée.
+    cfg = clearScopePage(cfg, 'endpointView', 'ep1');
+    expect(cfg.pages.endpointView).toBeUndefined();
+    expect(getScopePage(cfg, 'nodePage', 'ep1/pve1')).toEqual({ layout: [item('kpi-cpu')], library: ['vms'] });
+  });
 });
 
 describe('parseUserConfig (validation serveur)', () => {
@@ -194,8 +209,21 @@ describe('parseUserConfig (validation serveur)', () => {
       overview: { layout: [item('res-cpu')], library: ['alerts'] },
       vmView: { 'ep1/102': { layout: [item('cpu')], library: [] } },
       nodeView: { 'ep1/pve1': { layout: [], library: ['net'] } },
+      endpointView: { ep1: { layout: [item('res-cpu')], library: [] } },
+      nodePage: { 'ep1/pve1': { layout: [item('kpi-cpu')], library: ['vms'] } },
     },
   };
+
+  it('parse les scopes endpointView / nodePage (hypervision v4)', () => {
+    const parsed = parseUserConfig(JSON.parse(JSON.stringify(valid)))!;
+    expect(parsed.pages.endpointView?.['ep1']).toEqual({ layout: [item('res-cpu')], library: [] });
+    expect(parsed.pages.nodePage?.['ep1/pve1']).toEqual({ layout: [item('kpi-cpu')], library: ['vms'] });
+    // Une forme invalide dans un nouveau scope → rejet (400).
+    expect(
+      parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { endpointView: 'nope' } }),
+    ).toBeNull();
+    expect(parseUserConfig({ schemaVersion: USER_CONFIG_SCHEMA_VERSION, pages: { nodePage: { 'a/b': 'nope' } } })).toBeNull();
+  });
 
   it('accepte une config valide et clame la géométrie', () => {
     const raw = JSON.parse(JSON.stringify(valid));
