@@ -1,6 +1,6 @@
 ---
 name: vm-inventory
-description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Quatre versions : v1 (id vm-view), v2 (vm-view_v2, + bouton « Console web » vers l'UI PVE, + détail nœud), v3 (vm-view_v3, + monitors VM/nœud en grilles personnalisables par user — drag/resize/bibliothèque, persistance /api/user-config par VM et par nœud) et v4 (vm-view_v4, + 6 widgets Monitor nœud : températures chips/disques SMART, santé SMART, ZFS ARC, charge moyenne, swap + section « Capacité du cluster » du détail VM (onglet Résumé) — 3 graphiques capacity planning par élément au niveau cluster, réemploi cross-plugin de CapacityChartBody hypervision_v4). Use when working on the vm-view plugin family (packages/web/src/plugins/vm-view/, vm-view_v2/, vm-view_v3/ ou vm-view_v4/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O / temps / ZFS ARC / load / swap sections), or the /api/vm-config endpoint.
+description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vms : arborescence vCenter (Datacenter → cluster → nœud), tableau multi-endpoints filtrable/triable (VMs + LXC, live 5 s), panneau détail VM à onglets (Résumé / Monitor / Configuration / Réseau / Snapshots) via GET /api/vm-config, ET détail NŒUD plein écran (Résumé / Monitor / VMs — le Monitor nœud croise l'historique PVE /api/metrics?node= et les métriques agent hôte Telegraf : système, CPU par cœur, I/O disques par device, réseau par interface — et le Monitor VM ajoute I/O par disque de la VM + réseau par carte). Lecture seule (pas d'actions power). Quatre versions : v1 (id vm-view), v2 (vm-view_v2, + bouton « Console web » vers l'UI PVE, + détail nœud), v3 (vm-view_v3, + monitors VM/nœud en grilles personnalisables par user — drag/resize/bibliothèque, persistance /api/user-config par VM et par nœud) et v4 (vm-view_v4, + 6 widgets Monitor nœud : températures chips/disques SMART, santé SMART, ZFS ARC, charge moyenne, swap + **onglet Résumé du détail VM en grille personnalisable** (10 widgets : 7 panneaux vSphere + 3 capacity planning par élément au niveau cluster, drag/resize/bibliothèque, persistance /api/user-config par VM, réemploi cross-plugin de CapacityChartBody hypervision_v4)). Use when working on the vm-view plugin family (packages/web/src/plugins/vm-view/, vm-view_v2/, vm-view_v3/ ou vm-view_v4/), the /vms page, its components (vm-tree, vm-table, vm-detail, vm-monitor, node-detail, node-monitor), the node Monitor tab (system / per-core CPU / per-device disk I/O / temps / ZFS ARC / load / swap sections), or the /api/vm-config endpoint.
 ---
 
 # Inventaire VM — Base de connaissance
@@ -173,6 +173,35 @@ CSV dans le slot `extra`) — port des graphiques manquants du dashboard ProxMen
   d'import (l'existant était hypervision_v4 → vm-view_v4), **pas de cycle de modules** (modules
   distincts), bundlé au build. i18n : `vm.sum.capacity{,.hint}`.
 
-## 12. Hors périmètre
+## 12. `vm-view_v4` — Onglet Résumé du détail VM en grille personnalisable
+
+Toute la **vue Résumé** du détail VM (`components/vm-detail.tsx`) est devenue une grille
+`WidgetGridLayout` (socle `core/widgets` — skill `general` §12) : **10 widgets**
+drag/resize/retirer (→ bibliothèque)/réinsérer, **Réinitialiser** avec confirmation,
+persistance par compte via `/api/user-config` — **scope `vmSummary « <endpointId>/<vmid> »`**
+(le vmid est stable au renommage — le nom n'entre jamais dans la clé).
+
+- **Catalogue** (ids statiques — pas de widgets dynamiques) :
+  - 7 panneaux vSphere (corps = `PanelBody`, wrapper `<dl>` pour la validité des `<dt>`/`<dd>` de
+    `Row` — le frame de widget fournit la carte + le titre + le handle de drag + le bouton retirer) :
+    `vm-os` (OS invité) / `vm-details` (Détails VM) / `vm-hardware` (Matériel) / `vm-interfaces`
+    (Interfaces réseau) / `vm-usage` (Utilisation — barres, pas de `Row`) / `vm-related`
+    (Objets liés) / `vm-info` (Détails VM).
+  - 3 graphiques capacity planning par élément : `capacity-cpu` / `capacity-ram` / `capacity-disk`
+    — `CapacityChartBody` (réemploi cross-plugin `hypervision_v4`, §11) avec `metric` ; capacité
+    **au niveau cluster** de l'endpoint (hook `useClusterCapacity`, cache module 5 min).
+- **Layout par défaut** « design validé » : 3 colonnes de panneaux (w4 h3) + rangée capacité
+  (w4 h4) — déclaré explicitement (`defaultLayout`), **pas** `defaultStackLayout`.
+- **Piège `mergePageConfig`** : pour un **nouvel** user (stored=null) → `defaultLayout` +
+  bibliothèque **vide** → tout widget du catalogue **doit** être dans le `defaultLayout`
+  (sinon invisible pour les nouveaux users). Ici les 10 widgets sont dans le default.
+- **i18n** : aucun libellé nouveau — les titres réutilisent `vm.sum.*` + `capacity.titleCpu/Ram/Disk`
+  ; la toolbar/bibliothèque réutilisent `widgets.*` (skill `general` §12).
+- **Validation livrée** : Playwright — 10 widgets rendus, bibliothèque Affichés 10/Bibliothèque 0,
+  retirer (→ bibliothèque, 9 affichés) + réinsérer (10), **drag** (vm-os x=0→4 sauvegardé),
+  **reset** (10 widgets, entrée config supprimée), **persistance** (`vmSummary["proxmox/103"]` dans
+  `/api/user-config`) + **persistance à la reconnexion** (rechargement → layout conservé), 0 erreur console.
+
+## 13. Hors périmètre
 - Actions power (start/stop/reboot) — reportées (« plus tard »), token PVE écriture requis.
 - Création/migration/suppression de VM.

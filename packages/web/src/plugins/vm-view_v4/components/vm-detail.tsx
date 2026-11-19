@@ -1,9 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Container, MonitorSmartphone } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { VmDetailResponse } from '@prox4u/shared';
-import { matchAgentNetsByMac } from '@prox4u/shared';
+import type { VmDetailResponse, WidgetItem } from '@prox4u/shared';
+import { addWidget, matchAgentNetsByMac, mergePageConfig, removeWidget } from '@prox4u/shared';
 import { fetchCapacity, fetchVmDetail } from '../../../core/api/apiClient';
 import type { CapacityResponse } from '../../../core/api/types';
 import { CapacityChartBody } from '../../hypervision_v4/components/capacity-chart';
@@ -11,6 +11,12 @@ import { VmMonitor } from './vm-monitor';
 import { Badge } from '../../../components/ui/badge';
 import { Skeleton } from '../../../components/ui/skeleton';
 import { cn, formatBytes, formatUptime } from '../../../lib/utils';
+import { useUserConfig } from '../../../store/user-config';
+import type { CoreWidgetDef } from '../../../core/widgets/types';
+import { layoutsEqual } from '../../../core/widgets/types';
+import { WidgetGridLayout } from '../../../core/widgets/widget-grid';
+import { WidgetLibraryPanel } from '../../../core/widgets/widget-library';
+import { WidgetToolbar } from '../../../core/widgets/widget-toolbar';
 
 interface Props {
   endpointId: string;
@@ -84,14 +90,14 @@ function UsageBar({ used, max }: { used: number; max: number | null }) {
   );
 }
 
-/** Panneau de la vue Résumé (style vSphere : titre + lignes libellé/valeur). */
-function Panel({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="rounded-lg border bg-card">
-      <h3 className="border-b px-3 py-2 text-xs font-semibold">{title}</h3>
-      <div className="space-y-1.5 px-3 py-2.5">{children}</div>
-    </section>
-  );
+/**
+ * Corps d'un panneau Résumé dans la grille personnalisable — le frame de widget
+ * (WidgetFrame) fournit la carte + le titre + le handle de drag + le bouton
+ * « retirer ». `<dl>` pour la validité des `<dt>`/`<dd>` de `Row` (les panneaux
+ * sans `Row` — Utilisation — restent valides : un `<dl>` peut contenir des `<div>`).
+ */
+function PanelBody({ children }: { children: ReactNode }) {
+  return <dl className="space-y-1.5 p-3">{children}</dl>;
 }
 
 /** Ligne libellé (gauche, atténué) / valeur (droite). */
@@ -117,6 +123,15 @@ export function VmDetail({ endpointId, endpointName, vmid, endpointUrl, lastUpda
   const [tab, setTab] = useState<Tab>('summary');
   // Capacity planning du cluster (endpoint) — section « Capacité du cluster » du Résumé.
   const capacity = useClusterCapacity(endpointId);
+
+  // Personnalisation de la grille Résumé par utilisateur : scope = « endpoint/vmid »
+  // (vmid stable au renommage — le nom n'entre jamais dans la clé). Persistance
+  // /api/user-config (serveur = source de vérité, suit le compte → survit à la reconnexion).
+  const scope = `${endpointId}/${vmid}`;
+  const stored = useUserConfig((s) => s.config?.pages.vmSummary?.[scope] ?? null);
+  const updatePage = useUserConfig((s) => s.updatePage);
+  const clearPage = useUserConfig((s) => s.clearPage);
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
   // Console web : lien vers la console de la VM dans l'UI PVE (nouvel onglet).
   // Absent en mode démo (endpoint sans URL) → bouton désactivé.
@@ -162,6 +177,254 @@ export function VmDetail({ endpointId, endpointName, vmid, endpointUrl, lastUpda
       ? [...new Set([...perIfaceIps, ...cfgIps])]
       : (vm?.ipAddresses ?? []);
   const bridges = (config?.nets ?? []).map((n) => n.bridge);
+
+  // Catalogue des widgets du Résumé — 7 panneaux vSphere + 3 graphiques capacité
+  // (par élément). Les corps capturent les valeurs dérivées (vm, config, …) — le
+  // catalogue est reconstruit quand elles changent (data chargée). Les ids sont
+  // STATIQUES (pas de widgets dynamiques) → la clé du catalogue est stable.
+  const catalog = useMemo<CoreWidgetDef[]>(() => {
+    const defs: CoreWidgetDef[] = [];
+    defs.push(
+      {
+        id: 'vm-os',
+        title: t('vm.sum.guestOs'),
+        default: { w: 4, h: 3 },
+        minW: 3,
+        minH: 2,
+        render: () => (
+          <PanelBody>
+            <Row label={t('vm.sum.os')}>{vm?.os ?? config?.os ?? '—'}</Row>
+            <Row label={t('vm.sum.type')}>{isLxc ? t('vm.type.lxc') : t('vm.type.qemu')}</Row>
+          </PanelBody>
+        ),
+      },
+      {
+        id: 'vm-details',
+        title: t('vm.sum.vmDetails'),
+        default: { w: 4, h: 3 },
+        minW: 3,
+        minH: 2,
+        render: () => (
+          <PanelBody>
+            <Row label={t('vm.sum.powerStatus')}>
+              <span className="inline-flex items-center gap-1.5">
+                <StatusDot status={vm?.status ?? 'unknown'} />
+                {vm ? t(`vm.status.${vm.status}`) : '—'}
+              </span>
+            </Row>
+            <Row label={t('vm.sum.managedBy')}>{endpointName}</Row>
+            <Row label={t('vm.sum.dnsName')}>{vm?.name ?? '—'}</Row>
+            <Row label={t('vm.sum.ipAddresses')}>{ips.length > 0 ? ips.join(', ') : '—'}</Row>
+            <Row label={t('vm.sum.encryption')}>{t('vm.sum.notEncrypted')}</Row>
+          </PanelBody>
+        ),
+      },
+      {
+        id: 'vm-hardware',
+        title: t('vm.sum.hardware'),
+        default: { w: 4, h: 3 },
+        minW: 3,
+        minH: 2,
+        render: () => (
+          <PanelBody>
+            <Row label={t('vm.sum.cpu')}>{t('vm.cfg.cores', { n: cores })}</Row>
+            <Row label={t('vm.sum.memory')}>{vm ? formatBytes(vm.maxmemBytes ?? vm.memBytes) : '—'}</Row>
+            <Row label={t('vm.sum.hardDisk')}>
+              {config?.diskStorage
+                ? `${config.diskStorage}${vm?.maxdiskBytes != null ? ` · ${formatBytes(vm.maxdiskBytes)}` : ''}`
+                : '—'}
+            </Row>
+            <Row label={t('vm.sum.netAdapter')}>
+              {bridges.length > 0 ? (
+                <>
+                  {bridges[0]}{' '}
+                  <span className="text-muted-foreground">
+                    {vm?.status === 'running' ? t('vm.sum.connected') : t('vm.sum.disconnected')}
+                  </span>
+                </>
+              ) : (
+                '—'
+              )}
+            </Row>
+            <Row label={t('vm.sum.compatibility')}>{isLxc ? 'LXC' : 'QEMU'}</Row>
+          </PanelBody>
+        ),
+      },
+      {
+        id: 'vm-interfaces',
+        title: t('vm.sum.interfaces'),
+        default: { w: 4, h: 3 },
+        minW: 3,
+        minH: 2,
+        render: () => (
+          <PanelBody>
+            {(config?.nets.length ?? 0) === 0 ? (
+              <Row label="—">{t('vm.net.none')}</Row>
+            ) : (
+              config!.nets.map((n) => {
+                const aips = agentIps.get(n.iface);
+                const ip =
+                  n.ip ?? (aips && aips.length > 0 ? aips.join(', ') : n.ipMode ? t(`common.ip.${n.ipMode}`) : null);
+                return (
+                  <Row key={n.iface} label={n.iface}>
+                    {n.bridge}
+                    {n.tag != null ? ` (VLAN ${n.tag})` : ''}
+                    {n.mac ? ` · ${n.mac}` : ''}
+                    {ip ? ` · ${ip}` : ''}
+                  </Row>
+                );
+              })
+            )}
+          </PanelBody>
+        ),
+      },
+      {
+        id: 'vm-usage',
+        title: t('vm.sum.usage'),
+        default: { w: 4, h: 3 },
+        minW: 3,
+        minH: 2,
+        render: () => (
+          <PanelBody>
+            <div className="text-[11px] text-muted-foreground">
+              {t('vm.sum.lastUpdated')} : {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : '—'}
+            </div>
+            <div className="space-y-1 pt-1">
+              <div className="flex items-baseline justify-between text-xs">
+                <span className="text-muted-foreground">{t('vm.sum.cpu')}</span>
+                <span className="font-medium tabular-nums">{vm ? `${vm.cpuPct.toFixed(1)} %` : '—'}</span>
+              </div>
+              <UsageBar used={vm?.cpuPct ?? 0} max={100} />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-baseline justify-between text-xs">
+                <span className="text-muted-foreground">{t('vm.sum.memory')}</span>
+                <span className="font-medium tabular-nums">
+                  {vm ? formatBytes(vm.memBytes) : '—'} / {vm?.maxmemBytes != null ? formatBytes(vm.maxmemBytes) : '—'}
+                </span>
+              </div>
+              <UsageBar used={vm?.memBytes ?? 0} max={vm?.maxmemBytes ?? null} />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-baseline justify-between text-xs">
+                <span className="text-muted-foreground">{t('vm.sum.storage')}</span>
+                <span className="font-medium tabular-nums">
+                  {vm?.diskBytes != null ? formatBytes(vm.diskBytes) : '—'} /{' '}
+                  {vm?.maxdiskBytes != null ? formatBytes(vm.maxdiskBytes) : '—'}
+                </span>
+              </div>
+              <UsageBar used={vm?.diskBytes ?? 0} max={vm?.maxdiskBytes ?? null} />
+            </div>
+          </PanelBody>
+        ),
+      },
+      {
+        id: 'vm-related',
+        title: t('vm.sum.related'),
+        default: { w: 4, h: 3 },
+        minW: 3,
+        minH: 2,
+        render: () => (
+          <PanelBody>
+            <Row label={t('vm.sum.cluster')}>
+              <Link to={`/e/${endpointId}`} className="text-primary hover:underline">
+                {endpointName}
+              </Link>
+            </Row>
+            <Row label={t('vm.sum.host')}>
+              <Link to={`/e/${endpointId}/n/${encodeURIComponent(vm?.node ?? '')}`} className="text-primary hover:underline">
+                {vm?.node ?? '—'}
+              </Link>
+            </Row>
+            <Row label={t('vm.sum.networks')}>{bridges.length > 0 ? bridges.join(', ') : '—'}</Row>
+            <Row label={t('vm.sum.storage')}>{config?.diskStorage ?? '—'}</Row>
+          </PanelBody>
+        ),
+      },
+      {
+        id: 'vm-info',
+        title: t('vm.sum.vmInfo'),
+        default: { w: 4, h: 3 },
+        minW: 3,
+        minH: 2,
+        render: () => (
+          <PanelBody>
+            <Row label={t('vm.sum.pool')}>{config?.pool ?? '—'}</Row>
+            <Row label={t('vm.sum.vmClass')}>{isLxc ? t('vm.type.lxc') : t('vm.type.qemu')}</Row>
+            <Row label={t('vm.sum.vmId')}>#{vmid}</Row>
+            <Row label={t('vm.sum.uptime')}>{vm ? formatUptime(vm.uptimeSec) : '—'}</Row>
+          </PanelBody>
+        ),
+      },
+      {
+        id: 'capacity-cpu',
+        title: t('capacity.titleCpu'),
+        default: { w: 4, h: 4 },
+        minW: 3,
+        minH: 3,
+        render: () => <CapacityChartBody capacity={capacity} metric="cpu" />,
+      },
+      {
+        id: 'capacity-ram',
+        title: t('capacity.titleRam'),
+        default: { w: 4, h: 4 },
+        minW: 3,
+        minH: 3,
+        render: () => <CapacityChartBody capacity={capacity} metric="ram" />,
+      },
+      {
+        id: 'capacity-disk',
+        title: t('capacity.titleDisk'),
+        default: { w: 4, h: 4 },
+        minW: 3,
+        minH: 3,
+        render: () => <CapacityChartBody capacity={capacity} metric="disk" />,
+      },
+    );
+    return defs;
+  }, [t, vm, config, isLxc, cores, agentIps, ips, bridges, lastUpdated, capacity, endpointId, endpointName, vmid]);
+
+  // Clé du catalogue (ids) — stable (widgets statiques).
+  const catalogKey = useMemo(() => catalog.map((c) => c.id).join(','), [catalog]);
+
+  // Layout par défaut « design validé » : 3 colonnes de panneaux + rangée capacité.
+  const defaultLayout = useMemo<WidgetItem[]>(
+    () => [
+      { widgetId: 'vm-os', x: 0, y: 0, w: 4, h: 3 },
+      { widgetId: 'vm-details', x: 4, y: 0, w: 4, h: 3 },
+      { widgetId: 'vm-hardware', x: 8, y: 0, w: 4, h: 3 },
+      { widgetId: 'vm-interfaces', x: 0, y: 3, w: 4, h: 3 },
+      { widgetId: 'vm-usage', x: 4, y: 3, w: 4, h: 3 },
+      { widgetId: 'vm-related', x: 8, y: 3, w: 4, h: 3 },
+      { widgetId: 'vm-info', x: 0, y: 6, w: 4, h: 3 },
+      { widgetId: 'capacity-cpu', x: 0, y: 9, w: 4, h: 4 },
+      { widgetId: 'capacity-ram', x: 4, y: 9, w: 4, h: 4 },
+      { widgetId: 'capacity-disk', x: 8, y: 9, w: 4, h: 4 },
+    ],
+    [],
+  );
+
+  // FUSION « utilisateurs présents et futurs » : positions stockées priment ;
+  // widget nouveau du code → ajouté en fin de grille ; disparu → bibliothèque.
+  const merged = useMemo(
+    () => mergePageConfig(stored, catalog, defaultLayout),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stored, catalogKey, defaultLayout],
+  );
+
+  const onLayoutChange = (layout: WidgetItem[]) => {
+    // Garde : RGL rappelle onLayoutChange sur les compactations parent-driven.
+    if (layoutsEqual(layout, merged.layout)) return;
+    updatePage('vmSummary', scope, { layout, library: merged.library });
+  };
+  const onRemove = (widgetId: string) => {
+    updatePage('vmSummary', scope, removeWidget(merged, widgetId));
+  };
+  const onAdd = (widgetId: string) => {
+    const def = catalog.find((c) => c.id === widgetId);
+    if (def) updatePage('vmSummary', scope, addWidget(merged, def));
+  };
+  const onReset = () => clearPage('vmSummary', scope);
 
   return (
     <div className="flex min-h-0 flex-col rounded-xl border bg-card">
@@ -231,146 +494,37 @@ export function VmDetail({ endpointId, endpointName, vmid, endpointUrl, lastUpda
         ) : (
           <>
             {tab === 'summary' && (
-              <>
-              <dl className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {/* OS invité */}
-                <Panel title={t('vm.sum.guestOs')}>
-                  <Row label={t('vm.sum.os')}>{vm.os ?? config?.os ?? '—'}</Row>
-                  <Row label={t('vm.sum.type')}>{isLxc ? t('vm.type.lxc') : t('vm.type.qemu')}</Row>
-                </Panel>
-
-                {/* Détails de la machine virtuelle */}
-                <Panel title={t('vm.sum.vmDetails')}>
-                  <Row label={t('vm.sum.powerStatus')}>
-                    <span className="inline-flex items-center gap-1.5">
-                      <StatusDot status={vm.status} />
-                      {t(`vm.status.${vm.status}`)}
-                    </span>
-                  </Row>
-                  <Row label={t('vm.sum.managedBy')}>{endpointName}</Row>
-                  <Row label={t('vm.sum.dnsName')}>{vm.name}</Row>
-                  <Row label={t('vm.sum.ipAddresses')}>{ips.length > 0 ? ips.join(', ') : '—'}</Row>
-                  <Row label={t('vm.sum.encryption')}>{t('vm.sum.notEncrypted')}</Row>
-                </Panel>
-
-                {/* Matériel VM */}
-                <Panel title={t('vm.sum.hardware')}>
-                  <Row label={t('vm.sum.cpu')}>{t('vm.cfg.cores', { n: cores })}</Row>
-                  <Row label={t('vm.sum.memory')}>
-                    {formatBytes(vm.maxmemBytes ?? vm.memBytes)}
-                  </Row>
-                  <Row label={t('vm.sum.hardDisk')}>
-                    {config?.diskStorage
-                      ? `${config.diskStorage}${vm.maxdiskBytes != null ? ` · ${formatBytes(vm.maxdiskBytes)}` : ''}`
-                      : '—'}
-                  </Row>
-                  <Row label={t('vm.sum.netAdapter')}>
-                    {bridges.length > 0 ? (
-                      <>
-                        {bridges[0]}{' '}
-                        <span className="text-muted-foreground">
-                          ({vm.status === 'running' ? t('vm.sum.connected') : t('vm.sum.disconnected')})
-                        </span>
-                      </>
-                    ) : (
-                      '—'
-                    )}
-                  </Row>
-                  <Row label={t('vm.sum.compatibility')}>{isLxc ? 'LXC' : 'QEMU'}</Row>
-                </Panel>
-
-                {/* Interfaces réseau (pont + VLAN + MAC par interface, IP si connue — guest agent ou config LXC) */}
-                <Panel title={t('vm.sum.interfaces')}>
-                  {(config?.nets.length ?? 0) === 0 ? (
-                    <Row label="—">{t('vm.net.none')}</Row>
-                  ) : (
-                    config!.nets.map((n) => {
-                      const aips = agentIps.get(n.iface);
-                      // IP : config statique → guest agent → mode déclaré (LXC manual/dhcp) — PVE ne voit pas l'IP réelle.
-                      const ip = n.ip ?? (aips && aips.length > 0 ? aips.join(', ') : n.ipMode ? t(`common.ip.${n.ipMode}`) : null);
-                      return (
-                        <Row key={n.iface} label={n.iface}>
-                          {n.bridge}
-                          {n.tag != null ? ` (VLAN ${n.tag})` : ''}
-                          {n.mac ? ` · ${n.mac}` : ''}
-                          {ip ? ` · ${ip}` : ''}
-                        </Row>
-                      );
-                    })
-                  )}
-                </Panel>
-
-                {/* Utilisation */}
-                <Panel title={t('vm.sum.usage')}>
-                  <div className="text-[11px] text-muted-foreground">
-                    {t('vm.sum.lastUpdated')} : {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : '—'}
-                  </div>
-                  <div className="space-y-1 pt-1">
-                    <div className="flex items-baseline justify-between text-xs">
-                      <span className="text-muted-foreground">{t('vm.sum.cpu')}</span>
-                      <span className="font-medium tabular-nums">{vm.cpuPct.toFixed(1)} %</span>
-                    </div>
-                    <UsageBar used={vm.cpuPct} max={100} />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex items-baseline justify-between text-xs">
-                      <span className="text-muted-foreground">{t('vm.sum.memory')}</span>
-                      <span className="font-medium tabular-nums">
-                        {formatBytes(vm.memBytes)} / {vm.maxmemBytes != null ? formatBytes(vm.maxmemBytes) : '—'}
-                      </span>
-                    </div>
-                    <UsageBar used={vm.memBytes} max={vm.maxmemBytes} />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex items-baseline justify-between text-xs">
-                      <span className="text-muted-foreground">{t('vm.sum.storage')}</span>
-                      <span className="font-medium tabular-nums">
-                        {vm.diskBytes != null ? formatBytes(vm.diskBytes) : '—'} / {vm.maxdiskBytes != null ? formatBytes(vm.maxdiskBytes) : '—'}
-                      </span>
-                    </div>
-                    <UsageBar used={vm.diskBytes ?? 0} max={vm.maxdiskBytes} />
-                  </div>
-                </Panel>
-
-                {/* Objets liés */}
-                <Panel title={t('vm.sum.related')}>
-                  <Row label={t('vm.sum.cluster')}>
-                    <Link to={`/e/${endpointId}`} className="text-primary hover:underline">
-                      {endpointName}
-                    </Link>
-                  </Row>
-                  <Row label={t('vm.sum.host')}>
-                    <Link to={`/e/${endpointId}/n/${encodeURIComponent(vm.node)}`} className="text-primary hover:underline">
-                      {vm.node}
-                    </Link>
-                  </Row>
-                  <Row label={t('vm.sum.networks')}>{bridges.length > 0 ? bridges.join(', ') : '—'}</Row>
-                  <Row label={t('vm.sum.storage')}>{config?.diskStorage ?? '—'}</Row>
-                </Panel>
-
-                {/* Détails VM */}
-                <Panel title={t('vm.sum.vmInfo')}>
-                  <Row label={t('vm.sum.pool')}>{config?.pool ?? '—'}</Row>
-                  <Row label={t('vm.sum.vmClass')}>{isLxc ? t('vm.type.lxc') : t('vm.type.qemu')}</Row>
-                  <Row label={t('vm.sum.vmId')}>#{vmid}</Row>
-                  <Row label={t('vm.sum.uptime')}>{formatUptime(vm.uptimeSec)}</Row>
-                </Panel>
-              </dl>
-
-              {/* Capacité du cluster (capacity planning de l'endpoint — 1 graphe par élément). */}
-              <section className="mt-3 rounded-lg border bg-card">
-                <h3 className="border-b px-3 py-2 text-xs font-semibold" title={t('vm.sum.capacity.hint')}>
-                  {t('vm.sum.capacity')}
-                </h3>
-                <div className="grid gap-3 p-3 md:grid-cols-3">
-                  {(['cpu', 'ram', 'disk'] as const).map((m) => (
-                    <div key={m} className="min-w-0">
-                      <CapacityChartBody capacity={capacity} metric={m} />
-                    </div>
-                  ))}
+              <div className="flex flex-col gap-3">
+                {/* Barre d'outils : bibliothèque + réinitialiser + indicateur de sauvegarde. */}
+                <div className="flex items-center justify-end">
+                  <WidgetToolbar
+                    libraryOpen={libraryOpen}
+                    onToggleLibrary={() => setLibraryOpen((o) => !o)}
+                    onReset={onReset}
+                    libraryCount={merged.library.length}
+                  />
                 </div>
-              </section>
-              </>
+                <div className="flex items-start gap-4">
+                  <div className="min-w-0 flex-1">
+                    <WidgetGridLayout
+                      catalog={catalog}
+                      config={merged}
+                      ctx={{ endpointId, vmName: vm.name }}
+                      onLayoutChange={onLayoutChange}
+                      onRemove={onRemove}
+                    />
+                  </div>
+                  {libraryOpen && (
+                    <WidgetLibraryPanel
+                      catalog={catalog}
+                      config={merged}
+                      onAdd={onAdd}
+                      onRemove={onRemove}
+                      onClose={() => setLibraryOpen(false)}
+                    />
+                  )}
+                </div>
+              </div>
             )}
 
             {/* Monitor : lazy — le composant n'est monté que quand l'onglet est ouvert. */}
