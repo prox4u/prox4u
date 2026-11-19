@@ -184,12 +184,16 @@ if [[ $DRY_RUN -eq 0 ]]; then
 # Prox4u — mapping device-mapper → LV PVE (table dm_names pour Telegraf).
 # Sortie : line protocol InfluxDB (tags dm + mapper_name). Le champ présent=1i
 # est obligatoire : une ligne line-protocol sans champ n'est pas valide.
+# FORMAT (InfluxDB 3 Core) : `mesure,tag=v,tag=v champ=1i` — virgule après la
+# mesure, tags NON quoted (key="v" serait lu comme un CHAMP string), valeurs de
+# tags échappées (\, = espace). Le tag node est ajouté par global_tags.
 set -euo pipefail
+esc() { local v="$1"; v="${v//\\/\\\\}"; v="${v//,/\\,}"; v="${v//=/\\=}"; v="${v// /\\ }"; printf '%s' "$v"; }
 for d in /sys/block/dm-*; do
   [[ -e "$d/dm/name" ]] || continue
   name="$(cat "$d/dm/name" 2>/dev/null)" || continue
   [[ -n "$name" ]] || continue
-  printf 'dm_names dm="%s" mapper_name="%s" present=1i\n' "$(basename "$d")" "$name"
+  printf 'dm_names,dm=%s,mapper_name=%s present=1i\n' "$(esc "$(basename "$d")")" "$(esc "$name")"
 done
 EOS
   chmod 755 "$DM_NAMES_SCRIPT"
@@ -212,12 +216,16 @@ if [[ $DRY_RUN -eq 0 ]]; then
 # Prox4u — mapping interface hôte → MAC (table net_if_mac pour Telegraf).
 # Sortie : line protocol InfluxDB (tags iface + mac). Le champ présent=1i
 # est obligatoire : une ligne line-protocol sans champ n'est pas valide.
+# FORMAT (InfluxDB 3 Core) : `mesure,tag=v,tag=v champ=1i` — virgule après la
+# mesure, tags NON quoted (key="v" serait lu comme un CHAMP string), valeurs de
+# tags échappées (\, = espace). Le tag node est ajouté par global_tags.
 set -euo pipefail
+esc() { local v="$1"; v="${v//\\/\\\\}"; v="${v//,/\\,}"; v="${v//=/\\=}"; v="${v// /\\ }"; printf '%s' "$v"; }
 for i in /sys/class/net/*; do
   [[ -r "$i/address" ]] || continue
   mac="$(cat "$i/address" 2>/dev/null)" || continue
   [[ -n "$mac" && "$mac" != "00:00:00:00:00:00" ]] || continue
-  printf 'net_if_mac iface="%s" mac="%s" present=1i\n' "$(basename "$i")" "$(printf '%s' "$mac" | tr 'A-F' 'a-f')"
+  printf 'net_if_mac,iface=%s,mac=%s present=1i\n' "$(esc "$(basename "$i")")" "$(esc "$(printf '%s' "$mac" | tr 'A-F' 'a-f')")"
 done
 EOS
   chmod 755 "$IFACE_MAC_SCRIPT"
@@ -241,13 +249,17 @@ if [[ $DRY_RUN -eq 0 ]]; then
 # Sortie : line protocol InfluxDB (tags cpu_model + product + vendor + board).
 # Le champ présent=1i est obligatoire : une ligne line-protocol sans champ
 # n'est pas valide. Valeur illisible → `unknown` (le serveur la mappe en null).
-esc() { printf '%s' "$1" | sed 's/"/\\"/g'; }
+# FORMAT (InfluxDB 3 Core) : `mesure,tag=v,tag=v champ=1i` — virgule après la
+# mesure, tags NON quoted (key="v" serait lu comme un CHAMP string), valeurs de
+# tags échappées (\, = espace — le modèle CPU contient des espaces). Le tag
+# node est ajouté par global_tags.
+esc() { local v="$1"; v="${v//\\/\\\\}"; v="${v//,/\\,}"; v="${v//=/\\=}"; v="${v// /\\ }"; printf '%s' "$v"; }
 val() { local v="${1:-}"; [[ -n "$v" ]] || v="unknown"; esc "$v"; }
 cpu_model="$(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)" || cpu_model=""
 product="$(cat /sys/class/dmi/id/product_name 2>/dev/null)" || product=""
 vendor="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null)" || vendor=""
 board="$(cat /sys/class/dmi/id/board_name 2>/dev/null)" || board=""
-printf 'node_hardware cpu_model="%s",product="%s",vendor="%s",board="%s" present=1i\n' \
+printf 'node_hardware,cpu_model=%s,product=%s,vendor=%s,board=%s present=1i\n' \
   "$(val "$cpu_model")" "$(val "$product")" "$(val "$vendor")" "$(val "$board")"
 EOS
   chmod 755 "$HW_INFO_SCRIPT"

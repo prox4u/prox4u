@@ -2043,13 +2043,14 @@ reçoivent le widget en bas par le merge.
 - `packages/web/src/core/api/apiClient.ts` (`fetchNodeHardware`) · `plugins/hypervision_v4/components/node-widgets.tsx` (`CapacityRow`/`CapacityBody`/`HostDetailsBody`/`pveVersionLabel` + `nodeDefaultLayout`) · `pages/node.tsx` (imports, `hwRows`/`hwRow` + effet 60 s, 2 defs catalogue, `hwRow` en deps)
 - `deploiement/60-telegraf-nodes.sh` (script hw-info section 5d + `[[inputs.exec]]` + écho dry-run)
 
-### Piège rencontré (corrigé — ne pas réintroduire)
+### Pièges rencontrés (corrigés — ne pas réintroduire)
 | Piège | Cause / fix |
 |---|---|
 | `health.test.ts` cassé par les champs `NodeHealth` requis ajoutés | `okNode` complété (`rootfsUsedBytes`/`rootfsTotalBytes`) — même pattern que les ajouts `cpus`/`mem*`/`loadavg` du jalon multi-cluster |
+| **Aucune table `exec` n'existait** (`node_hardware` ET les préexistantes `dm_names`/`net_if_mac` absentes de `SHOW TABLES` depuis le 13/11) malgré un Telegraf actif | **Format line protocol incorrect des 3 scripts `exec`** : `mesure tag="v" champ=1i` (espace après la mesure + tags quoted) — InfluxDB 3 Core lit `key="v"` comme un **champ string** pas un tag → ligne invalide (« Found trailing content » / « No fields were provided »), échec **silencieux** côté Telegraf. Fix : format canonique `mesure,tag=v,tag=v champ=1i` (virgule après la mesure, tags **non quoted**, valeurs échappées `\` `,` `=` espace via `esc()`) — identique au helper `buildLine`/`escapeTag` du poller. Validé en direct (write_lp + relecture). **Corrige aussi** vm-diskio (`dm_names`) + vm-net (`net_if_mac`) qui tournaient en `noMapping`. |
 
 ### À faire côté utilisateur
-- **Re-déploiement `deploiement/60-telegraf-nodes.sh` sur les nœuds Proxmox requis** pour activer la collecte hw-info (modèles CPU/matos) — tant que l'agent n'est pas (re)déployé, les modèles s'affichent « — » (comportement attendu et validé).
+- **Re-déploiement `deploiement/60-telegraf-nodes.sh` sur les nœuds Proxmox requis** (idempotent) pour activer la collecte hw-info **et** réparer les tables `exec` préexistantes (`dm_names`/`net_if_mac`) — le fix line protocol est dans le script. Tant que l'agent n'est pas (re)déployé, les modèles s'affichent « — » (comportement attendu et validé).
 
 ### Vérifications effectuées
 - `pnpm typecheck` (shared+server+web) + `pnpm test` (**shared 303, server 217** = 520) + `vite build` (bundle `index-CIWliVAZ.js`) : OK.
