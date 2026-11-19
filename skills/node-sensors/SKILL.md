@@ -296,6 +296,17 @@ skill `hypervision` §10). Tests : 19 nouveaux (builders SQL + parsers + merge) 
 > même image). Ne jamais alerter sur `dead` — seuls `active='failed'` et `load='error'` sont des
 > alertes (exemple réel env. de test : `openipmi.service` failed sur nœud sans BMC IPMI).
 
+> ⚠️ **Format line protocol des scripts `exec` (piège majeur — corrigé 2026-11-19)** : InfluxDB 3
+> Core interprète `key="valeur"` comme un **CHAMP string**, pas un tag → une ligne
+> `mesure tag="v" champ=1i` est **invalide** (« Found trailing content » / « No fields were
+> provided ») et la table n'est **jamais créée** (échec silencieux côté Telegraf). Le format
+> correct (identique au helper `buildLine`/`escapeTag` du poller) :
+> `mesure,tag1=v1,tag2=v2 champ=1i` — **virgule après la mesure**, tags **NON quoted**, valeurs
+> de tags **échappées** (`\` `,` `=` espace → backslash, cf. `esc()` des scripts), **espace avant
+> les champs**. Le tag `node` est ajouté par `global_tags` (pas dans le script). Symptôme d'un
+> script mal formé : la table absente de `SHOW TABLES` alors que les autres plugins écrivent.
+> Validé en direct sur l'instance (write_lp + relecture).
+
 ## 5. Page web (`/node-sensors`)
 
 - **4 tableaux** : SMART (nœud, device, modèle, santé, temp, secteurs reallocated, usure NVMe),
