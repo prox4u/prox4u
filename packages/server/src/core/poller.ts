@@ -17,6 +17,7 @@ import {
   type MultiDashboardSnapshot,
   type NodeHealth,
   type PoolAggregate,
+  type PraReport,
   type PveNodeStatus,
   type PveVmResource,
   type QdeviceState,
@@ -85,6 +86,13 @@ interface EndpointState {
    * ou n/a (LXC, VM arrêtée → la clé est purgée).
    */
   agentActive: Map<number, boolean>;
+  /**
+   * Données brutes du dernier poll RÉUSSI (nœuds + VMs) — conservées pour le
+   * PRA global cross-endpoints (tick) : un endpoint down garde son dernier état
+   * connu (nœuds offline, VMs figées) au lieu de disparaître du calcul global.
+   */
+  lastNodes: PveNodeStatus[];
+  lastVms: PveVmResource[];
 }
 
 /**
@@ -134,7 +142,16 @@ export class Poller {
     private intervalMs = 5_000,
   ) {
     for (const rt of ctx.endpoints) {
-      this.states.set(rt.id, { rt, snapshot: null, lastError: null, daily: [], lastDayKey: null, agentActive: new Map() });
+      this.states.set(rt.id, {
+        rt,
+        snapshot: null,
+        lastError: null,
+        daily: [],
+        lastDayKey: null,
+        agentActive: new Map(),
+        lastNodes: [],
+        lastVms: [],
+      });
     }
   }
 
@@ -190,11 +207,43 @@ export class Poller {
         defaultEndpointId: this.ctx.config.defaultEndpointId,
         overcommit: this.ctx.config.overcommit,
         endpoints,
+        globalPra: this.computeGlobalPra(),
       };
       this.hub.broadcast(this.multi);
     } finally {
       this.ticking = false;
     }
+  }
+
+  /**
+   * PRA GLOBAL cross-endpoints (niveau 3) : si un bâtiment/site tombe, les
+   * AUTRES sites de TOUS les endpoints peuvent absorber (prérequis : stockage
+   * identique d'un site à l'autre — le disque est exclu du calcul).
+   *
+   * Les noms de nœuds sont préfixés par l'endpoint (`clusterproxmox/ProxSite1`)
+   * pour éviter les collisions de noms entre clusters ET clarifier l'origine
+   * des VMs affectées. Les ids de sites sont préfixés aussi (clés uniquement —
+   * le nom d'affichage, le bâtiment, reste intact).
+   *
+   * Un endpoint jamais pollé (pas de snapshot) est exclu : son état est inconnu.
+   * Un endpoint down garde son dernier état connu (nœuds offline, VMs figées).
+   * null si aucun site défini (sites.json absent/vide).
+   */
+  private computeGlobalPra(): PraReport | null {
+    const allSites: Site[] = [];
+    const allNodes: PveNodeStatus[] = [];
+    const allVms: PveVmResource[] = [];
+    for (const st of this.states.values()) {
+      if (!st.snapshot) continue;
+      const ep = st.rt.id;
+      for (const s of st.rt.sites) {
+        allSites.push({ ...s, id: `${ep}/${s.id}`, nodes: s.nodes.map((n) => `${ep}/${n}`) });
+      }
+      for (const n of st.lastNodes) allNodes.push({ ...n, node: `${ep}/${n.node}` });
+      for (const v of st.lastVms) allVms.push({ ...v, node: `${ep}/${v.node}` });
+    }
+    if (allSites.length === 0) return null;
+    return computePra(allSites, allNodes, allVms);
   }
 
   /**
@@ -450,6 +499,10 @@ export class Poller {
       };
       st.snapshot = snap;
       st.lastError = null;
+      // Données brutes du poll réussi — servent au PRA global cross-endpoints
+      // (tick) : un endpoint down conserve son dernier état connu.
+      st.lastNodes = nodes;
+      st.lastVms = vms;
       // Failover : si l'API a été servie par un autre nœud que l'URL configurée,
       // on l'expose (transparence) — le nœud endpoint est down, l'app bascule.
       const apiVia = rt.source.activeUrl && rt.source.activeUrl !== rt.url ? rt.source.activeUrl : undefined;

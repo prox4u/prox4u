@@ -12,6 +12,7 @@ function snap(generatedAt: number): MultiDashboardSnapshot {
     defaultEndpointId: 'ep1',
     overcommit: DEFAULT_OVERCOMMIT_CONFIG,
     endpoints: [],
+    globalPra: null,
   };
 }
 

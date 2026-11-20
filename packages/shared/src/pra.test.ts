@@ -110,4 +110,51 @@ describe('computePra', () => {
     // 2/4 cœurs et 8/16 Go → 50 % d'absorption
     expect(a.absorptionPct).toBe(50);
   });
+
+  it('tous les nœuds sur le MÊME site → na (pas de répartition, même avec 2 sites définis)', () => {
+    // 2 sites définis mais le site B n'a aucun nœud présent → mono-site effectif.
+    const sites: Site[] = [
+      { id: 'a', name: 'Site A', nodes: ['n1', 'n2'] },
+      { id: 'b', name: 'Site B', nodes: ['n3'] },
+    ];
+    const nodes = [node('n1', 8, 32), node('n2', 8, 32)]; // n3 absent
+    const r = computePra(sites, nodes, [vm(1, 'n1', 4, 16)]);
+    expect(r.globalSeverity).toBe('na');
+    expect(r.sites[0].absorptionPct).toBeNull();
+  });
+
+  it('cross-endpoints (noms préfixés) : un site est absorbé par les sites d\'un autre endpoint', () => {
+    // Simule le PRA global : nœuds préfixés par l'endpoint, sites de 2 endpoints.
+    const sites: Site[] = [
+      { id: 'ep1/siteA', name: 'Site A', nodes: ['ep1/n1'] },
+      { id: 'ep2/siteB', name: 'Site B', nodes: ['ep2/n2'] },
+    ];
+    const nodes = [node('ep1/n1', 8, 32), node('ep2/n2', 8, 32)];
+    // VM sur ep1/n1 : 6 cœurs / 24 Go ; capacité libre ep2/n2 = 8 cœurs / 32 Go → 75 % (warn)
+    const vms = [vm(1, 'ep1/n1', 6, 24)];
+    const r = computePra(sites, nodes, vms);
+    expect(r.globalSeverity).toBe('warn');
+    const a = r.sites.find((s) => s.siteId === 'ep1/siteA')!;
+    expect(a.absorptionPct).toBe(75);
+    // L'origine (endpoint) est visible dans le nœud des VMs affectées.
+    expect(r.affectedVms).toHaveLength(1);
+    expect(r.affectedVms[0].node).toBe('ep1/n1');
+  });
+
+  it('unmappedNodes : nœuds du cluster non mappés dans un site', () => {
+    const sites: Site[] = [{ id: 'a', name: 'Site A', nodes: ['n1'] }];
+    const nodes = [node('n1', 8, 32), node('n2', 8, 32), node('n3', 8, 32)]; // n2, n3 orphelins
+    const r = computePra(sites, nodes, [vm(1, 'n1', 4, 16)]);
+    expect(r.unmappedNodes).toEqual(['n2', 'n3']);
+  });
+
+  it('unmappedNodes vide si tous les nœuds sont mappés', () => {
+    const sites: Site[] = [
+      { id: 'a', name: 'Site A', nodes: ['n1'] },
+      { id: 'b', name: 'Site B', nodes: ['n2'] },
+    ];
+    const nodes = [node('n1', 8, 32), node('n2', 8, 32)];
+    const r = computePra(sites, nodes, [vm(1, 'n1', 4, 16)]);
+    expect(r.unmappedNodes).toEqual([]);
+  });
 });

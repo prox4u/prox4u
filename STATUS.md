@@ -2355,6 +2355,61 @@ Export/restore de l'administration (users + groupes + **layouts de grilles par u
 - Skill `general` §11 : rapport de validation issue #2 (7 checks) + bullet journal d'audit + bullet import/export + note `AppContext.userConfig` partagé.
 - GitHub issue #2 : commentaire de clôture + state=closed.
 
+## ✅ Fait — PRA multi-sites niveau 3 : PRA global cross-endpoints (livré, validé E2E)
+
+> **2026-11-20** — Complément du PRA par endpoint (bascule N-1 intra-cluster) : un **PRA global**
+> — si un **bâtiment (site)** tombe, les **autres sites de TOUS les clusters** (tous les endpoints)
+> peuvent absorber. Détail complet : **skill `hypervision` §11.12** + flux **skill `general` §4.1**.
+
+### Sémantique (validée utilisateur)
+- **PRA seulement si nœuds répartis** : « les clusters mono-nœud ou sur le même site, non pas de
+  PRA. Seule les clusters avec des nœuds répartis sont dans le PRA » → condition **≥ 2 sites avec
+  ≥ 1 nœud présent**, sinon `na`.
+- **Stockage ISO** : « le stockage pour le PRA doit être iso d'un site à l'autre » → **prérequis
+  documenté** (hint du widget), **pas de flag de config**.
+
+### Implémentation
+- **shared** (`pra.ts`) : `computePra` += `multiSite` (≥ 2 sites avec nœuds présents),
+  `unmappedNodes[]` (orphelins), `SitePra.nodes[]` (mapping visible). `types.ts` :
+  `MultiDashboardSnapshot.globalPra: PraReport | null` (requis), `PraReport.unmappedNodes?`,
+  `SitePra.nodes`.
+- **server** (`core/poller.ts`) : `computeGlobalPra()` à chaque `tick()` — agrège nœuds/VMs de
+  **tous** les endpoints (`lastNodes`/`lastVms`), topologie cross-endpoints, **ids de sites
+  préfixés par endpoint** (`clusterproxmox/ProxSite1`, noms de bâtiments intacts) → poussé dans
+  `MultiDashboardSnapshot.globalPra` (WS).
+- **web** (hypervision_v4) : widget **`pra-global`** (w12 h4) au catalogue + dans
+  `overviewDefaultLayout` ; `PraPanelBody` **enrichi** (badge endpoint, ligne nœuds, encart
+  orphelins) — réemployé par le PRA par endpoint (détail cluster, inchangé).
+- **i18n** : `pra.globalTitle` / `pra.globalHint` / `pra.nodes` / `pra.unmapped` (fr/en).
+
+### Fichiers
+- `packages/shared/src/pra.ts` · `pra.test.ts` (+4) · `types.ts` · `i18n/fr.ts` · `i18n/en.ts`
+- `packages/server/src/core/poller.ts` · `poller.test.ts` (nouveau, +3) · `ws-hub.test.ts`
+- `packages/web/src/plugins/hypervision_v4/pages/overview.tsx` · `components/pra-panel.tsx`
+
+### Vérifications effectuées
+- **Tests** : shared **393** + server **255** verts, web typecheck OK.
+- **API** `/api/dashboard` → `globalPra` : `globalSeverity: crit`, `unmappedNodes: []`, sites
+  `proxmox/site-principal` **700 % crit** (49c/120G, cap 7c/34G), `clusterproxmox/proxsite1`
+  **75 % warn**, `clusterproxmox/proxsite2` **66,7 % ok**.
+- **UI** (vue d'ensemble v4) : widget `pra-global` — badge « Bascule à risque » + 3 lignes sites
+  (700 %/75 %/67 %) + badge endpoint + ligne nœuds + VMs concernées + encart orphelins masqué.
+- **PRA par endpoint inchangé** : proxmox (1 site) → `na` ; clusterproxmox (2 sites) → 75 %/67 %
+  (capacité libre intra-cluster 17.1G, ≠ global 22.4G).
+
+### Piège rencontré (corrigé — ne pas réintroduire)
+- **Widget « invisible » au 1er E2E** : le widget `pra-global` (et `nodes-matrix`/`temp-nodes`)
+  n'apparaissait pas → la page rendue était la **v2** (12 widgets), pas la v4. Cause : le module
+  `hypervision_v4` est **globalement activé** mais **non sélectionné** par le compte de test dans
+  « Mon profil → Modules » → `visibleVersionIds` (autorisées ∩ sélectionnées) l'excluait → la
+  route `/` (canonique v4) retombait sur la 1ʳᵉ version visible (v2). **Fix** : sélectionner
+  `hypervision_v4` (PUT `/api/auth/preferences`) → la v4 se rend et le widget apparaît. Le widget
+  est une fonctionnalité **v4** : visible seulement si l'user a sélectionné `hypervision_v4`.
+
+### Docs
+ - Skill `hypervision` §11.12 (widget `pra-global`, sémantique, calcul serveur, E2E) + description.
+ - Skill `general` §4.1 (flux PRA global dans le poller).
+
 ## ⏳ À faire
 
 ### À tester / à aborder
