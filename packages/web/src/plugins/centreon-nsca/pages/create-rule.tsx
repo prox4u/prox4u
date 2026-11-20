@@ -19,7 +19,7 @@ export function CreateRulePage() {
   const { t } = useTranslation();
   const [targets, setTargets] = useState<AlarmTargets | null>(null);
   const [pollers, setPollers] = useState<CentreonPoller[]>([]);
-  const [metrics, setMetrics] = useState<{ vm: MetricIdList; node: MetricIdList }>({ vm: [], node: [] });
+  const [metrics, setMetrics] = useState<{ vm: MetricIdList; node: MetricIdList; cluster: MetricIdList }>({ vm: [], node: [], cluster: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ rule: AlarmRule; provision: ProvisionOutcome } | null>(null);
@@ -30,7 +30,7 @@ export function CreateRulePage() {
     try {
       const [list, tgt] = await Promise.all([alarmsApi.list(), alarmsApi.targets()]);
       setPollers(list.pollers);
-      setMetrics({ vm: list.metrics.vm, node: list.metrics.node });
+      setMetrics({ vm: list.metrics.vm, node: list.metrics.node, cluster: list.metrics.cluster ?? [] });
       setTargets(tgt);
     } catch (e) {
       setError((e as Error).message);
@@ -56,7 +56,9 @@ export function CreateRulePage() {
       name: values.name.trim(),
       target: values.kind === 'vm'
         ? { kind: 'vm' as const, endpointId: values.endpointId, vmid: values.vmid ?? undefined, label: targets?.vms.find((v) => v.vmid === values.vmid)?.name ?? '' }
-        : { kind: 'node' as const, endpointId: values.endpointId, node: values.node, label: values.node },
+        : values.kind === 'node'
+          ? { kind: 'node' as const, endpointId: values.endpointId, node: values.node, label: values.node }
+          : { kind: 'cluster' as const, endpointId: values.endpointId, label: targets?.clusters.find((c) => c.endpointId === values.endpointId)?.name ?? values.endpointId },
       metric: values.metric as MetricId,
       operator: values.operator,
       threshold,
@@ -138,10 +140,12 @@ export function CreateRulePage() {
             <RuleForm
               vms={targets?.vms ?? []}
               nodes={targets?.nodes ?? []}
+              clusters={targets?.clusters ?? []}
               pollers={pollers}
               mappingHost={mappingHost}
               metricsVm={metrics.vm}
               metricsNode={metrics.node}
+              metricsCluster={metrics.cluster}
               onSubmit={onSubmit}
               submitLabel={t('alarm.form.submit')}
             />

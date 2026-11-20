@@ -2,7 +2,7 @@ import type {
   AgentFsUsage,
   NodeBridge,
   NodeNic,
-  PveNodeStatus,
+  PveClusterStatus,
   PvePool,
   PveStorage,
   PveVmResource,
@@ -36,8 +36,8 @@ export interface NodeNetwork {
 export interface DataSource {
   readonly isMock: boolean;
 
-  /** statut du cluster + nœuds (online, cpu, mem, uptime, rootfs…) */
-  getNodes(): Promise<PveNodeStatus[]>;
+  /** statut du cluster (quorum inclus) + nœuds (online, cpu, mem, uptime, rootfs…) */
+  getNodes(): Promise<PveClusterStatus>;
 
   /** toutes les VMs/CTs du cluster (avec cpuAlloc joint depuis la config) */
   getResources(): Promise<PveVmResource[]>;

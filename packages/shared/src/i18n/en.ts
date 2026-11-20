@@ -15,6 +15,9 @@ export const en: Record<string, string> = {
   'topbar.theme': 'Toggle theme',
   'topbar.resetLayout': 'Reset layout',
 
+  'cluster.quorumOk': 'Quorum {{online}}/{{total}}',
+  'cluster.quorumLost': 'Quorum lost',
+
   'metrics.title': 'Cluster metrics',
   'metrics.titleCpu': 'Cluster metrics — CPU',
   'metrics.titleRam': 'Cluster metrics — RAM',
@@ -174,6 +177,7 @@ export const en: Record<string, string> = {
   'health.penalty.diskWarn': 'Storage at {{pct}} % (≥ 70 %)',
   'health.penalty.praCrit': 'N-1 failover impossible if a site goes down',
   'health.penalty.praWarn': 'N-1 failover possible but with no headroom if a site goes down',
+  'health.penalty.quorumLost': 'Cluster quorum lost ({{online}}/{{total}} nodes online)',
 
   'kpi.nodes': 'Active nodes',
   'kpi.cpuRam': 'CPU / RAM allocation',
@@ -234,6 +238,7 @@ export const en: Record<string, string> = {
   'alerts.diskHigh': 'Storage at {{pct}} %',
   'alerts.praCrit': 'If {{site}} goes down: failover impossible — remaining capacity is insufficient',
   'alerts.praWarn': 'If {{site}} goes down: failover possible but with no headroom (other sites would run at {{pct}} % of free capacity)',
+  'alerts.quorumLost': 'Cluster quorum lost — cluster in read-only mode ({{online}}/{{total}} nodes online)',
 
   'nav.topology': 'Network topology',
   'nav.storage': 'Storage',
@@ -798,6 +803,7 @@ export const en: Record<string, string> = {
   'alarm.form.targetKind': 'Target type',
   'alarm.form.targetKind.vm': 'VM',
   'alarm.form.targetKind.node': 'Proxmox node',
+  'alarm.form.targetKind.cluster': 'Cluster (quorum)',
   'alarm.form.endpoint': 'Endpoint',
   'alarm.form.vm': 'Target VM',
   'alarm.form.node': 'Target node',
@@ -837,6 +843,7 @@ export const en: Record<string, string> = {
   'alarm.metric.node_ram_pct': 'Node RAM (%)',
   'alarm.metric.node_disk_pct': 'Node disk (%)',
   'alarm.metric.node_online': 'Node online',
+  'alarm.metric.cluster_quorum': 'Cluster quorum (1 = ok)',
   // --- Provisioning summary ---
   'alarm.summary.title': 'Centreon provisioning',
   'alarm.summary.ok': 'Service created and configured, config deployed on poller “{{poller}}”. NSCA frames can be received.',

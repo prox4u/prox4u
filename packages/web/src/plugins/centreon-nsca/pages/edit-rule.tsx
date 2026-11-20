@@ -19,7 +19,7 @@ export function EditRulePage() {
   const [rule, setRule] = useState<AlarmRule | null>(null);
   const [targets, setTargets] = useState<AlarmTargets | null>(null);
   const [pollers, setPollers] = useState<CentreonPoller[]>([]);
-  const [metrics, setMetrics] = useState<{ vm: MetricIdList; node: MetricIdList }>({ vm: [], node: [] });
+  const [metrics, setMetrics] = useState<{ vm: MetricIdList; node: MetricIdList; cluster: MetricIdList }>({ vm: [], node: [], cluster: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +29,7 @@ export function EditRulePage() {
     try {
       const [list, tgt] = await Promise.all([alarmsApi.list(), alarmsApi.targets()]);
       setPollers(list.pollers);
-      setMetrics({ vm: list.metrics.vm, node: list.metrics.node });
+      setMetrics({ vm: list.metrics.vm, node: list.metrics.node, cluster: list.metrics.cluster ?? [] });
       setTargets(tgt);
       setRule(list.rules.find((r) => r.id === id) ?? null);
     } catch (e) {
@@ -52,7 +52,9 @@ export function EditRulePage() {
       name: values.name.trim(),
       target: values.kind === 'vm'
         ? { kind: 'vm', endpointId: values.endpointId, vmid: values.vmid ?? undefined, label: targets?.vms.find((v) => v.vmid === values.vmid)?.name ?? '' }
-        : { kind: 'node', endpointId: values.endpointId, node: values.node, label: values.node },
+        : values.kind === 'node'
+          ? { kind: 'node', endpointId: values.endpointId, node: values.node, label: values.node }
+          : { kind: 'cluster', endpointId: values.endpointId, label: targets?.clusters.find((c) => c.endpointId === values.endpointId)?.name ?? values.endpointId },
       metric: values.metric as MetricId,
       operator: values.operator,
       threshold: Number(values.threshold),
@@ -94,11 +96,13 @@ export function EditRulePage() {
           <RuleForm
             vms={targets?.vms ?? []}
             nodes={targets?.nodes ?? []}
+            clusters={targets?.clusters ?? []}
             pollers={pollers}
             mappingHost={mappingHost}
             initial={rule}
             metricsVm={metrics.vm}
             metricsNode={metrics.node}
+            metricsCluster={metrics.cluster}
             onSubmit={onSubmit}
             onCancel={() => window.location.assign('/alarms')}
             submitLabel={t('alarm.form.update')}

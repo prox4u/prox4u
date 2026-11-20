@@ -1,11 +1,11 @@
 ---
 name: centreon-nsca
-description: Plugin « Alarmes & Centreon » (famille centreon-nsca) — règles de surveillance sur VMs/nœuds Proxmox, engine d'évaluation (tick 15 s), provisioning du service passif Centreon via CLAPI (SSH/local) ou API REST v1, envoi des trames send_nsca, mapping VM→hôte Centreon (ajout manuel), pollers avec IP (destination NSCA), et page de config admin. Use when working on the centreon-nsca plugin, /api/alarms/*, the alarm engine, NSCA frames, Centreon provisioning, the /alarms pages, or the « Centreon (NSCA) » admin tab.
+description: Plugin « Alarmes & Centreon » (famille centreon-nsca) — règles de surveillance sur VMs/nœuds/clusters Proxmox (dont quorum cluster via métrique cluster_quorum + cible kind=cluster), engine d'évaluation (tick 15 s), provisioning du service passif Centreon via CLAPI (SSH/local) ou API REST v1, envoi des trames send_nsca, mapping VM→hôte Centreon (ajout manuel), pollers avec IP (destination NSCA), et page de config admin. Use when working on the centreon-nsca plugin, /api/alarms/*, the alarm engine, NSCA frames, Centreon provisioning, the /alarms pages, the cluster quorum alarm, or the « Centreon (NSCA) » admin tab.
 ---
 
 # Centreon NSCA — Alarmes & Centreon
 
-Module qui transforme des **règles de surveillance** sur les VMs/nœuds Proxmox en **alarmes** transmises à **Centreon** sous forme de **checks passifs NSCA** (`send_nsca`). Cible : managers/DSI qui définissent des seuils, et le NOC Centreon qui reçoit les statuts.
+Module qui transforme des **règles de surveillance** sur les VMs/nœuds/clusters Proxmox en **alarmes** transmises à **Centreon** sous forme de **checks passifs NSCA** (`send_nsca`). Cible : managers/DSI qui définissent des seuils, et le NOC Centreon qui reçoit les statuts.
 
 > Un futur backend **Zabbix** partagera le namespace `/api/alarms/*` et le store sans toucher à cette famille. Le transport runtime NSCA est imposé ; le provisioning (création du service Centreon) peut passer par **CLAPI** ou **REST v1** (choix sur la page de config).
 
@@ -17,7 +17,7 @@ Module qui transforme des **règles de surveillance** sur les VMs/nœuds Proxmox
 | `/alarms/new` | `pages/create-rule.tsx` | **Page 1** — formulaire de création → provisionne le service Centreon puis enregistre la règle + récap provisioning |
 | `/alarms/edit/:id` | `pages/edit-rule.tsx` | Édition (même formulaire, ne re-provisionne pas) |
 | Admin → onglet « Centreon (NSCA) » | `components/admin/nsca-config.tsx` | **Page 3** — activation du module, transport CLAPI/REST, central, pollers (nom + IP), NSCA, mapping VM→hôte (+ bouton Ajouter) |
-| API | `GET/POST /api/alarms/*` | règles, cibles (VMs/nœuds), config, test, provisioning |
+| API | `GET/POST /api/alarms/*` | règles, cibles (VMs/nœuds/clusters), config, test, provisioning |
 | Engine | `engine.ts` | tick 15 s, évaluation des règles actives, envoi des trames aux transitions |
 
 Feature flag : `VITE_USE_PLUGIN_CENTREON_NSCA` (défaut ON, opt-out). Famille `centreon-nsca` (pas de versionnement `_vN` — premier module de la famille).
@@ -26,16 +26,16 @@ Feature flag : `VITE_USE_PLUGIN_CENTREON_NSCA` (défaut ON, opt-out). Famille `c
 
 ```
 packages/shared/src/centreon-nsca.ts         # types + fonctions pures (testées)
-packages/shared/src/centreon-nsca.test.ts    # 23 tests (échappement, trame, évaluation…)
+packages/shared/src/centreon-nsca.test.ts    # 28 tests (échappement, trame, évaluation…)
 packages/server/src/modules/centreonnsca/
   index.ts     # registerAlarmNsca (store + engine + routes)
   store.ts     # NscaStore — data/centreon-nsca.json (seed, CRUD, stats)
-  metrics.ts   # extraction de la valeur d'une métrique (VmSummary/NodeHealth)
+  metrics.ts   # extraction de la valeur d'une métrique (VmSummary/NodeHealth/cluster)
   engine.ts    # AlarmEngine — tick 15 s, machine à états, envoi NSCA
   nsca.ts      # send_nsca (cfg généré, spawn, timeout, jamais de mdp loggué)
   provision.ts # CLAPI (ssh/local) + REST v1 (création service + déploiement)
   routes.ts    # /api/alarms/* (règles, cibles, config, test, provisioning)
-  store.test.ts routes.test.ts               # 19 tests serveur
+  store.test.ts routes.test.ts               # 20 tests serveur
 packages/web/src/plugins/centreon-nsca/
   index.ts     # manifest (3 routes + 1 menu, icône Siren, order 60)
   lib/nsca-api.ts   # client API /api/alarms/*
@@ -48,8 +48,9 @@ packages/web/src/components/admin/nsca-config.tsx  # Page 3 (onglet admin)
 ## 3. Données
 
 - **Store** : `data/centreon-nsca.json` (gitignoré, chmod 600, écriture atomique) — `{ version, config, pollers[], mappings[], rules[] }`. Seed au 1ᵉʳ démarrage : module **désactivé**, pollers par défaut (Linux/Windows/Infra), aucune règle.
-- **Mesures source** : snapshot poller (`VmSummary` : cpuPct, mem/maxmem, disk/maxdisk, status, uptimeSec, netIn/Out, ipAddresses ; `NodeHealth` : cpuPct, ramPct, diskPct, online, uptimeSec). L'engine tient un **ring-buffer en mémoire** par règle (pas de dépendance InfluxDB) — fonctionne en mock et en réel.
-- **Métriques** : VM = cpu_pct, ram_pct, disk_pct, vm_status, ip_reachable, uptime_sec, net_in_bps, net_out_bps · Nœud = node_cpu_pct, node_ram_pct, node_disk_pct, node_online. Les statuts sont numérisés (1 = bon état, 0 = mauvais).
+- **Mesures source** : snapshot poller (`VmSummary` : cpuPct, mem/maxmem, disk/maxdisk, status, uptimeSec, netIn/Out, ipAddresses ; `NodeHealth` : cpuPct, ramPct, diskPct, online, uptimeSec ; `cluster` : quorum, quorumState). L'engine tient un **ring-buffer en mémoire** par règle (pas de dépendance InfluxDB) — fonctionne en mock et en réel.
+- **Métriques** : VM = cpu_pct, ram_pct, disk_pct, vm_status, ip_reachable, uptime_sec, net_in_bps, net_out_bps · Nœud = node_cpu_pct, node_ram_pct, node_disk_pct, node_online · **Cluster = cluster_quorum** (cible `kind: 'cluster'` — quorum ok=1, perdu=0, null si inconnu). Les statuts sont numérisés (1 = bon état, 0 = mauvais).
+- **Cible cluster (quorum)** : `AlarmTarget.kind = 'vm' | 'node' | 'cluster'`. Le quorum est **par endpoint** (= par cluster Proxmox) ; la règle n'a ni vmid ni node, juste endpointId + label (nom du cluster). Le quorum est collecté par `getNodes()` (entrée cluster de `/cluster/status` : `quorum` + `quorum_state` PVE 8+, sinon dérivé `en ligne < quorum → lost` via `deriveQuorumState` shared). Le mock force `quorumState: 'lost'` en scénario `critical` (chaîne complète testable).
 
 ## 4. Mécanisme imposé (runtime + provisioning)
 

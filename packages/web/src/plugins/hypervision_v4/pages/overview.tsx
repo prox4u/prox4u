@@ -167,6 +167,9 @@ function EndpointHealthBody({ ep }: { ep: EndpointSnapshot }) {
             <div className="mt-1 text-xs text-muted-foreground">
               {snap.cluster.nodesOnline}/{snap.cluster.nodesTotal} {t('topbar.nodes')} · {snap.kpis.vmsRunning}/
               {snap.kpis.vmsTotal} VMs
+              {snap.cluster.quorumState === 'lost' && (
+                <span className="ml-1 font-medium text-crit">· {t('cluster.quorumLost')}</span>
+              )}
             </div>
           </div>
           <ArrowRight className="h-4 w-4 text-muted-foreground" />

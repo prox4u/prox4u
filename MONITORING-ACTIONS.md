@@ -57,14 +57,17 @@ pannes disque), **températures** (CPU/disques), **ZFS** (ARC, santé pools), **
 
 ---
 
-## P1 — Alarme quorum cluster  `[ ]`
+## P1 — Alarme quorum cluster  `[~]` (implémenté — validation E2E en attente)
 
 Donnée **déjà pollée** (`/cluster/status` expose le quorum) → coût ~0, valeur **critique**
 (un nœud qui perd le quorum laisse tourner ses guests mais bloque toute opération).
 Modèle : check `system.cluster_quorum` de ProxMenux (CRITICAL).
 
-- `[ ]` Exposer le champ quorum dans le snapshot (poller) + règle d'alarme « quorum perdu ».
-- `[ ]` Reflet dans le Health Score (pénalité) et la vue d'ensemble.
+- `[x]` Exposer le champ quorum dans le snapshot (poller) + règle d'alarme « quorum perdu »
+  (métrique `cluster_quorum` + cible `kind: 'cluster'` — voir skill `centreon-nsca`).
+- `[x]` Reflet dans le Health Score (pénalité −25) et la vue d'ensemble (badge + alerte crit).
+- `[ ]` **Validation E2E** : arrêt du nœud `nfs` → quorum lost (badge rouge + pénalité + alerte),
+  redémarrage → récupération (trame OK). → GitHub issue #3.
 
 ---
 

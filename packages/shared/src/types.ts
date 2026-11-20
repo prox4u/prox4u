@@ -75,6 +75,18 @@ export interface PveNodeStatus {
   version?: string;
 }
 
+/** État du quorum cluster (entrée cluster de /cluster/status). */
+export type QuorumState = 'ok' | 'lost';
+
+/** Statut cluster + nœuds (GET /cluster/status) — quorum inclus. */
+export interface PveClusterStatus {
+  nodes: PveNodeStatus[];
+  /** quorum requis (majorité) — null si inconnu. */
+  quorum: number | null;
+  /** état du quorum (rapporté PVE 8+ ou dérivé) — null si inconnu. */
+  quorumState: QuorumState | null;
+}
+
 export type PveStorageType =
   | 'dir'
   | 'lvm'
@@ -700,7 +712,15 @@ export interface MetricsResponse {
 export interface DashboardSnapshot {
   generatedAt: number;
   mock: boolean;
-  cluster: { name: string; nodesOnline: number; nodesTotal: number };
+  cluster: {
+    name: string;
+    nodesOnline: number;
+    nodesTotal: number;
+    /** quorum requis (majorité) — null si inconnu. */
+    quorum: number | null;
+    /** état du quorum — null si inconnu (PVE 7 sans dérive possible). */
+    quorumState: QuorumState | null;
+  };
   sites: Site[];
   health: HealthScore;
   kpis: KpiSummary;

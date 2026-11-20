@@ -7,6 +7,7 @@ import {
   defaultServiceName,
   escapeNscaField,
   evaluateAlarm,
+  METRIC_IDS,
   nscaCfgContent,
   nscaReturnCode,
   renderOutput,
@@ -75,6 +76,15 @@ describe('defaultServiceName', () => {
   });
   it("suffit le nom de règle (sanitised) en cas de collision de métrique", () => {
     expect(defaultServiceName('cpu_pct', 'CPU prod')).toBe('Prox4u-Alarm-CPU-CPU_prod');
+  });
+  it('cluster_quorum → Prox4u-Alarm-CLUSTER-QUORUM', () => {
+    expect(defaultServiceName('cluster_quorum', '')).toBe('Prox4u-Alarm-CLUSTER-QUORUM');
+  });
+});
+
+describe('METRIC_IDS', () => {
+  it('inclut cluster_quorum (cible cluster)', () => {
+    expect(METRIC_IDS).toContain('cluster_quorum');
   });
 });
 

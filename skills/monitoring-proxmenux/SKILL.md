@@ -72,7 +72,7 @@ agent nœud** (Telegraf/SSH) :
 | `backup.verification_state` | WARN | API (PBS) |
 | `backup.retention_defined` | WARN | API (PBS) |
 | `backup.host_recovery` | CRIT | API (PBS) |
-| `system.cluster_quorum` | CRIT | **API** (`/cluster/status` déjà pollé) — **P1 prox4u** |
+| `system.cluster_quorum` | CRIT | **API** — **fait** dans prox4u (métrique `cluster_quorum` + cible cluster + pénalité Health Score −25 + badge, issue #3) |
 | `system.failed_units` | CRIT | agent (systemd) — **Telegraf** |
 | `system.ha_state` | CRIT | API |
 | `system.pending_reboot` | WARN | agent / API limitée |
@@ -146,7 +146,8 @@ Telegraf, token requis, HTTPS), module d'auth (users/groups dans `data/auth.json
 prox4u (poller distant API PVE) a déjà : health score déterministe, PRA, capacity planning,
 historique InfluxDB (raw 5 s / consolidated 5 min), alarmes Centreon (moteur ok⇄firing 15 s).
 
-- **Via l'API PVE seule** (données déjà pollées, coût faible) : **quorum**, **certificats**
+- **Via l'API PVE seule** (données déjà pollées, coût faible) : **quorum** (✅ fait — issue #3 :
+  métrique `cluster_quorum` + cible cluster + pénalité Health Score −25 + badge), **certificats**
   (expiration TLS endpoints), **drift NTP** (header `Date`), **audit best-practices** (agent
   manquant, CT privilégiés, autostart, snapshots bloqués, bonds/bridges, ARC ZFS, thin pool).
 - **Nécessite un agent nœud = Telegraf** : **SMART** (détection prédictive), **températures**,

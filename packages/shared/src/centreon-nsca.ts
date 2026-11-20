@@ -18,25 +18,26 @@ export type AlarmSeverity = 'ok' | 'warn' | 'crit' | 'unknown';
 
 export type AlarmOperator = '>' | '<' | '=' | '!=';
 
-/** Cible de la règle : une VM (vmid) ou un nœud Proxmox. */
-export type TargetKind = 'vm' | 'node';
+/** Cible de la règle : une VM (vmid), un nœud Proxmox, ou le cluster (quorum). */
+export type TargetKind = 'vm' | 'node' | 'cluster';
 
 export interface AlarmTarget {
   kind: TargetKind;
-  /** id de l'endpoint Proxmox surveillé. */
+  /** id de l'endpoint Proxmox surveillé (= le cluster si kind=cluster). */
   endpointId: string;
   /** vmid si kind=vm. */
   vmid?: number;
   /** nom du nœud si kind=node. */
   node?: string;
-  /** nom lisible (VM ou nœud) — affichage. */
+  /** nom lisible (VM, nœud ou cluster) — affichage. */
   label: string;
 }
 
 /**
- * Métriques surveillables. Source : snapshot poller (VmSummary / NodeHealth).
- * Les métriques de statut sont numérisées (1 = bon état, 0 = mauvais) :
- * vm_status (running=1), node_online (online=1), ip_reachable (1 IP atteignable).
+ * Métriques surveillables. Source : snapshot poller (VmSummary / NodeHealth /
+ * cluster). Les métriques de statut sont numérisées (1 = bon état, 0 = mauvais) :
+ * vm_status (running=1), node_online (online=1), ip_reachable (1 IP atteignable),
+ * cluster_quorum (quorum ok=1, perdu=0 — cible « cluster »).
  */
 export type MetricId =
   | 'cpu_pct'
@@ -50,7 +51,8 @@ export type MetricId =
   | 'node_cpu_pct'
   | 'node_ram_pct'
   | 'node_disk_pct'
-  | 'node_online';
+  | 'node_online'
+  | 'cluster_quorum';
 
 export const METRIC_IDS: MetricId[] = [
   'cpu_pct',
@@ -65,6 +67,7 @@ export const METRIC_IDS: MetricId[] = [
   'node_ram_pct',
   'node_disk_pct',
   'node_online',
+  'cluster_quorum',
 ];
 
 /** Poller Centreon cible (liste configurable — page de config du module). */
@@ -274,6 +277,7 @@ const METRIC_SHORT: Record<MetricId, string> = {
   node_ram_pct: 'NODE-RAM',
   node_disk_pct: 'NODE-DISK',
   node_online: 'NODE-ONLINE',
+  cluster_quorum: 'CLUSTER-QUORUM',
 };
 
 /**
