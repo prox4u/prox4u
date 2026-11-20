@@ -36,6 +36,7 @@ function makeCtx(endpoints: EndpointRuntime[]): AppContext {
     logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
     influx: {} as AppContext['influx'],
     auth: {} as AppContext['auth'],
+    userConfig: {} as AppContext['userConfig'],
     hub: {} as AppContext['hub'],
   };
 }

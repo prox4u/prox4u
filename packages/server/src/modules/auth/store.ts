@@ -136,6 +136,16 @@ export class AuthStore {
     return this.file;
   }
 
+  /**
+   * Remplace l'état complet (import de sauvegarde) + persistance atomique.
+   * `next` doit être un AuthFile déjà validé/fusionné (cf. mergeBackupBundle).
+   */
+  replaceState(next: AuthFile): void {
+    if (!this.file) throw new Error('AuthStore non initialisé');
+    this.file = next;
+    this.persist();
+  }
+
   /** Écriture atomique : tmp + rename, permissions 600. */
   private persist(): void {
     const tmp = `${this.filePath}.tmp`;
@@ -158,8 +168,21 @@ export class AuthStore {
     return [...this.data.users];
   }
 
-  /** Crée un utilisateur local. Lève une erreur si l'identifiant existe déjà. */
-  createUser(input: { username: string; displayName: string; passwordHash: string; role: Role; groupIds: string[] }): User {
+  /**
+   * Crée un utilisateur local. Lève une erreur si l'identifiant existe déjà.
+   * Pré-sélection des modules (userModules) : par défaut = TOUS les modules
+   * activés globalement, pour que le 1er login ne tombe pas sur un menu vide
+   * (visibilité = autorisés ∩ sélectionnés). L'admin peut passer une liste
+   * explicite via `moduleIds`.
+   */
+  createUser(input: {
+    username: string;
+    displayName: string;
+    passwordHash: string;
+    role: Role;
+    groupIds: string[];
+    moduleIds?: string[];
+  }): User {
     if (this.userByUsername(input.username)) throw new Error('username-exists');
     const ts = nowIso();
     const user: User = {
@@ -176,6 +199,9 @@ export class AuthStore {
     };
     this.data.users.push(user);
     this.setUserGroups(user.id, input.groupIds);
+    const moduleIds =
+      input.moduleIds ?? this.data.modules.filter((m) => m.globallyEnabled).map((m) => m.id);
+    this.setUserModules(user.id, moduleIds);
     this.persist();
     return user;
   }
@@ -287,6 +313,42 @@ export class AuthStore {
     for (const moduleId of [...new Set(moduleIds)]) {
       if (valid.has(moduleId)) this.data.groupModules.push({ groupId, moduleId });
     }
+  }
+
+  /**
+   * Sauvegarde ATOMIQUE d'un groupe : nom/description + membres + modules en
+   * UNE seule écriture (pas d'état partiel si un champ est invalide). Les
+   * userIds inconnus et les moduleIds hors catalogue sont ignorés.
+   */
+  saveGroup(
+    id: string,
+    patch: { name?: string; description?: string; memberIds?: string[]; moduleIds?: string[] },
+  ): Group {
+    const group = this.groupById(id);
+    if (!group) throw new Error('group-not-found');
+    if (patch.name !== undefined) {
+      if (this.data.groups.some((g) => g.id !== id && g.name === patch.name)) {
+        throw new Error('group-name-exists');
+      }
+      group.name = patch.name;
+    }
+    if (patch.description !== undefined) group.description = patch.description;
+    if (patch.memberIds !== undefined) {
+      const target = new Set(patch.memberIds);
+      this.data.userGroups = this.data.userGroups.filter((ug) => ug.groupId !== id);
+      for (const userId of target) {
+        if (this.userById(userId)) this.data.userGroups.push({ userId, groupId: id });
+      }
+    }
+    if (patch.moduleIds !== undefined) {
+      const valid = new Set(this.data.modules.map((m) => m.id));
+      this.data.groupModules = this.data.groupModules.filter((gm) => gm.groupId !== id);
+      for (const moduleId of [...new Set(patch.moduleIds)]) {
+        if (valid.has(moduleId)) this.data.groupModules.push({ groupId: id, moduleId });
+      }
+    }
+    this.persist();
+    return group;
   }
 
   // ---------- Modules ----------

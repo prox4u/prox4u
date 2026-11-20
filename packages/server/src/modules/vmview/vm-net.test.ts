@@ -64,6 +64,7 @@ function makeCtx(dir: string, routes: Record<string, (sql: string) => unknown[] 
       },
     } as unknown as AppContext['influx'],
     auth: {} as AppContext['auth'],
+    userConfig: {} as AppContext['userConfig'],
     hub: {} as AppContext['hub'],
   };
 }

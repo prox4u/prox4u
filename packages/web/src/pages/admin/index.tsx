@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Boxes, Siren, Thermometer, Users, UserCog } from 'lucide-react';
+import { Archive, Boxes, ScrollText, Siren, Thermometer, Users, UserCog } from 'lucide-react';
 import { parsePluginVersion } from '@prox4u/shared';
 import { adminApi, type AdminState } from '../../lib/auth-api';
 import { registry } from '../../core/plugin/registry';
+import { AuditLog } from '../../components/admin/audit-log';
+import { BackupManager } from '../../components/admin/backup-manager';
 import { ModuleCatalog } from '../../components/admin/module-catalog';
 import { GroupManager } from '../../components/admin/group-manager';
 import { NscaConfig } from '../../components/admin/nsca-config';
 import { SensorThresholds } from '../../components/admin/sensor-thresholds';
 import { UserManager } from '../../components/admin/user-manager';
 
-type Tab = 'catalog' | 'groups' | 'users' | 'nsca' | 'sensorThresholds';
+type Tab = 'catalog' | 'groups' | 'users' | 'nsca' | 'sensorThresholds' | 'audit' | 'backup';
 
 /**
  * Page d'administration (rôle admin uniquement — protégée par ProtectedRoute).
@@ -48,6 +50,8 @@ export function AdminPage() {
             { id: 'users', label: t('admin.tab.users'), icon: UserCog },
             { id: 'nsca', label: t('admin.tab.nsca'), icon: Siren },
             { id: 'sensorThresholds', label: t('admin.tab.sensorThresholds'), icon: Thermometer },
+            { id: 'audit', label: t('admin.tab.audit'), icon: ScrollText },
+            { id: 'backup', label: t('admin.tab.backup'), icon: Archive },
           ] as const
         ).map(({ id, label, icon: Icon }) => (
           <button
@@ -83,13 +87,27 @@ export function AdminPage() {
       ) : tab === 'sensorThresholds' ? (
         <SensorThresholds onDone={() => void load()} />
       ) : tab === 'groups' ? (
-        // Les groupes autorisent des FAMILLES entières (pas des versions).
+        // Les groupes autorisent des FAMILLES entières (pas des versions) —
+        // une entrée par famille (id + nom) pour l'affichage lisible.
         <GroupManager
           groups={state.groups}
           users={state.users}
-          moduleIds={[...new Set(state.modules.map((m) => parsePluginVersion(m.id).family))]}
+          modules={[
+            ...new Map(
+              state.modules.map((m) => {
+                const family = parsePluginVersion(m.id).family;
+                return [family, { id: family, name: m.name }];
+              }),
+            ).values(),
+          ]}
           onDone={() => void load()}
         />
+      ) : tab === 'audit' ? (
+        // Journal d'audit : autonome (chargement propre), ne dépend pas de AdminState.
+        <AuditLog />
+      ) : tab === 'backup' ? (
+        // Sauvegarde : autonome (export/import), ne dépend pas de AdminState.
+        <BackupManager />
       ) : (
         <UserManager users={state.users} groups={state.groups} onDone={() => void load()} />
       )}

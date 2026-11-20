@@ -33,6 +33,7 @@ import { AGENT_CONCURRENCY, mapLimit } from './prox4u-client.js';
 import { buildLine, type InfluxClient } from './influx.js';
 import type { WsHub } from './ws-hub.js';
 import type { AuthContext } from '../modules/auth/runtime.js';
+import type { UserConfigStore } from '../modules/userconfig/store.js';
 
 /** Endpoint surveillé : config + source de données + topologie (sites). */
 export interface EndpointRuntime {
@@ -50,8 +51,10 @@ export interface AppContext {
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
   /** client InfluxDB (désactivé si INFLUX_TOKEN vide) */
   influx: InfluxClient;
-  /** runtime d'authentification (store data/auth.json, sessions, provider) */
+  /** runtime d'authentification (store data/auth.json, sessions, provider, journal d'audit) */
   auth: AuthContext;
+  /** personnalisation d'interface par user (data/user-configs/<userId>.json) */
+  userConfig: UserConfigStore;
   /** hub WebSocket (broadcast snapshots + messages ponctuels) */
   hub: WsHub;
 }

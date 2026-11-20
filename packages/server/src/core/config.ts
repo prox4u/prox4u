@@ -103,6 +103,8 @@ export interface AppConfig {
   lunSizes: Record<string, number>;
   /** fichier des données d'authentification (data/auth.json, gitignored, chmod 600) */
   authFile: string;
+  /** journal d'audit des actions admin (data/admin-audit.jsonl, append-only, chmod 600) */
+  auditFile: string;
   /** durée de vie des sessions (ms) */
   sessionTtlMs: number;
 }
@@ -281,6 +283,7 @@ export function loadConfig(): AppConfig {
       caCert: env.INFLUX_CA_CERT ? resolvePath(env.INFLUX_CA_CERT) : '',
     },
     authFile: resolvePath('data/auth.json'),
+    auditFile: resolvePath('data/admin-audit.jsonl'),
     sessionTtlMs: env.AUTH_SESSION_TTL_HOURS * 3_600_000,
   };
   if (env.TLS_KEY && env.TLS_CERT) {

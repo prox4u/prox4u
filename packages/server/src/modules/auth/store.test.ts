@@ -90,6 +90,24 @@ describe('AuthStore', () => {
     ).toThrow('username-exists');
   });
 
+  it('createUser : pré-sélectionne par défaut TOUS les modules activés globalement', async () => {
+    const store = await freshStore();
+    // Le seed active globalement tous les modules du catalogue.
+    const allGlobal = store.listModules().filter((m) => m.globallyEnabled).map((m) => m.id).sort();
+    const u = store.createUser({ username: 'frank', displayName: 'Frank', passwordHash: 'h', role: 'user', groupIds: [] });
+    const selected = store.data.userModules.filter((um) => um.userId === u.id).map((um) => um.moduleId).sort();
+    expect(selected).toEqual(allGlobal);
+  });
+
+  it('createUser : moduleIds explicite remplace le défaut global', async () => {
+    const store = await freshStore();
+    const u = store.createUser({
+      username: 'grace', displayName: 'Grace', passwordHash: 'h', role: 'user', groupIds: [],
+      moduleIds: ['hypervision'],
+    });
+    expect(store.data.userModules).toEqual([{ userId: u.id, moduleId: 'hypervision' }]);
+  });
+
   it('met à jour un utilisateur (groupe, activation)', async () => {
     const store = await freshStore();
     const g = store.createGroup('Ops', '');
@@ -114,6 +132,44 @@ describe('AuthStore', () => {
     expect(store.data.groupModules).toHaveLength(0);
     // l'utilisateur reste intact
     expect(store.userById(u.id)).toBeDefined();
+  });
+
+  it('saveGroup : sauvegarde atomique nom + description + membres + modules', async () => {
+    const store = await freshStore();
+    const g = store.createGroup('Ops', '');
+    const u1 = store.createUser({ username: 'u1', displayName: 'U1', passwordHash: 'h', role: 'user', groupIds: [] });
+    const u2 = store.createUser({ username: 'u2', displayName: 'U2', passwordHash: 'h', role: 'user', groupIds: [] });
+    store.saveGroup(g.id, {
+      name: 'Ops2', description: 'équipe ops', memberIds: [u1.id, u2.id], moduleIds: ['hypervision', 'network'],
+    });
+    expect(store.groupById(g.id)!.name).toBe('Ops2');
+    expect(store.groupById(g.id)!.description).toBe('équipe ops');
+    expect(store.data.userGroups.filter((ug) => ug.groupId === g.id).map((ug) => ug.userId).sort())
+      .toEqual([u1.id, u2.id].sort());
+    expect(store.data.groupModules.filter((gm) => gm.groupId === g.id).map((gm) => gm.moduleId).sort())
+      .toEqual(['hypervision', 'network']);
+  });
+
+  it('saveGroup : nom en double → erreur SANS état partiel (atomicité)', async () => {
+    const store = await freshStore();
+    const g1 = store.createGroup('Ops', '');
+    store.createGroup('Autre', '');
+    const u = store.createUser({ username: 'u1', displayName: 'U1', passwordHash: 'h', role: 'user', groupIds: [] });
+    expect(() => store.saveGroup(g1.id, { name: 'Autre', memberIds: [u.id] })).toThrow('group-name-exists');
+    // rien n'a été écrit : ni le nom, ni les membres
+    expect(store.groupById(g1.id)!.name).toBe('Ops');
+    expect(store.data.userGroups.filter((ug) => ug.groupId === g1.id)).toHaveLength(0);
+  });
+
+  it('saveGroup : userIds inconnus et moduleIds hors catalogue ignorés', async () => {
+    const store = await freshStore();
+    const g = store.createGroup('Ops', '');
+    const u = store.createUser({ username: 'u1', displayName: 'U1', passwordHash: 'h', role: 'user', groupIds: [] });
+    store.saveGroup(g.id, { memberIds: [u.id, 'u_inconnu'], moduleIds: ['hypervision', 'inexistant'] });
+    expect(store.data.userGroups.filter((ug) => ug.groupId === g.id))
+      .toEqual([{ userId: u.id, groupId: g.id }]);
+    expect(store.data.groupModules.filter((gm) => gm.groupId === g.id))
+      .toEqual([{ groupId: g.id, moduleId: 'hypervision' }]);
   });
 
   it('setGroupMembers : ajoute/retire sans toucher aux autres groupes', async () => {

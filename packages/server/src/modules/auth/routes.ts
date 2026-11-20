@@ -1,12 +1,17 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import { randomBytes } from 'node:crypto';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   authorizedModuleEntries,
   authorizedModuleIds,
   computeVisibleModuleIds,
   computeVisibleVersionIds,
   isAuthorizedModuleSelection,
+  mergeBackupBundle,
+  pageAuditEntries,
+  parseBackupBundle,
   toPublicUser,
   type AuthPayload,
+  type BackupBundle,
   type Group,
   type Role,
   type User,
@@ -91,6 +96,18 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
   const throttle = new LoginThrottle();
   const maxAgeSec = Math.round(auth.sessions.ttlMs / 1000);
 
+  /**
+   * Trace une action admin dans le journal d'audit (acteur = user de la
+   * session). Ne lève pas d'exception (un journal indisponible ne doit pas
+   * faire échouer l'action). Jamais de mot de passe dans `details`.
+   */
+  function audit(req: FastifyRequest, action: string, target?: string, details?: Record<string, unknown>): void {
+    const actorId = req.authUser?.id;
+    if (!actorId) return;
+    const username = auth.store.userById(actorId)?.username ?? actorId;
+    auth.audit.append({ id: actorId, username }, action, target, details);
+  }
+
   // ---------- Public ----------
 
   app.post('/api/auth/login', async (req, reply) => {
@@ -141,6 +158,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
       return reply.code(400).send({ error: 'bad request', code: 'bad-ids' });
     }
     const created = auth.store.syncModuleCatalog(body.ids as string[]);
+    if (created > 0) audit(req, 'catalog.sync', undefined, { created });
     return { ok: true, created };
   });
 
@@ -207,6 +225,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
   app.post('/api/admin/users', async (req, reply) => {
     const body = (req.body ?? {}) as {
       username?: string; displayName?: string; password?: string; role?: Role; groupIds?: string[];
+      moduleIds?: string[];
     };
     const username = typeof body.username === 'string' ? body.username.trim() : '';
     const displayName = typeof body.displayName === 'string' ? body.displayName.trim() : '';
@@ -215,14 +234,20 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
     if (!displayName) return reply.code(400).send({ error: 'bad request', code: 'missing-display-name' });
     const issue = checkPasswordPolicy(password);
     if (issue) return reply.code(400).send({ error: 'bad request', code: `weak-${issue}` });
+    const role: Role = body.role === 'admin' ? 'admin' : 'user';
+    const groupIds = Array.isArray(body.groupIds) ? body.groupIds.filter((id) => typeof id === 'string') : [];
     try {
       const user = auth.store.createUser({
         username,
         displayName,
         passwordHash: await hashPassword(password),
-        role: body.role === 'admin' ? 'admin' : 'user',
-        groupIds: Array.isArray(body.groupIds) ? body.groupIds.filter((id) => typeof id === 'string') : [],
+        role,
+        groupIds,
+        // Absent → le store pré-sélectionne tous les modules activés globalement
+        // (pas de menu vide au 1er login).
+        moduleIds: Array.isArray(body.moduleIds) ? body.moduleIds.filter((id) => typeof id === 'string') : undefined,
       });
+      audit(req, 'user.create', user.username, { role, groupIds });
       return reply.code(201).send(authPayload(ctx, user));
     } catch (err) {
       if (storeError(reply, err)) return;
@@ -237,13 +262,17 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
     if (id === req.authUser!.id && (body.active === false || body.role === 'user')) {
       return reply.code(400).send({ error: 'bad request', code: 'self-modification' });
     }
+    const patch = {
+      displayName: typeof body.displayName === 'string' ? body.displayName.trim() : undefined,
+      role: body.role === 'admin' || body.role === 'user' ? body.role : undefined,
+      active: typeof body.active === 'boolean' ? body.active : undefined,
+      groupIds: Array.isArray(body.groupIds) ? body.groupIds.filter((gid) => typeof gid === 'string') : undefined,
+    };
     try {
-      const user = auth.store.updateUser(id, {
-        displayName: typeof body.displayName === 'string' ? body.displayName.trim() : undefined,
-        role: body.role === 'admin' || body.role === 'user' ? body.role : undefined,
-        active: typeof body.active === 'boolean' ? body.active : undefined,
-        groupIds: Array.isArray(body.groupIds) ? body.groupIds.filter((gid) => typeof gid === 'string') : undefined,
-      });
+      const user = auth.store.updateUser(id, patch);
+      // Champs effectivement transmis (jamais le mot de passe ici).
+      const changed = Object.keys(patch).filter((k) => patch[k as keyof typeof patch] !== undefined);
+      audit(req, 'user.update', user.username, { changed });
       return authPayload(ctx, user);
     } catch (err) {
       if (storeError(reply, err)) return;
@@ -271,6 +300,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
     auth.store.setMustChangePassword(id, true); // changement forcé à la prochaine connexion
     // Un reset admin invalide toutes les sessions de l'utilisateur cible.
     auth.sessions.destroyAllForUser(id);
+    audit(req, 'user.reset-password', user.username, { provided: typeof body.newPassword === 'string' && body.newPassword.length > 0 });
     return { temporaryPassword };
   });
 
@@ -280,6 +310,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
     if (!name) return reply.code(400).send({ error: 'bad request', code: 'missing-name' });
     try {
       const group = auth.store.createGroup(name, typeof body.description === 'string' ? body.description : '');
+      audit(req, 'group.create', group.name);
       return reply.code(201).send(group);
     } catch (err) {
       if (storeError(reply, err)) return;
@@ -290,11 +321,46 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
   app.patch('/api/admin/groups/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = (req.body ?? {}) as { name?: string; description?: string };
+    const patch = {
+      name: typeof body.name === 'string' ? body.name.trim() : undefined,
+      description: typeof body.description === 'string' ? body.description : undefined,
+    };
     try {
-      return auth.store.updateGroup(id, {
-        name: typeof body.name === 'string' ? body.name.trim() : undefined,
-        description: typeof body.description === 'string' ? body.description : undefined,
-      });
+      const group = auth.store.updateGroup(id, patch);
+      const changed = Object.keys(patch).filter((k) => patch[k as keyof typeof patch] !== undefined);
+      audit(req, 'group.update', group.name, { changed });
+      return group;
+    } catch (err) {
+      if (storeError(reply, err)) return;
+      throw err;
+    }
+  });
+
+  /**
+   * Sauvegarde ATOMIQUE d'un groupe : nom + description + membres + modules en
+   * UNE seule écriture (le web « Enregistrer le groupe » n'appelle plus 3
+   * endpoints séquentiels — plus d'état partiel si un appel échoue).
+   */
+  app.put('/api/admin/groups/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as {
+      name?: string; description?: string; memberIds?: unknown; moduleIds?: unknown;
+    };
+    const name = typeof body.name === 'string' ? body.name.trim() : undefined;
+    if (name !== undefined && !name) {
+      return reply.code(400).send({ error: 'bad request', code: 'missing-name' });
+    }
+    const patch = {
+      name,
+      description: typeof body.description === 'string' ? body.description : undefined,
+      memberIds: Array.isArray(body.memberIds) ? body.memberIds.filter((u): u is string => typeof u === 'string') : undefined,
+      moduleIds: Array.isArray(body.moduleIds) ? body.moduleIds.filter((m): m is string => typeof m === 'string') : undefined,
+    };
+    try {
+      const group = auth.store.saveGroup(id, patch);
+      const changed = Object.keys(patch).filter((k) => patch[k as keyof typeof patch] !== undefined);
+      audit(req, 'group.update', group.name, { changed, atomic: true });
+      return group;
     } catch (err) {
       if (storeError(reply, err)) return;
       throw err;
@@ -303,8 +369,10 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
 
   app.delete('/api/admin/groups/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
+    const groupName = auth.store.groupById(id)?.name;
     try {
       auth.store.deleteGroup(id);
+      audit(req, 'group.delete', groupName ?? id);
       return { ok: true };
     } catch (err) {
       if (storeError(reply, err)) return;
@@ -316,8 +384,17 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
     const { id } = req.params as { id: string };
     const body = (req.body ?? {}) as { userIds?: unknown };
     if (!Array.isArray(body.userIds)) return reply.code(400).send({ error: 'bad request', code: 'bad-user-ids' });
+    const group = auth.store.groupById(id);
+    if (!group) return reply.code(404).send({ error: 'not found', code: 'group-not-found' });
+    const before = auth.store.data.userGroups.filter((ug) => ug.groupId === id).map((ug) => ug.userId);
+    const knownUsers = new Set(auth.store.listUsers().map((u) => u.id));
+    const after = body.userIds.filter((u): u is string => typeof u === 'string').filter((u) => knownUsers.has(u));
     try {
-      auth.store.setGroupMembers(id, body.userIds.filter((u): u is string => typeof u === 'string'));
+      auth.store.setGroupMembers(id, after);
+      audit(req, 'group.members', group.name, {
+        added: after.filter((u) => !before.includes(u)),
+        removed: before.filter((u) => !after.includes(u)),
+      });
       return { ok: true };
     } catch (err) {
       if (storeError(reply, err)) return;
@@ -329,8 +406,17 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
     const { id } = req.params as { id: string };
     const body = (req.body ?? {}) as { moduleIds?: unknown };
     if (!Array.isArray(body.moduleIds)) return reply.code(400).send({ error: 'bad request', code: 'bad-module-ids' });
+    const group = auth.store.groupById(id);
+    if (!group) return reply.code(404).send({ error: 'not found', code: 'group-not-found' });
+    const before = auth.store.data.groupModules.filter((gm) => gm.groupId === id).map((gm) => gm.moduleId);
+    const knownModules = new Set(auth.store.listModules().map((m) => m.id));
+    const after = body.moduleIds.filter((m): m is string => typeof m === 'string').filter((m) => knownModules.has(m));
     try {
-      auth.store.setGroupModules(id, body.moduleIds.filter((m): m is string => typeof m === 'string'));
+      auth.store.setGroupModules(id, after);
+      audit(req, 'group.modules', group.name, {
+        added: after.filter((m) => !before.includes(m)),
+        removed: before.filter((m) => !after.includes(m)),
+      });
       return { ok: true };
     } catch (err) {
       if (storeError(reply, err)) return;
@@ -346,11 +432,83 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, secure
     }
     try {
       auth.store.setModuleGlobal(id, body.globallyEnabled);
+      audit(req, 'module.toggle', id, { globallyEnabled: body.globallyEnabled });
       return { ok: true };
     } catch (err) {
       if (storeError(reply, err)) return;
       throw err;
     }
+  });
+
+  /**
+   * Journal d'audit des actions admin (lecture) : paginé depuis la plus
+   * récente, filtres action/acteur. Rôle admin (guard).
+   */
+  app.get('/api/admin/audit', async (req) => {
+    const q = req.query as { limit?: string; offset?: string; action?: string; actor?: string };
+    const limit = q.limit !== undefined ? Number.parseInt(q.limit, 10) : undefined;
+    const offset = q.offset !== undefined ? Number.parseInt(q.offset, 10) : undefined;
+    return pageAuditEntries(auth.audit.readAll(), {
+      limit: Number.isFinite(limit) ? limit : undefined,
+      offset: Number.isFinite(offset) ? offset : undefined,
+      action: typeof q.action === 'string' && q.action ? q.action : undefined,
+      actor: typeof q.actor === 'string' && q.actor ? q.actor : undefined,
+    });
+  });
+
+  // ---------- Sauvegarde : export / import (users + groupes + graphiques) ----------
+
+  /**
+   * Export : bundle JSON = état de data/auth.json (users, groupes, modules,
+   * jointures — dont les hashes argon2id) + configs de graphiques par user
+   * (data/user-configs). Rôle admin (contient les hashes).
+   */
+  app.get('/api/admin/export', async (req) => {
+    const f = auth.store.data;
+    const userConfigs: BackupBundle['userConfigs'] = {};
+    for (const u of auth.store.listUsers()) {
+      userConfigs[u.id] = ctx.userConfig.load(u.id);
+    }
+    const bundle: BackupBundle = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      auth: f,
+      userConfigs,
+    };
+    audit(req, 'backup.export', undefined, {
+      users: f.users.length,
+      groups: f.groups.length,
+      userConfigs: Object.values(userConfigs).filter((c) => c !== null).length,
+    });
+    return bundle;
+  });
+
+  /**
+   * Import : fusion par username/nom (les comptes/groupes locaux absents du
+   * bundle sont conservés) + réécriture des configs de graphiques remappées.
+   * Le bundle est validé (parseBackupBundle) puis fusionné (mergeBackupBundle,
+   * fonction pure testée).
+   */
+  app.post('/api/admin/import', async (req, reply) => {
+    const bundle = parseBackupBundle(req.body);
+    if (!bundle) return reply.code(400).send({ error: 'bad request', code: 'bad-bundle' });
+    const result = mergeBackupBundle(auth.store.data, bundle, {
+      newId: (prefix) => `${prefix}_${randomBytes(6).toString('hex')}`,
+      nowIso: () => new Date().toISOString(),
+    });
+    auth.store.replaceState(result.nextAuth);
+    // Configs de graphiques : remappées par username → id local, réécrites.
+    let userConfigsRestored = 0;
+    for (const [bundleUserId, config] of Object.entries(bundle.userConfigs)) {
+      if (!config) continue; // null = jamais personnalisé → on ne touche pas au local
+      const localUserId = result.userMap[bundleUserId];
+      if (localUserId) {
+        ctx.userConfig.save(localUserId, config);
+        userConfigsRestored += 1;
+      }
+    }
+    audit(req, 'backup.import', undefined, { ...result.stats, userConfigsRestored });
+    return { ok: true, ...result.stats, userConfigsRestored };
   });
 
 }
