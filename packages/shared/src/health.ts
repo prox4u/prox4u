@@ -5,6 +5,7 @@ import {
   NodeHealth,
   PraReport,
   THRESHOLDS,
+  type QuorumState,
 } from './types.js';
 
 /**
@@ -14,6 +15,7 @@ import {
  *
  * Pénalités :
  *   - nœud hors ligne            : −25 par nœud
+ *   - quorum cluster perdu       : −25   (guests actifs mais cluster en lecture seule)
  *   - CPU cluster  > 90 %        : −20   (ou > 80 % : −10)
  *   - RAM cluster  > 90 %        : −20   (ou > 80 % : −10)
  *   - pire stockage > 90 %       : −15   (ou > 80 % : −8)
@@ -25,6 +27,7 @@ export function computeHealthScore(
   nodes: NodeHealth[],
   kpis: KpiSummary,
   pra: PraReport,
+  cluster?: { quorum: number | null; quorumState: QuorumState | null },
 ): HealthScore {
   const penalties: HealthPenalty[] = [];
 
@@ -32,6 +35,14 @@ export function computeHealthScore(
     if (!n.online) {
       penalties.push({ reasonKey: 'health.penalty.nodeDown', params: { node: n.node }, points: 25 });
     }
+  }
+
+  if (cluster?.quorumState === 'lost') {
+    penalties.push({
+      reasonKey: 'health.penalty.quorumLost',
+      params: { online: nodes.filter((n) => n.online).length, total: nodes.length },
+      points: 25,
+    });
   }
 
   const resourcePenalty = (pct: number, critKey: string, warnKey: string) => {

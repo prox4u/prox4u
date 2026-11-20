@@ -82,6 +82,19 @@ describe('computeHealthScore', () => {
     expect(computeHealthScore([], okKpis(), okPra('na')).score).toBe(100);
   });
 
+  it('quorum perdu → −25 (guests actifs mais cluster en lecture seule)', () => {
+    const h = computeHealthScore([okNode('a'), okNode('b')], okKpis(), okPra(), { quorum: 2, quorumState: 'lost' });
+    expect(h.score).toBe(75);
+    expect(h.penalties[0].reasonKey).toBe('health.penalty.quorumLost');
+    expect(h.penalties[0].params).toEqual({ online: 2, total: 2 });
+  });
+
+  it('quorum ok / inconnu / absent → aucune pénalité', () => {
+    expect(computeHealthScore([okNode('a')], okKpis(), okPra(), { quorum: 1, quorumState: 'ok' }).score).toBe(100);
+    expect(computeHealthScore([okNode('a')], okKpis(), okPra(), { quorum: null, quorumState: null }).score).toBe(100);
+    expect(computeHealthScore([okNode('a')], okKpis(), okPra()).score).toBe(100);
+  });
+
   it('borné à 0 et libellés corrects', () => {
     const h = computeHealthScore(
       [{ ...okNode('a'), online: false }, { ...okNode('b'), online: false }],

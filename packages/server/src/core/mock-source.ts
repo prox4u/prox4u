@@ -1,4 +1,4 @@
-import type { AgentFsUsage, ParsedVmNet, PveNodeStatus, PvePool, PveStorage, PveVmResource, PveVmSnapshot, RrddataPoint, VmAgentNetIf, VmOsInfo } from '@prox4u/shared';
+import type { AgentFsUsage, ParsedVmNet, PveClusterStatus, PveNodeStatus, PvePool, PveStorage, PveVmResource, PveVmSnapshot, QuorumState, RrddataPoint, VmAgentNetIf, VmOsInfo } from '@prox4u/shared';
 import type { DataSource, NodeNetwork, Timeframe, VmConfigInfo } from './data-source.js';
 
 const GB = 1024 ** 3;
@@ -155,9 +155,9 @@ export class MockSource implements DataSource {
     return Math.max(0.01, Math.min(0.99, v + (Math.random() - 0.5) * amp));
   }
 
-  async getNodes(): Promise<PveNodeStatus[]> {
+  async getNodes(): Promise<PveClusterStatus> {
     const offline = PROFILES[this.scenario].offline;
-    return this.sites.flatMap((s, si) =>
+    const nodes = this.sites.flatMap((s, si) =>
       s.nodes.map((node) => {
         const online = node !== offline;
         if (!online) {
@@ -189,6 +189,11 @@ export class MockSource implements DataSource {
         } satisfies PveNodeStatus;
       }),
     );
+    // Quorum de démo : majorité des nœuds. Le scénario « critical » force la perte
+    // de quorum pour tester la chaîne complète (pénalité health + alerte + badge).
+    const quorum = Math.floor(nodes.length / 2) + 1;
+    const quorumState: QuorumState = this.scenario === 'critical' ? 'lost' : 'ok';
+    return { nodes, quorum, quorumState };
   }
 
   async getResources(): Promise<PveVmResource[]> {
@@ -410,7 +415,7 @@ export class MockSource implements DataSource {
     let memNowBytes: number;
     let memTotal: number;
     if (kind === 'node') {
-      const nodes = await this.getNodes();
+      const { nodes } = await this.getNodes();
       const n = nodes.find((x) => x.node === node);
       cpuNow = n?.cpu ?? 0;
       memNowBytes = n?.memUsed ?? 0;

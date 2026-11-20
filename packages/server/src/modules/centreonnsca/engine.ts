@@ -10,14 +10,14 @@ import {
   type MultiDashboardSnapshot,
 } from '@prox4u/shared';
 import type { Poller } from '../../core/poller.js';
-import { nodeMetricValue, vmMetricValue } from './metrics.js';
+import { clusterMetricValue, nodeMetricValue, vmMetricValue } from './metrics.js';
 import { sendNsca, type NscaSendResult } from './nsca.js';
 import type { NscaStore } from './store.js';
 
 /**
  * Engine d'alarmes — tick 15 s. Pour chaque règle active (module actif) :
- *  1. échantillonne la métrique depuis le snapshot poller (VmSummary/NodeHealth)
- *     → ring-buffer en mémoire (pas de dépendance InfluxDB) ;
+ *  1. échantillonne la métrique depuis le snapshot poller (VmSummary/NodeHealth/
+ *     cluster) → ring-buffer en mémoire (pas de dépendance InfluxDB) ;
  *  2. évalue la fenêtre de confirmation (evaluateAlarm) ;
  *  3. machine à états ok ⇄ firing : envoie une trame NSCA À CHAQUE transition
  *     (alarme = code sévérité, récupération = code 0) ;
@@ -88,9 +88,12 @@ export class AlarmEngine {
     if (rule.target.kind === 'vm') {
       const vm = snap.vms.find((v) => v.vmid === rule.target.vmid);
       if (vm) value = vmMetricValue(rule.metric, vm);
-    } else {
+    } else if (rule.target.kind === 'node') {
       const node = snap.nodes.find((n) => n.node === rule.target.node);
       if (node) value = nodeMetricValue(rule.metric, node);
+    } else {
+      // cluster (quorum) : échantillon depuis le snapshot cluster de l'endpoint.
+      value = clusterMetricValue(rule.metric, snap.cluster);
     }
 
     const buf = this.buffers.get(rule.id) ?? [];

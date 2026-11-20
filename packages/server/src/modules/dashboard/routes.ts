@@ -268,7 +268,7 @@ async function computeCapacity(ctx: AppContext, poller: Poller, ep: EndpointRunt
       ctx.logger.warn(`capacity(${ep.id}) : InfluxDB indisponible → repli RRD (${(err as Error).message})`);
     }
   }
-  const nodes = (await ep.source.getNodes()).filter((n) => n.online);
+  const nodes = (await ep.source.getNodes()).nodes.filter((n) => n.online);
   const series = await Promise.all(
     nodes.map((n) => ep.source.getRrddata('node', n.node, undefined, 'month')),
   );
@@ -357,7 +357,7 @@ async function computeNodeCapacity(ctx: AppContext, ep: EndpointRuntime, nodeNam
       ctx.logger.warn(`node-capacity(${ep.id}/${nodeName}) : InfluxDB indisponible → repli RRD (${(err as Error).message})`);
     }
   }
-  const nodes = (await ep.source.getNodes()).filter((n) => n.online);
+  const nodes = (await ep.source.getNodes()).nodes.filter((n) => n.online);
   const node = nodes.find((n) => n.node === nodeName);
   if (!node) {
     return nodeCapacityFromDaily([], 'rrd');
@@ -388,7 +388,7 @@ async function computeTrends(ctx: AppContext, ep: EndpointRuntime): Promise<Tren
     }
   }
   if (!trend7d) {
-    const nodes = (await ep.source.getNodes()).filter((n) => n.online);
+    const nodes = (await ep.source.getNodes()).nodes.filter((n) => n.online);
     const series = await Promise.all(
       nodes.map((n) => ep.source.getRrddata('node', n.node, undefined, 'week')),
     );
@@ -504,7 +504,7 @@ async function computeMetrics(
   // chaque nœud est interrogé via la source de son endpoint (indispensable en mode « all »)
   const pairs: { src: EndpointRuntime['source']; node: PveNodeStatus }[] = [];
   for (const e of eps) {
-    for (const n of await e.source.getNodes()) if (n.online) pairs.push({ src: e.source, node: n });
+    for (const n of (await e.source.getNodes()).nodes) if (n.online) pairs.push({ src: e.source, node: n });
   }
   const filtered = pairs.filter((p) => !node || p.node.node === node);
   const series = await Promise.all(
@@ -604,7 +604,7 @@ async function computeOvercommitRisk(
   let capacityCores = kpis?.cpuTotalCores ?? 0;
   let capacityRam = kpis?.ramTotalBytes ?? 0;
   if (capacityCores === 0 && capacityRam === 0) {
-    const nodes = (await ep.source.getNodes()).filter((n) => n.online);
+    const nodes = (await ep.source.getNodes()).nodes.filter((n) => n.online);
     capacityCores = nodes.reduce((s, n) => s + (n.cpus ?? 0), 0);
     capacityRam = nodes.reduce((s, n) => s + (n.memTotal ?? 0), 0);
   }
@@ -728,7 +728,7 @@ export function registerDashboard(app: FastifyInstance, ctx: AppContext, poller:
       reply.code(400).send({ error: 'missing node param' });
       return;
     }
-    const nodes = await ep.source.getNodes();
+    const { nodes } = await ep.source.getNodes();
     if (!nodes.some((n) => n.node === nodeName)) {
       reply.code(404).send({ error: `unknown node: ${nodeName}` });
       return;

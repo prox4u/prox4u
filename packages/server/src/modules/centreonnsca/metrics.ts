@@ -1,13 +1,15 @@
-import type { MetricId, NodeHealth, VmSummary } from '@prox4u/shared';
+import type { MetricId, NodeHealth, QuorumState, VmSummary } from '@prox4u/shared';
 
 /**
  * Extraction de la valeur NUMÉRIQUE d'une métrique depuis le snapshot poller
- * (VmSummary / NodeHealth). C'est cette valeur que l'engine compare au seuil.
+ * (VmSummary / NodeHealth / cluster). C'est cette valeur que l'engine compare
+ * au seuil.
  *
  * Convention : les métriques de statut sont 1 = bon état, 0 = mauvais état :
- * - vm_status     : running = 1, sinon 0
- * - ip_reachable  : au moins une IP détectée = 1, sinon 0
- * - node_online   : online = 1, sinon 0
+ * - vm_status      : running = 1, sinon 0
+ * - ip_reachable   : au moins une IP détectée = 1, sinon 0
+ * - node_online    : online = 1, sinon 0
+ * - cluster_quorum : quorum ok = 1, perdu = 0 (null si inconnu)
  *
  * Retourne null si la valeur est indisponible (VM arrêtée pour cpu/ram/net,
  * null pour disk…) — l'engine gère le null (pas d'échantillon).
@@ -68,6 +70,19 @@ export function nodeMetricValue(metric: MetricId, n: NodeHealth): number | null 
   }
 }
 
+/**
+ * Valeur d'une métrique cluster. Convention statut : 1 = bon état, 0 = mauvais.
+ * cluster_quorum : quorum ok = 1, perdu = 0 ; null si l'état est inconnu.
+ */
+export function clusterMetricValue(metric: MetricId, c: { quorumState: QuorumState | null }): number | null {
+  switch (metric) {
+    case 'cluster_quorum':
+      return c.quorumState == null ? null : c.quorumState === 'ok' ? 1 : 0;
+    default:
+      return null;
+  }
+}
+
 /** Métriques applicables à un type de cible (pour le formulaire). */
 export const VM_METRICS: MetricId[] = [
   'cpu_pct',
@@ -81,3 +96,5 @@ export const VM_METRICS: MetricId[] = [
 ];
 
 export const NODE_METRICS: MetricId[] = ['node_cpu_pct', 'node_ram_pct', 'node_disk_pct', 'node_online'];
+
+export const CLUSTER_METRICS: MetricId[] = ['cluster_quorum'];

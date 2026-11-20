@@ -2213,9 +2213,12 @@ TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète da
 plugin **`node-sensors` v1** (section « Fait » ci-dessus) + **bibliothèque de widgets complétée**
 (7 graphiques ProxMenux portés dans `hypervision_v3`/`vm-view_v4` — section « Fait » ci-dessus ;
 restent latence ping + GPU, données non collectées). Reste en P0 : **règles d'alarme**
-(SMART critique, température > seuil effectif, unité échouée) dans `centreonnsca`. P1 quorum (donnée déjà pollée) ·
-P2 moteur d'alarmes v2 (hystérésis/suppression/ack) · P3 audit best-practices · P4 PBS +
-événements · P5 certificats + NTP.
+(SMART critique, température > seuil effectif, unité échouée) dans `centreonnsca` (issue #4).
+**P1 quorum livré** (issue #3) : champ `quorum`/`quorumState` dans le snapshot (entrée cluster
+de `/cluster/status`), métrique `cluster_quorum` + cible `kind: 'cluster'` dans `centreonnsca`,
+pénalité Health Score −25, badge page cluster + vue d'ensemble, alerte crit — **validation E2E
+en attente** (arrêt du nœud `nfs` → quorum lost). P2 moteur d'alarmes v2 (hystérésis/suppression/ack) ·
+P3 audit best-practices · P4 PBS + événements · P5 certificats + NTP.
 
 ### En attente de décision utilisateur
 - [x] **Commit** : **fait le 2026-11-10** — commit `a492724` sur `master` (tout le travail accumulé : livraisons 2026-10-30, capteurs, seuils tri-state SMART, dédoublonnage iSCSI/LVM, cartographie, hiérarchie iSCSI → LVM, graphiques VG + `local`). L'ancienne consigne « pas encore de GIT » (branche `refactor/plugin-architecture`) est caduque : le repo vit désormais sur `master` (auto-backups + commits explicites). Les dossiers de référence `ProxMenux/` et `project-pegaprox/` ont été sortis du repo le 2026-10-24 (→ `/home/opencode/projet/`).

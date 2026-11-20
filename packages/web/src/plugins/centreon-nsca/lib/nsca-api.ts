@@ -51,9 +51,15 @@ export interface TargetNode {
   node: string;
   online: boolean;
 }
+/** Cible du formulaire : cluster (quorum) — un endpoint = un cluster Proxmox. */
+export interface TargetCluster {
+  endpointId: string;
+  name: string;
+}
 export interface AlarmTargets {
   vms: TargetVm[];
   nodes: TargetNode[];
+  clusters: TargetCluster[];
   mappings: { key: string; host: string }[];
 }
 
@@ -63,7 +69,7 @@ export interface AlarmList {
   pollers: CentreonPoller[];
   stats: AlarmStats;
   config: CentreonConfig;
-  metrics: { vm: MetricId[]; node: MetricId[] };
+  metrics: { vm: MetricId[]; node: MetricId[]; cluster: MetricId[] };
 }
 
 /** Payload GET /api/alarms/config. */

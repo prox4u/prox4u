@@ -10,7 +10,7 @@ import {
   type VmMapping,
 } from '@prox4u/shared';
 import type { Poller } from '../../core/poller.js';
-import { NODE_METRICS, VM_METRICS } from './metrics.js';
+import { CLUSTER_METRICS, NODE_METRICS, VM_METRICS } from './metrics.js';
 import { sendNsca } from './nsca.js';
 import { provisionService } from './provision.js';
 import type { NscaStore } from './store.js';
@@ -53,19 +53,21 @@ export function registerAlarmRoutes(
       pollers: store.listPollers(),
       stats: store.stats(),
       config: maskConfig(store.getConfig()),
-      metrics: { vm: VM_METRICS, node: NODE_METRICS },
+      metrics: { vm: VM_METRICS, node: NODE_METRICS, cluster: CLUSTER_METRICS },
     };
   });
 
-  /** Cibles disponibles : VMs (par endpoint) + nœuds. */
+  /** Cibles disponibles : VMs (par endpoint) + nœuds + clusters (quorum). */
   app.get('/api/alarms/targets', async () => {
     const multi = _poller.getMulti();
     const vms: Array<{ endpointId: string; vmid: number; name: string; node: string }> = [];
     const nodes: Array<{ endpointId: string; node: string; online: boolean }> = [];
+    const clusters: Array<{ endpointId: string; name: string }> = [];
     const mappings = new Map(store.listMappings().map((m) => [`${m.endpointId}/${m.vmid}`, m.centreonHost]));
     if (multi) {
       for (const ep of multi.endpoints) {
         if (!ep.snapshot) continue;
+        clusters.push({ endpointId: ep.id, name: ep.snapshot.cluster.name });
         for (const v of ep.snapshot.vms) {
           vms.push({ endpointId: ep.id, vmid: v.vmid, name: v.name, node: v.node });
         }
@@ -74,7 +76,7 @@ export function registerAlarmRoutes(
         }
       }
     }
-    return { vms, nodes, mappings: [...mappings.entries()].map(([k, host]) => ({ key: k, host })) };
+    return { vms, nodes, clusters, mappings: [...mappings.entries()].map(([k, host]) => ({ key: k, host })) };
   });
 
   /**
@@ -89,7 +91,12 @@ export function registerAlarmRoutes(
     if (!body.target?.endpointId || !body.target.label) missing.push('target');
     if (body.target?.kind === 'vm' && body.target.vmid === undefined) missing.push('target.vmid');
     if (body.target?.kind === 'node' && !body.target.node) missing.push('target.node');
-    if (!body.metric || !(VM_METRICS as MetricId[]).includes(body.metric) && !(NODE_METRICS as MetricId[]).includes(body.metric)) {
+    if (
+      !body.metric ||
+      (!(VM_METRICS as MetricId[]).includes(body.metric) &&
+        !(NODE_METRICS as MetricId[]).includes(body.metric) &&
+        !(CLUSTER_METRICS as MetricId[]).includes(body.metric))
+    ) {
       missing.push('metric');
     }
     if (typeof body.threshold !== 'number') missing.push('threshold');

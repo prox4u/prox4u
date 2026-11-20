@@ -14,6 +14,7 @@ import {
   type PoolAggregate,
   type PveNodeStatus,
   type PveVmResource,
+  type QuorumState,
   type Site,
   type StorageDiskAlloc,
   type StorageVolume,
@@ -174,11 +175,12 @@ export class Poller {
   private async pollEndpoint(st: EndpointState): Promise<EndpointSnapshot> {
     const { rt } = st;
     try {
-      const [nodes, vms, storages] = await Promise.all([
+      const [cluster, vms, storages] = await Promise.all([
         rt.source.getNodes(),
         rt.source.getResources(),
         rt.source.getStorage(),
       ]);
+      const nodes = cluster.nodes;
 
       // Réchauffage BACKGROUND des données agent (fsinfo/osinfo/interfaces) — source unique
       // partagée avec la route proxmox-inventory. `void` (hors du tick) + single-flight : le
@@ -295,8 +297,15 @@ export class Poller {
       kpis.storageDaysToFull = buildForecast('disk', this.getDiskHistory(rt.id)).daysTo90;
 
       const pra = computePra(rt.sites, nodes, vms);
-      const alerts = buildAlerts(nodeHealth, kpis, pra);
-      const health = computeHealthScore(nodeHealth, kpis, pra);
+      const clusterInfo = {
+        name: rt.name,
+        nodesOnline: online.length,
+        nodesTotal: nodes.length,
+        quorum: cluster.quorum,
+        quorumState: cluster.quorumState,
+      };
+      const alerts = buildAlerts(nodeHealth, kpis, pra, clusterInfo);
+      const health = computeHealthScore(nodeHealth, kpis, pra, clusterInfo);
 
       const storageInfos = storWithCap.map((s) => ({
         storage: s.storage,
@@ -352,11 +361,7 @@ export class Poller {
       const snap: DashboardSnapshot = {
         generatedAt: Date.now(),
         mock: rt.source.isMock,
-        cluster: {
-          name: rt.name,
-          nodesOnline: online.length,
-          nodesTotal: nodes.length,
-        },
+        cluster: clusterInfo,
         sites: rt.sites,
         health,
         kpis,
@@ -625,8 +630,21 @@ export class Poller {
   }
 }
 
-function buildAlerts(nodes: NodeHealth[], kpis: KpiSummary, pra: DashboardSnapshot['pra']): Alert[] {
+function buildAlerts(
+  nodes: NodeHealth[],
+  kpis: KpiSummary,
+  pra: DashboardSnapshot['pra'],
+  cluster?: { quorumState: QuorumState | null },
+): Alert[] {
   const alerts: Alert[] = [];
+  if (cluster?.quorumState === 'lost') {
+    alerts.push({
+      id: 'quorum-lost',
+      severity: 'crit',
+      messageKey: 'alerts.quorumLost',
+      params: { online: nodes.filter((n) => n.online).length, total: nodes.length },
+    });
+  }
   for (const n of nodes) {
     if (!n.online) alerts.push({ id: `node-down-${n.node}`, severity: 'crit', messageKey: 'alerts.nodeDown', params: { node: n.node } });
   }

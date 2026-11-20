@@ -1,15 +1,18 @@
 import { Agent, fetch } from 'undici';
 import {
+  deriveQuorumState,
   parseVmNets,
   subnetOf,
   type AgentFsUsage,
   type NodeBridge,
   type NodeNic,
+  type PveClusterStatus,
   type PveNodeStatus,
   type PvePool,
   type PveStorage,
   type PveVmResource,
   type PveVmSnapshot,
+  type QuorumState,
   type RrddataPoint,
   type VmAgentNetIf,
   type VmDisk,
@@ -149,14 +152,28 @@ export class Prox4uClient implements DataSource {
     return json.data;
   }
 
-  async getNodes(): Promise<PveNodeStatus[]> {
+  async getNodes(): Promise<PveClusterStatus> {
     // /cluster/status : le nom du nœud est dans `name` (pas `node`) ;
-    // sur un cluster, la 1re entrée est le cluster lui-même (sans type/online) → on ne garde que les vrais nœuds
-    const cluster = await this.get<
-      Array<{ name?: string; node?: string; type?: string; online: number | boolean; ip?: string }>
+    // sur un cluster, la 1re entrée est le cluster lui-même (type=cluster) → on ne garde que les vrais nœuds.
+    // L'entrée cluster porte le quorum : PVE 9 expose `quorate` (1 = ok, 0 = perdu) + `nodes`
+    // (taille du cluster) ; d'autres versions `quorum_state` ('ok'/'lost') et/ou `quorum`
+    // (majorité requise). Le quorum requis est calculé (floor(total/2)+1) si non exposé.
+    const raw = await this.get<
+      Array<{
+        name?: string;
+        node?: string;
+        type?: string;
+        online: number | boolean;
+        ip?: string;
+        quorate?: number;
+        quorum?: number;
+        quorum_state?: string;
+        nodes?: number;
+      }>
     >('/cluster/status');
-    return (await Promise.all(
-      cluster.filter((c) => c.type === 'node').map(async (c) => {
+    const clusterEntry = raw.find((c) => c.type !== 'node');
+    const nodes = (await Promise.all(
+      raw.filter((c) => c.type === 'node').map(async (c) => {
         const nodeName = c.name ?? c.node;
         if (!nodeName) return null;
         const online = c.online === 1 || c.online === true;
@@ -190,6 +207,20 @@ export class Prox4uClient implements DataSource {
         }
       }),
     )).filter((n): n is PveNodeStatus => n !== null);
+    // Standalone (pas d'entrée cluster) → pas de notion de quorum (null = n/a).
+    if (!clusterEntry) return { nodes, quorum: null, quorumState: null };
+    // Quorum requis (majorité) : champ `quorum` si exposé, sinon floor(total/2)+1.
+    const totalNodes = num(clusterEntry.nodes) ?? nodes.length;
+    const quorum = num(clusterEntry.quorum) ?? (totalNodes > 0 ? Math.floor(totalNodes / 2) + 1 : null);
+    // État rapporté : `quorate` (PVE 9, 1/0) d'abord, sinon `quorum_state` ('ok'/'lost').
+    const quorate = num(clusterEntry.quorate);
+    const reported: QuorumState | null =
+      quorate === 1 ? 'ok'
+      : quorate === 0 ? 'lost'
+      : clusterEntry.quorum_state === 'lost' ? 'lost'
+      : clusterEntry.quorum_state === 'ok' ? 'ok'
+      : null;
+    return { nodes, quorum, quorumState: deriveQuorumState(nodes.filter((n) => n.online).length, quorum, reported) };
   }
 
   async getResources(): Promise<PveVmResource[]> {
@@ -361,7 +392,7 @@ export class Prox4uClient implements DataSource {
    * passerelle dans `gateway`.
    */
   async getNetwork(): Promise<NodeNetwork[]> {
-    const nodes = await this.getNodes();
+    const { nodes } = await this.getNodes();
     return (await Promise.all(
       nodes.map(async (n): Promise<NodeNetwork> => {
         if (!n.online) return { node: n.node, online: false, ip: n.ip ?? null, nics: [], bridges: [] };

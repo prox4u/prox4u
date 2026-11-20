@@ -1,5 +1,6 @@
 export * from './types.js';
 export { computeHealthScore } from './health.js';
+export { deriveQuorumState } from './quorum.js';
 export { computePra } from './pra.js';
 export { linearRegression, buildForecast } from './capacity.js';
 export type { RegressionResult } from './capacity.js';

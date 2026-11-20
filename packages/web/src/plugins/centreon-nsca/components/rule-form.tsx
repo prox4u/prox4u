@@ -11,12 +11,12 @@ import {
 } from '@prox4u/shared';
 import { Button } from '../../../components/ui/button';
 import { Input, Select } from '../../../components/ui/input';
-import type { TargetNode, TargetVm } from '../lib/nsca-api';
+import type { TargetCluster, TargetNode, TargetVm } from '../lib/nsca-api';
 import type { MetricIdList } from '../lib/types';
 
 export interface RuleFormValues {
   name: string;
-  kind: 'vm' | 'node';
+  kind: 'vm' | 'node' | 'cluster';
   endpointId: string;
   vmid: number | null;
   node: string;
@@ -35,12 +35,14 @@ export interface RuleFormValues {
 interface Props {
   vms: TargetVm[];
   nodes: TargetNode[];
+  clusters: TargetCluster[];
   pollers: CentreonPoller[];
   /** host Centreon déjà mappé pour une VM (override prioritaire). */
   mappingHost?: (endpointId: string, vmid: number) => string | undefined;
   initial?: AlarmRule;
   metricsVm: MetricIdList;
   metricsNode: MetricIdList;
+  metricsCluster: MetricIdList;
   onSubmit: (values: RuleFormValues) => Promise<void>;
   onCancel?: () => void;
   submitLabel: string;
@@ -55,7 +57,7 @@ const SEVERITIES: AlarmSeverity[] = ['warn', 'crit', 'unknown'];
  * - service Centreon : defaultServiceName(métrique, nom de règle) — recalculé
  *   à chaque changement de métrique/nom, mais reste édit manuellement.
  */
-export function RuleForm({ vms, nodes, pollers, mappingHost, initial, metricsVm, metricsNode, onSubmit, onCancel, submitLabel }: Props) {
+export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, metricsVm, metricsNode, metricsCluster, onSubmit, onCancel, submitLabel }: Props) {
   const { t } = useTranslation();
   const [values, setValues] = useState<RuleFormValues>(() =>
     initial
@@ -79,7 +81,7 @@ export function RuleForm({ vms, nodes, pollers, mappingHost, initial, metricsVm,
       : {
           name: '',
           kind: 'vm',
-          endpointId: vms[0]?.endpointId ?? nodes[0]?.endpointId ?? '',
+          endpointId: vms[0]?.endpointId ?? nodes[0]?.endpointId ?? clusters[0]?.endpointId ?? '',
           vmid: vms[0]?.vmid ?? null,
           node: nodes[0]?.node ?? '',
           metric: 'cpu_pct',
@@ -100,12 +102,21 @@ export function RuleForm({ vms, nodes, pollers, mappingHost, initial, metricsVm,
   const [error, setError] = useState<string | null>(null);
 
   const endpointIds = useMemo(
-    () => [...new Set([...vms.map((v) => v.endpointId), ...nodes.map((n) => n.endpointId)])],
-    [vms, nodes],
+    () => [...new Set([...vms.map((v) => v.endpointId), ...nodes.map((n) => n.endpointId), ...clusters.map((c) => c.endpointId)])],
+    [vms, nodes, clusters],
   );
   const vmsForEndpoint = vms.filter((v) => v.endpointId === values.endpointId);
   const nodesForEndpoint = nodes.filter((n) => n.endpointId === values.endpointId);
-  const metrics = values.kind === 'vm' ? metricsVm : metricsNode;
+  const metrics = values.kind === 'vm' ? metricsVm : values.kind === 'node' ? metricsNode : metricsCluster;
+
+  // Si le type de cible change et que la métrique courante n'est pas applicable
+  // à la nouvelle cible, on retombe sur la 1re métrique de la liste.
+  useEffect(() => {
+    if (values.metric && !metrics.includes(values.metric)) {
+      set('metric', metrics[0] ?? '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values.kind]);
 
   // Auto-suggestion hôte Centreon (mapping → nom VM) tant que non touché.
   useEffect(() => {
@@ -149,9 +160,10 @@ export function RuleForm({ vms, nodes, pollers, mappingHost, initial, metricsVm,
         </label>
         <label className="flex flex-col gap-1 text-xs font-medium">
           {t('alarm.form.targetKind')}
-          <Select value={values.kind} onChange={(e) => set('kind', e.target.value as 'vm' | 'node')}>
+          <Select value={values.kind} onChange={(e) => set('kind', e.target.value as 'vm' | 'node' | 'cluster')}>
             <option value="vm">{t('alarm.form.targetKind.vm')}</option>
             <option value="node">{t('alarm.form.targetKind.node')}</option>
+            <option value="cluster">{t('alarm.form.targetKind.cluster')}</option>
           </Select>
         </label>
         <label className="flex flex-col gap-1 text-xs font-medium">
@@ -171,7 +183,7 @@ export function RuleForm({ vms, nodes, pollers, mappingHost, initial, metricsVm,
               ))}
             </Select>
           </label>
-        ) : (
+        ) : values.kind === 'node' ? (
           <label className="flex flex-col gap-1 text-xs font-medium">
             {t('alarm.form.node')}
             <Select value={values.node} onChange={(e) => set('node', e.target.value)}>
@@ -180,7 +192,7 @@ export function RuleForm({ vms, nodes, pollers, mappingHost, initial, metricsVm,
               ))}
             </Select>
           </label>
-        )}
+        ) : null}
         <label className="flex flex-col gap-1 text-xs font-medium">
           {t('alarm.form.metric')}
           <Select value={values.metric} onChange={(e) => set('metric', e.target.value as MetricId)}>

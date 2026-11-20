@@ -244,6 +244,11 @@ export function EndpointPage() {
               <ArrowLeft className="h-4 w-4" />
             </Link>
             <h1 className="text-lg font-semibold tracking-tight">{ep.name}</h1>
+            {snapshot?.cluster.quorumState === 'lost' ? (
+              <Badge tone="crit">{t('cluster.quorumLost')}</Badge>
+            ) : snapshot?.cluster.quorumState === 'ok' ? (
+              <Badge tone="ok">{t('cluster.quorumOk', { online: snapshot.cluster.nodesOnline, total: snapshot.cluster.nodesTotal })}</Badge>
+            ) : null}
           </div>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">{t('endpoint.hint')}</p>
           <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-muted-foreground/80">{t('widgets.customize.hint')}</p>

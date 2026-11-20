@@ -15,6 +15,9 @@ export const fr: Record<string, string> = {
   'topbar.theme': 'Changer de thème',
   'topbar.resetLayout': 'Réinitialiser la disposition',
 
+  'cluster.quorumOk': 'Quorum {{online}}/{{total}}',
+  'cluster.quorumLost': 'Quorum perdu',
+
   'metrics.title': 'Métriques du cluster',
   'metrics.titleCpu': 'Métriques du cluster — CPU',
   'metrics.titleRam': 'Métriques du cluster — RAM',
@@ -174,6 +177,7 @@ export const fr: Record<string, string> = {
   'health.penalty.diskWarn': 'Stockage à {{pct}} % (≥ 70 %)',
   'health.penalty.praCrit': 'Bascule N-1 impossible si un site tombe',
   'health.penalty.praWarn': 'Bascule N-1 possible mais sans marge si un site tombe',
+  'health.penalty.quorumLost': 'Quorum cluster perdu ({{online}}/{{total}} nœuds en ligne)',
 
   'kpi.nodes': 'Nœuds actifs',
   'kpi.cpuRam': 'Allocation CPU / RAM',
@@ -234,6 +238,7 @@ export const fr: Record<string, string> = {
   'alerts.diskHigh': 'Stockage à {{pct}} %',
   'alerts.praCrit': 'Si {{site}} tombe : bascule impossible — la capacité des autres sites est insuffisante',
   'alerts.praWarn': 'Si {{site}} tombe : bascule possible mais sans marge (les autres sites seraient utilisés à {{pct}} %)',
+  'alerts.quorumLost': 'Quorum cluster perdu — cluster en lecture seule ({{online}}/{{total}} nœuds en ligne)',
 
   'nav.topology': 'Topologie réseau',
   'nav.storage': 'Stockage',
@@ -798,6 +803,7 @@ export const fr: Record<string, string> = {
   'alarm.form.targetKind': 'Type de cible',
   'alarm.form.targetKind.vm': 'VM',
   'alarm.form.targetKind.node': 'Nœud Proxmox',
+  'alarm.form.targetKind.cluster': 'Cluster (quorum)',
   'alarm.form.endpoint': 'Endpoint',
   'alarm.form.vm': 'VM cible',
   'alarm.form.node': 'Nœud cible',
@@ -837,6 +843,7 @@ export const fr: Record<string, string> = {
   'alarm.metric.node_ram_pct': 'RAM nœud (%)',
   'alarm.metric.node_disk_pct': 'Disque nœud (%)',
   'alarm.metric.node_online': 'Nœud en ligne',
+  'alarm.metric.cluster_quorum': 'Quorum cluster (1 = ok)',
   // --- Récapitulatif de provisioning ---
   'alarm.summary.title': 'Provisionnement Centreon',
   'alarm.summary.ok': 'Service créé et configuré, configuration déployée sur le poller « {{poller}} ». Les trames NSCA peuvent être reçues.',
