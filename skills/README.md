@@ -43,7 +43,7 @@ Si l'échelle augmente nettement au-delà, les points à surveiller en premier :
 | Skill | Périmètre |
 |---|---|
 | `general` | Architecture globale : contrat plugin, monorepo, flux de données (poller/InfluxDB/API/WS), design system, i18n, overcommit, déploiement, pièges transverses |
-| `hypervision` | Plugin hypervision : `/`, `/e/:endpointId`, `/e/:endpointId/n/:nodeId` + composants (KPIs, graphiques 7 j, PRA, capacity, surallocation) ; `hypervision_v2` = vue d'ensemble en grille personnalisable par user |
+| `hypervision` | Plugin hypervision : `/`, `/e/:endpointId`, `/e/:endpointId/n/:nodeId` + composants (KPIs, graphiques 7 j, PRA par endpoint + PRA global cross-endpoints (v4), capacity, surallocation) ; `hypervision_v2` = vue d'ensemble en grille personnalisable par user |
 | `network` | Plugin network : `/topology` — graphe React Flow, inventaire réseaux→VMs, analyse d'impact incident, simulation PRA N-1 |
 | `storage` | Plugin storage : `/storage` — table vCenter des datastores, drill-down VMs, export CSV |
 | `vm-inventory` | Plugin Vue VM (famille `vm-view`) : `/vms` — tree vCenter (Datacenter→cluster→nœud), tableau multi-endpoints live, détail à onglets (Config/Réseau/Snapshots) via `/api/vm-config` ; v2 = console web PVE + détail nœud, v3 = monitors VM/nœud en grilles personnalisables par user |

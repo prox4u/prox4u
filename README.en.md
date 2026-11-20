@@ -23,7 +23,7 @@ A **CIETED EURL** project — [www.cieted.fr](https://www.cieted.fr) · [Prox4u]
 *Secure login — per-user accounts with roles (admin / user).*
 
 - **Multi-cluster / standalone nodes**: multiple Proxmox endpoints declared in `clusters.json` (one per cluster or standalone node); aggregated overview + a full dashboard per endpoint, navigable from the sidebar. One failing endpoint does not affect the others.
-- **Real-time snapshot** (WebSocket, 5 s tick): cluster KPIs, Health Score, per-site PRA, top VM/pool consumers, alarms.
+- **Real-time snapshot** (WebSocket, 5 s tick): cluster KPIs, Health Score, per-site PRA + **global cross-endpoint PRA**, top VM/pool consumers, alarms.
 - **Historical metrics** with dual source: **InfluxDB 3 Core** (native) with automatic fallback to **Proxmox RRD**. A badge in the Metrics panel shows the active source.
 - **Capacity planning**: CPU/RAM/disk saturation forecasts (30 d) + 7-day trend.
 - **Demo mode** (`MOCK=1`): simulated multi-site cluster, no Proxmox required.
@@ -262,7 +262,7 @@ Script options: `TLS_DAYS` (validity, default 3650) and `TLS_SAN_EXTRA` (extra S
 | Endpoint | Description |
 |---|---|
 | `GET /api/health` | Server status |
-| `GET /api/dashboard` | Multi-endpoint snapshot (aggregated KPIs, health + PRA + alarms per endpoint) |
+| `GET /api/dashboard` | Multi-endpoint snapshot (aggregated KPIs, health + PRA per endpoint + global cross-endpoint PRA + alarms) |
 | `GET /api/endpoints` | Compact endpoint list (id, name, state, score) — feeds the sidebar |
 | `GET /api/metrics?timeframe=hour\|day\|week\|month&endpoint=<id>` | Metric points of an endpoint + `source` |
 | `GET /api/capacity?endpoint=<id>` | 30-day saturation forecasts + `source` |
