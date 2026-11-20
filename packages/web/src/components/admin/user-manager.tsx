@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, KeyRound, Lock, LockOpen, Plus } from 'lucide-react';
-import type { PublicUser, Role } from '@prox4u/shared';
-import { adminApi, type AdminGroup } from '../../lib/auth-api';
+import { validatePassword, type PublicUser, type Role } from '@prox4u/shared';
+import { adminApi, ApiError, type AdminGroup } from '../../lib/auth-api';
 import { useAuth } from '../../store/auth';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -12,6 +12,31 @@ interface Props {
   users: PublicUser[];
   groups: AdminGroup[];
   onDone: () => void;
+}
+
+/**
+ * Traduit l'erreur de création d'utilisateur en message i18n précis (au lieu
+ * du message générique) : les codes `ApiError` correspondent aux codes serveur
+ * (weak-*, invalid-username, username-exists…).
+ */
+function createUserError(t: (key: string) => string, err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case 'username-exists':
+        return t('admin.users.error.exists');
+      case 'invalid-username':
+        return t('admin.users.error.invalid-username');
+      case 'missing-display-name':
+        return t('admin.users.error.missing-display-name');
+      case 'weak-too-short':
+        return t('profile.password.error.weak.too-short');
+      case 'weak-no-letter':
+        return t('profile.password.error.weak.no-letter');
+      case 'weak-no-digit':
+        return t('profile.password.error.weak.no-digit');
+    }
+  }
+  return t('admin.error.generic');
 }
 
 /**
@@ -38,6 +63,13 @@ export function UserManager({ users, groups, onDone }: Props) {
 
   async function createUser() {
     if (busy || !username.trim() || !displayName.trim() || !password) return;
+    // Validation client du mdp (miroir de la politique serveur) — évite l'aller-retour
+    // et affiche immédiatement le motif précis au lieu d'un message générique.
+    const issue = validatePassword(password);
+    if (issue) {
+      setError(t(`profile.password.error.weak.${issue}`));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -56,8 +88,7 @@ export function UserManager({ users, groups, onDone }: Props) {
       setShowCreate(false);
       onDone();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '';
-      setError(msg.includes('username-exists') ? t('admin.users.error.exists') : t('admin.error.generic'));
+      setError(createUserError(t, err));
     } finally {
       setBusy(false);
     }
@@ -104,6 +135,7 @@ export function UserManager({ users, groups, onDone }: Props) {
             <div>
               <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('admin.users.password')}</label>
               <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+              <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{t('admin.users.password.hint')}</p>
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('admin.users.role')}</label>

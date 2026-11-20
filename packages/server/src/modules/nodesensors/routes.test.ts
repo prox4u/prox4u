@@ -31,6 +31,7 @@ function makeCtx(
       },
     } as unknown as AppContext['influx'],
     auth: {} as AppContext['auth'],
+    userConfig: {} as AppContext['userConfig'],
     hub: {} as AppContext['hub'],
   };
 }
@@ -158,6 +159,7 @@ describe('registerNodeSensors — unités systemd : seules les vraies alertes', 
         },
       } as unknown as AppContext['influx'],
       auth: {} as AppContext['auth'],
+      userConfig: {} as AppContext['userConfig'],
       hub: {} as AppContext['hub'],
     };
     const store = new SensorThresholdStore(path.join(dir, 'sensor-thresholds.json'), logger);
@@ -278,6 +280,7 @@ describe('registerSensorHistoryRoute — historique des valeurs capteur', () => 
         },
       } as unknown as AppContext['influx'],
       auth: {} as AppContext['auth'],
+      userConfig: {} as AppContext['userConfig'],
       hub: {} as AppContext['hub'],
     };
   }
@@ -383,6 +386,7 @@ describe('registerSmartHistoryRoute — historique des valeurs disque SMART', ()
         },
       } as unknown as AppContext['influx'],
       auth: {} as AppContext['auth'],
+      userConfig: {} as AppContext['userConfig'],
       hub: {} as AppContext['hub'],
     };
     const app = Fastify();

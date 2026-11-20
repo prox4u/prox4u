@@ -13,8 +13,10 @@ import { MockSource, MOCK_SITES } from './core/mock-source.js';
 import { Prox4uClient } from './core/prox4u-client.js';
 import { Poller, type AppContext, type EndpointRuntime } from './core/poller.js';
 import { WsHub } from './core/ws-hub.js';
+import { AdminAuditStore } from './modules/auth/admin-audit.js';
 import { hashPassword } from './modules/auth/password.js';
 import { LocalProvider } from './modules/auth/providers.js';
+import { UserConfigStore } from './modules/userconfig/store.js';
 import { parseCookies, SessionStore, SESSION_COOKIE } from './modules/auth/session.js';
 import { AuthStore } from './modules/auth/store.js';
 import { modules } from './modules/index.js';
@@ -106,12 +108,19 @@ async function main(): Promise<void> {
   const authStore = new AuthStore(config.authFile, logger);
   await authStore.init(hashPassword);
   const sessions = new SessionStore(config.sessionTtlMs);
+  const audit = new AdminAuditStore(config.auditFile, logger);
+  audit.init();
+  // Personnalisation d'interface par user (data/user-configs/) — montée dans le
+  // contexte pour être partagée par le module userconfig ET l'import/export admin.
+  const userConfig = new UserConfigStore(path.join(path.dirname(config.authFile), 'user-configs'), logger);
+  userConfig.init();
   const ctx: AppContext = {
     config,
     endpoints,
     logger,
     influx,
-    auth: { store: authStore, sessions, provider: new LocalProvider(authStore) },
+    auth: { store: authStore, sessions, provider: new LocalProvider(authStore), audit },
+    userConfig,
     hub,
   };
   const poller = new Poller(ctx, hub);

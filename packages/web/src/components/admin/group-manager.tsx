@@ -2,14 +2,15 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Plus, Trash2, Users } from 'lucide-react';
 import type { PublicUser } from '@prox4u/shared';
-import { adminApi, type AdminGroup } from '../../lib/auth-api';
+import { adminApi, ApiError, type AdminGroup } from '../../lib/auth-api';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 
 interface Props {
   groups: AdminGroup[];
   users: PublicUser[];
-  moduleIds: string[];
+  /** Familles de modules (id + nom) — affichage lisible dans l'édition du groupe. */
+  modules: Array<{ id: string; name: string }>;
   onDone: () => void;
 }
 
@@ -17,7 +18,7 @@ interface Props {
  * CRUD des groupes : création, édition (nom/description), membres et modules
  * autorisés. Pattern drill-down : la ligne du groupe se déplie pour l'édition.
  */
-export function GroupManager({ groups, users, moduleIds, onDone }: Props) {
+export function GroupManager({ groups, users, modules, onDone }: Props) {
   const { t } = useTranslation();
   const [openId, setOpenId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
@@ -35,7 +36,7 @@ export function GroupManager({ groups, users, moduleIds, onDone }: Props) {
       setNewDesc('');
       onDone();
     } catch (err) {
-      setError(err instanceof Error && err.message.includes('group-name-exists') ? t('admin.groups.name') : t('admin.error.generic'));
+      setError(err instanceof ApiError && err.code === 'group-name-exists' ? t('admin.groups.error.exists') : t('admin.error.generic'));
     } finally {
       setBusy(false);
     }
@@ -74,6 +75,11 @@ export function GroupManager({ groups, users, moduleIds, onDone }: Props) {
         </Button>
       </div>
 
+      {/* Aide : sémantique des groupes (ils n'ajoutent que, ne restreignent pas). */}
+      <p className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+        {t('admin.groups.hint')}
+      </p>
+
       {error && (
         <p role="alert" className="rounded-lg border border-crit/30 bg-crit/10 px-3 py-2 text-xs text-crit">
           {error}
@@ -92,7 +98,7 @@ export function GroupManager({ groups, users, moduleIds, onDone }: Props) {
               key={g.id}
               group={g}
               users={users}
-              moduleIds={moduleIds}
+              modules={modules}
               open={openId === g.id}
               busy={busy}
               onToggle={() => setOpenId(openId === g.id ? null : g.id)}
@@ -109,7 +115,7 @@ export function GroupManager({ groups, users, moduleIds, onDone }: Props) {
 function GroupRow({
   group,
   users,
-  moduleIds,
+  modules,
   open,
   busy,
   onToggle,
@@ -118,7 +124,7 @@ function GroupRow({
 }: {
   group: AdminGroup;
   users: PublicUser[];
-  moduleIds: string[];
+  modules: Array<{ id: string; name: string }>;
   open: boolean;
   busy: boolean;
   onToggle: () => void;
@@ -141,12 +147,17 @@ function GroupRow({
     setSaving(true);
     setError(null);
     try {
-      await adminApi.updateGroup(group.id, { name: name.trim(), description: desc.trim() });
-      await adminApi.setGroupMembers(group.id, memberIds);
-      await adminApi.setGroupModules(group.id, moduleIdsSel);
+      // Sauvegarde atomique : nom + description + membres + modules en UNE requête
+      // (plus d'état partiel si un appel échoue).
+      await adminApi.saveGroup(group.id, {
+        name: name.trim(),
+        description: desc.trim(),
+        memberIds,
+        moduleIds: moduleIdsSel,
+      });
       onDone();
-    } catch {
-      setError(t('admin.error.generic'));
+    } catch (err) {
+      setError(err instanceof ApiError && err.code === 'group-name-exists' ? t('admin.groups.error.exists') : t('admin.error.generic'));
     } finally {
       setSaving(false);
     }
@@ -203,17 +214,22 @@ function GroupRow({
             <div>
               <div className="mb-1.5 text-xs font-medium text-muted-foreground">{t('admin.groups.modules')}</div>
               <div className="max-h-56 divide-y overflow-y-auto rounded-xl border bg-card">
-                {moduleIds.map((id) => (
-                  <label key={id} className="flex cursor-pointer items-center gap-2.5 px-3 py-2 transition-colors hover:bg-secondary/50">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-(--color-primary)"
-                      checked={moduleIdsSel.includes(id)}
-                      onChange={() => setModuleIdsSel((cur) => toggleIn(cur, id))}
-                    />
-                    <span className="text-xs font-medium">{id}</span>
-                  </label>
-                ))}
+                {modules.length === 0 ? (
+                  <p className="px-3 py-2 text-xs text-muted-foreground">—</p>
+                ) : (
+                  modules.map((m) => (
+                    <label key={m.id} className="flex cursor-pointer items-center gap-2.5 px-3 py-2 transition-colors hover:bg-secondary/50">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-(--color-primary)"
+                        checked={moduleIdsSel.includes(m.id)}
+                        onChange={() => setModuleIdsSel((cur) => toggleIn(cur, m.id))}
+                      />
+                      <span className="text-xs font-medium">{m.name}</span>
+                      <span className="ml-auto text-[10px] text-muted-foreground/60">{m.id}</span>
+                    </label>
+                  ))
+                )}
               </div>
             </div>
           </div>

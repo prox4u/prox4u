@@ -1,4 +1,4 @@
-import type { Group, ModuleDef, PublicUser, Role } from '@prox4u/shared';
+import type { AdminAuditPage, BackupBundle, Group, ModuleDef, PublicUser, Role } from '@prox4u/shared';
 
 /**
  * Client API d'authentification et d'administration.
@@ -82,7 +82,8 @@ export interface AdminState {
 export const adminApi = {
   state: () => request<AdminState>('/api/admin/state'),
 
-  createUser: (input: { username: string; displayName: string; password: string; role: Role; groupIds: string[] }) =>
+  /** `moduleIds` optionnel : pré-sélection des modules du nouvel user (défaut serveur = tous les modules activés globalement). */
+  createUser: (input: { username: string; displayName: string; password: string; role: Role; groupIds: string[]; moduleIds?: string[] }) =>
     request<{ user: PublicUser }>('/api/admin/users', { method: 'POST', body: JSON.stringify(input) }),
   updateUser: (id: string, patch: { displayName?: string; role?: Role; active?: boolean; groupIds?: string[] }) =>
     request<{ user: PublicUser }>(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
@@ -96,6 +97,12 @@ export const adminApi = {
     request<Group>('/api/admin/groups', { method: 'POST', body: JSON.stringify({ name, description }) }),
   updateGroup: (id: string, patch: { name?: string; description?: string }) =>
     request<Group>(`/api/admin/groups/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  /** Sauvegarde atomique : nom + description + membres + modules en UNE requête. */
+  saveGroup: (
+    id: string,
+    patch: { name: string; description: string; memberIds: string[]; moduleIds: string[] },
+  ) =>
+    request<Group>(`/api/admin/groups/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(patch) }),
   deleteGroup: (id: string) => request<{ ok: boolean }>(`/api/admin/groups/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   setGroupMembers: (id: string, userIds: string[]) =>
     request<{ ok: boolean }>(`/api/admin/groups/${encodeURIComponent(id)}/members`, {
@@ -113,4 +120,24 @@ export const adminApi = {
       method: 'PATCH',
       body: JSON.stringify({ globallyEnabled }),
     }),
+
+  /** Journal d'audit des actions admin (paginé depuis la plus récente). */
+  auditLog: (opts: { limit?: number; offset?: number; action?: string; actor?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+    if (opts.offset !== undefined) params.set('offset', String(opts.offset));
+    if (opts.action) params.set('action', opts.action);
+    if (opts.actor) params.set('actor', opts.actor);
+    const qs = params.toString();
+    return request<AdminAuditPage>(`/api/admin/audit${qs ? `?${qs}` : ''}`);
+  },
+
+  /** Export du bundle de sauvegarde (users + groupes + graphiques). */
+  exportBackup: () => request<BackupBundle>('/api/admin/export'),
+  /** Import d'un bundle (fusion par username/nom). */
+  importBackup: (bundle: BackupBundle) =>
+    request<{ ok: boolean; usersCreated: number; usersUpdated: number; groupsCreated: number; groupsUpdated: number; userConfigsRestored: number }>(
+      '/api/admin/import',
+      { method: 'POST', body: JSON.stringify(bundle) },
+    ),
 };

@@ -1,6 +1,6 @@
 # Prox4u — État d'avancement
 
-> **Dernière mise à jour : 2026-11-19**
+> **Dernière mise à jour : 2026-11-20**
 > Application de supervision vCenter-like pour Proxmox VE (managers/DSI).
 > Conception de référence : `.opencode/skills/proxmox-web/SKILL.md`
 
@@ -14,7 +14,7 @@
 - App en **HTTPS** (cert auto-signé, SAN localhost + IP VM) ; InfluxDB en HTTPS sur 8181 ; **Explorer** (UI InfluxDB 3) en HTTPS sur 8888
 - Logs / pid : `logs/` (à la racine du projet, rien dans /tmp)
 - Cron : `@reboot` + keepalive minute par minute sur `server.sh start` (idempotent) ; le conteneur InfluxDB se relance seul au boot (`restart: unless-stopped`)
-- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (531 tests : 307 shared + 224 server)
+- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (641 tests : 389 shared + 252 server)
 
 ---
 
@@ -2199,13 +2199,169 @@ reçoivent le widget en bas par le merge.
 - `skills/vm-inventory/SKILL.md` (§13 — Résumé nœud en grille + §13.1 endpoint `/api/node-capacity`, frontmatter mis à jour).
 - `skills/api/SKILL.md` (ligne `/api/node-capacity` + frontmatter mis à jour).
 
+## ✅ Fait — P3 Module « Audit / best-practices » — Phase 1 : 2ᵉ score de configuration (livré, validé E2E)
+
+> **2026-11-20** — P3 (GitHub issue #6, label `feature`) : un **2ᵉ score** (configuration) en complément du health score (ressources). La plupart des checks ProxMenux sont faisables via l'API PVE avec les données déjà collectées. **Phase 1 livrée** : moteur d'audit + 7 checks API + page « Audit » + score sur vue d'ensemble/détail endpoint + constats cliquables. Phases 2/3 (checks API supplémentaires + checks agent Telegraf) à venir.
+
+### Architecture (décision « Option A »)
+- **Moteur pur** `packages/shared/src/audit.ts` : types + 7 checks + `runAudit` + score déterministe `100 − Σ pénalités` (crit −10 / warn −5 / info −1, borné [0,100]) + libellés (≥80 Conforme · 50–79 À améliorer · <50 À revoir). **35 tests** (`audit.test.ts`).
+- **Calcul par le poller** : l'audit est calculé à chaque tick dans `pollEndpoint` et posé dans le **snapshot WS** (`DashboardSnapshot.audit`) — la page `/audit`, la colonne overview et le widget endpoint le lisent **en direct, zéro API**. Les ponts (`bridge_without_ports`) viennent de `getNetwork()` mis en **cache 5 min** (`AUDIT_NETWORK_TTL_MS`, `networkCache`, `getAuditBridges`).
+- **Route `GET /api/audit`** : sert le snapshot (`snapshot.audit`) — aucune logique de calcul dupliquée, signature `(app, poller)`.
+
+### Checks Phase 1 (7)
+| Check | Sévérité | Cible |
+|---|---|---|
+| `guests.qemu_without_agent` | crit | VM (QEMU en marche, agent inactif) |
+| `guests.privileged_containers` | warn | VM (LXC privilégié) |
+| `guests.cpu_host_type` | info | VM (QEMU sans `cpu=host`) |
+| `network.bridge_without_ports` | warn | nœud (pont sans port physique) |
+| `storage.thin_pool_overprovisioning` | warn/crit | stockage (pool thin sur-alloué) |
+| `system.memory_overcommit` | warn/crit | nœud (RAM sur-allouée) |
+| `system.node_version_mismatch` | info | cluster (versions PVE hétérogènes) |
+
+### Cibles cliquables
+- `AuditTarget {kind: vm|node|storage|cluster, endpointId, node?, vmid?, storage?, label}` ; deep-links : VM → `/vms?tree=<ep>/<node>&vm=<vmid>`, nœud → `/e/:ep/n/:node`, stockage → `/storage`, cluster → `/e/:ep`.
+
+### Données étendues
+- **Config VM** : `unprivileged` (LXC `c.unprivileged !== 0 && !== '0'`) + `cpuHost` (QEMU `c.cpu === 'host'`) sur `VmConfigInfo`/`PveVmResource`/`VmSummary` (cache config 1 h, `fetchVmConfig` + jointure `getResources`).
+
+### Web
+- **Plugin `audit` v1** : `plugins/audit/{index.ts, pages/audit.tsx}` — page `/audit` (menu order 75, icône ShieldCheck) : sélecteur d'endpoint, carte score (grand chiffre + badge + Progress + compteurs + checks passés), constats groupés par sévérité, chaque constat cliquable. Flag `USE_PLUGIN_AUDIT` (features.ts) + enregistrement (plugins.ts).
+- **Vue d'ensemble** (hypervision_v4) : **colonne « Audit »** dans le tableau endpoints (score coloré ≥80 ok / 50–79 warn / <50 crit).
+- **Détail endpoint** (hypervision_v4) : **widget « Score de configuration »** (jauge ECharts + liste constats) — `components/audit-gauge.tsx` + catalogue `endpoint.tsx` + `ENDPOINT_DEFAULT_LAYOUT` (y19, **pas** dans `DEFAULT_LAYOUT` store/layout → pas de slot vide sur les pages legacy v1/v2/v3).
+
+### Visibilité du module
+- `audit` ajouté à `DEFAULT_MODULES` (shared/auth.ts, globallyEnabled) + réconciliation l'ajoute au `data/auth.json` au chargement ; **visibilité = autorisés ∩ sélectionnés** → `audit` ajouté aux `userModules` de test-admin (`u_a06630b1584d`).
+
+### i18n
+- `nav.audit` + `audit.*` (title, score, scoreDesc, scoreCol, label.*, findings.*, severity.*, finding.* par check, empty, noData, endpoint, openTarget, checksPassed) fr/en.
+
+### Fichiers
+- `packages/shared/src/audit.ts` (+ `audit.test.ts`, 35 tests) · `types.ts` (unprivileged/cpuHost + `audit` dans snapshot) · `index.ts` (exports dont `AuditEndpointResult`/`AuditAllResponse`) · `auth.ts` (`DEFAULT_MODULES` +audit) · `i18n/{fr,en}.ts`
+- `packages/server/src/core/prox4u-client.ts` (`fetchVmConfig` unprivileged/cpuHost + jointure) · `core/poller.ts` (`getAuditBridges` + `networkCache` + `runAudit` dans `pollEndpoint` + `audit` dans le snapshot) · `modules/audit/{index.ts,routes.ts}` · `modules/index.ts` (enregistrement) · `modules/auth/store.test.ts` (4 assertions liste modules +audit)
+- `packages/web/src/plugins/audit/{index.ts,pages/audit.tsx}` · `core/config/features.ts` (USE_PLUGIN_AUDIT) · `core/plugin/plugins.ts` · `plugins/hypervision_v4/pages/{overview.tsx,endpoint.tsx}` · `plugins/hypervision_v4/components/audit-gauge.tsx`
+- `data/auth.json` (module audit catalogue + userModules test-admin)
+
+### Vérifications effectuées
+- `pnpm --filter @prox4u/shared build` + typecheck (shared+server+web) + `vite build` : OK.
+- **Tests** : **shared 366** (331 + 35 audit), **server 240** (dont 4 assertions auth/store mises à jour) — tous verts.
+- **API live** : `/api/audit` → proxmox score **87** (2 warn + 3 info, Conforme), clusterproxmox score **98** (2 info, Conforme) ; scores exacts (87 = 100 − 2×5 − 3×1 ; 98 = 100 − 2×1).
+- **Snapshot WS** : `audit` présent dans `/api/dashboard` (les 2 endpoints).
+- **Constats réels** (pas de faux positifs) : pont `nfs` sans port (pont NFS volontaire → warn), RAM 120,3/125,6 Go → ratio 1,06 (warn) ; `vmbr0` (avec `nic2`) non flagué.
+- **Playwright E2E** : login test-admin → `/audit` rendu (score 87 Conforme + badges + constats) ; clic cible VM « Centreon » → `/vms?tree=proxmox/proxmox&vm=106` (détail VM ouvert) ; colonne « Audit » dans le tableau overview (`hasAudit: true`) ; widget audit dans le détail endpoint (jauge 87 + Conforme + constats).
+
+### Pièges rencontrés (corrigés — ne pas réintroduire)
+| Piège | Cause / fix |
+|---|---|
+| TS2307 « Cannot find module '@proxmox/shared' » | Le package s'appelle **`@prox4u/shared`** (pas `@proxmox/shared`) — 45 usages serveur / 205 web. Écrire le bon specifier. |
+| `/audit` → redirection `/profile` | Un module est visible s'il est **autorisé** (globallyEnabled OU groupe) **ET sélectionné** dans les `userModules` de l'user. Nouveau module → ajouter à `DEFAULT_MODULES` (réconciliation au chargement) **+** aux `userModules` de l'user (sinon `ModuleRoute` redirige `/profile`). |
+| `AuditEndpointResult`/`AuditAllResponse` absents du dist | Ajouter les types à l'export `index.ts` du shared + **rebuild shared** (consommé via dist tsup). |
+
+### Docs
+- `MONITORING-ACTIONS.md` §P3 mis à jour (`[~]`, Phase 1 cochée, phasage documenté).
+- Skills à mettre à jour : `general` (module audit + `/api/audit`), `monitoring-proxmenux` (module d'audit livré), `hypervision` (colonne Audit overview + widget endpoint) ; éventuellement un skill `audit` dédié.
+
+### À suivre (Phases 2/3)
+- **Phase 2 — checks API supplémentaires** : `autostart`, `stuck_snapshots`, `replication_state`, `bond_members`, `zfs_arc_max`.
+- **Phase 3 — checks agent (via Telegraf)** : `disk_errors`, `disk_service_life`, `failed_units`, `pending_reboot`, `security_updates`.
+
+## ✅ Fait — Administration : fiabiliser la création user/groupe + clarifier les droits (livré, validé E2E)
+
+> **2026-11-20** — Analyse de la gestion des droits (rôles/groupes/modules) + de la création
+> user/groupe, déclenchée par un échec de création d'utilisateur (« L'opération a échoué, veuillez
+> réessayer ») dans *Administration → Utilisateurs*. Diagnostic : le mdp saisi ne respectait pas la
+> politique (≥8 + lettre + chiffre) → 400 `weak-*` côté serveur, mais le formulaire n'avait **aucune
+> validation client** et le `catch` ne spécialisait que `username-exists` → message **générique**
+> illisible. Quatre corrections livrées.
+
+### Fixes
+- **A — Erreurs précises + validation client du mdp** (`user-manager.tsx`) : miroir `validatePassword`
+  (≥8 + lettre + chiffre) avant l'appel + **mapping `ApiError.code` → i18n précis**
+  (`weak-no-digit` → « …doit contenir au moins un chiffre », `invalid-username`,
+  `missing-display-name`, `username-exists`) au lieu de `admin.error.generic` ; **aide sous le champ
+  mdp** (« ≥ 8 caractères, au moins une lettre et un chiffre »).
+- **B — Nouvel user ≠ menu vide** (`store.createUser` + route) : pré-sélection par défaut dans
+  `userModules` de **tous les modules activés globalement** (param `moduleIds` optionnel pour
+  l'écraser) — sinon `visibleVersionIds = ∅` (autorisés ∩ sélectionnés) → menu vide + toutes les
+  routes redirigées vers `/profile` au 1ᵉʳ login.
+- **C — Sémantique des groupes** (`group-manager.tsx` + i18n) : **bandeau d'aide** rappelant que les
+  groupes **n'ajoutent que, ne restreignent pas** (un module reste visible par tous tant qu'il est
+  `globallyEnabled` ; pour le restreindre : désactiver le toggle global dans le Catalogue PUIS
+  l'attribuer au groupe). C'était le point d'opacité : le groupe « Auditeurs » n'avait **aucun effet**
+  car `groupModules` était vide et tout était globalement activé.
+- **D — Éditeur de groupe** (`group-manager.tsx` + `store.saveGroup` + `PUT /api/admin/groups/:id`) :
+  affichage des **noms** des modules (pas les ids bruts) + **sauvegarde atomique** (nom + description
+  + membres + modules en UNE écriture — le web n'appelle plus 3 endpoints séquentiels, plus d'état
+  partiel si un appel échoue).
+
+### Fichiers
+- `packages/server/src/modules/auth/store.ts` (`createUser` + `moduleIds`, `saveGroup`) + `store.test.ts` (+5 tests) · `routes.ts` (`moduleIds` dans `POST /api/admin/users`, `PUT /api/admin/groups/:id`)
+- `packages/web/src/components/admin/user-manager.tsx` (validation + mapping erreurs + aide) · `group-manager.tsx` (bandeau + noms + save atomique) · `lib/auth-api.ts` (`saveGroup`, `moduleIds`) · `pages/admin/index.tsx` (prop `modules` id+nom)
+- `packages/shared/src/i18n/{fr,en}.ts` (`admin.users.password.hint`, `admin.users.error.{invalid-username,missing-display-name}`, `admin.groups.{hint,error.exists}`)
+
+### Vérifications
+- Typecheck (shared/server/web) + `vite build` OK. **Tests : shared 366, server 245** (+5) — tous verts.
+- **API live** : mdp sans chiffre → `400 weak-no-digit` ; mdp valide → `201` + **13 modules pré-sélectionnés** ; `PUT /api/admin/groups/:id` → `200` (nom+membres+modules persistés) / nom en double → `409 group-name-exists`.
+- **Playwright E2E** : login test-admin → création avec mdp sans chiffre → message **précis** « Le mot de passe doit contenir au moins un chiffre » (pas le générique) ; mdp valide → user créé (groupe Auditeurs, badge « Mdp à changer ») ; onglet Groupes → bandeau d'aide + **noms** des modules.
+
+### Docs
+- Skill `general` §11 (auth) : pré-sélection modules à la création, endpoint atomique `saveGroup`, UX admin (erreurs précises + sémantique groupes + noms de modules).
+
+## ✅ Fait — Issue #2 : validation de la gestion des utilisateurs + compléments (journal d'audit, import/export) (livré, validé E2E)
+
+> **2026-11-20** — Clôture de la **GitHub issue #2 « Gestion des utilisateurs — validation et compléments »**. Deux parties : (1) **validation** de l'existant (7 checks), (2) **compléments** — périmètre arrêté avec l'utilisateur : **journal d'audit des actions admin** + **import/export users + groupes + gestion des graphiques** (layouts `data/user-configs`).
+
+### Partie 1 — Validation de l'existant (7 checks PASS)
+Validés **curl + Playwright** avec les comptes de test `test-admin`/`test-user` (jamais `admin`/`jerome`) :
+1. **Cycle complet** : création user (rôle/groupes/modules) → login → visibilité modules → changement mdp → verrouillage/déverrouillage ✓
+2. **Rôles** : `admin` (200 sur `/api/admin/*`) vs `user` (403) — refus côté guard ✓
+3. **Groupes** : affectation → héritage modules ; retrait → perte d'accès ✓
+4. **Catalogue** : activation par version (`<famille>_vN`), `globallyEnabled`, réconciliation au boot ✓
+5. **`mustChangePassword`** : forcé à la création, levé au changement, imposé au login ✓
+6. **Throttle login** : 429 après 5 échecs + session TTL 12 h + expiration ✓
+7. **Auto-modification interdite** : bouton désactivé + refus serveur `self-modification` ✓
+
+### Partie 2A — Journal d'audit des actions admin
+Trace chaque action d'administration (création/modif user, groupes, catalogue, reset mdp, import/export).
+- **Stockage** : JSONL **append-only** `data/admin-audit.jsonl` (chmod 600, plafond **20 000** entrées injectable, rétention par rotation) — entrée `{t, actor{id,username}, action, target?, details?}` ; **jamais les mots de passe** (seule l'action + métadonnées).
+- **12 actions** : `user.create/update/reset-password`, `group.create/update/delete/members/modules`, `module.toggle`, `catalog.sync` (uniquement si `created>0`), `backup.import/export`.
+- **Serveur** : `modules/auth/admin-audit.ts` (`AdminAuditStore` — append-only = pas de read-modify-write, erreur d'écriture → warning sans faire échouer l'action) + hook `audit(req, …)` dans `routes.ts` (acteur = `req.authUser`) + `AuthContext.audit` (`runtime.ts`).
+- **Lecture** : `GET /api/admin/audit?limit=&offset=&action=&actor=` (rôle admin) — pagination/filtre = fonction pure **`pageAuditEntries`** (shared, 9 tests) : plus récentes d'abord, `offset` depuis la plus récente.
+- **Web** : onglet **« Journal »** dans Administration (`components/admin/audit-log.tsx`) — filtres action/acteur, pagination 50/page, export CSV.
+- **Shared** : `admin-audit.ts` (types + `ADMIN_AUDIT_ACTIONS` + `pageAuditEntries`).
+
+### Partie 2B — Import/export admin (users + groupes + configs de graphiques)
+Export/restore de l'administration (users + groupes + **layouts de grilles par user**).
+- **Bundle** `{version:1, exportedAt, auth:AuthFile, userConfigs:{<userId>:UserConfig|null}}` — contient les **hashes argon2id** (fichier sensible) + les layouts `data/user-configs`.
+- **`GET /api/admin/export`** (rôle admin) : bundle = `auth.store.data` + `userConfigs` de tous les users (via `ctx.userConfig.load`).
+- **`POST /api/admin/import`** (rôle admin) : **400 `bad-bundle`** si invalide ; l'import est une **FUSION par username/nom** (pas un remplacement total) : users matchés par `username` (upsert — l'id local + `createdAt` conservés), groupes par `name` (upsert), modules = `globallyEnabled` du bundle appliqué **aux modules locaux seulement** (le catalogue reste du ressort du code/réconciliation), tables de jointure = **union (bundle remappé ∪ local) dédupliquée** (rien n'est perdu) ; les comptes/groupes **locaux absents du bundle sont conservés**. Configs de graphiques : réécrites en **remappant les clés via `userMap`** (`null` = jamais personnalisé → local non touché).
+- **Fonctions pures** (shared, testées) : `parseBackupBundle` (validation/normalisation → null, 5 tests) + `mergeBackupBundle` (9 tests).
+- **Serveur** : `store.replaceState(next)` (persistance atomique de l'état fusionné) ; **`AppContext.userConfig`** = `UserConfigStore` créé dans `index.ts` et **partagé** (module userconfig + routes import/export).
+- **Web** : onglet **« Sauvegarde »** dans Administration (`components/admin/backup-manager.tsx`) — Exporter (téléchargement du bundle) / Importer (upload → panneau de confirmation → import) + messages de résultat.
+
+### Fichiers
+- `packages/shared/src/admin-audit.ts` (+ `admin-audit.test.ts`, 9 tests) · `admin-backup.ts` (+ `admin-backup.test.ts`, 14 tests) · `i18n/{fr,en}.ts` (`admin.tab.audit`, `admin.audit.*`, `admin.tab.backup`, `admin.backup.*`)
+- `packages/server/src/modules/auth/admin-audit.ts` (+ `admin-audit.test.ts`, 7 tests) · `store.ts` (`replaceState`) · `routes.ts` (hook `audit` + `GET /api/admin/audit` + `GET /api/admin/export` + `POST /api/admin/import`) · `runtime.ts` (`AuthContext.audit`)
+- `packages/server/src/core/poller.ts` (`AppContext.userConfig`) · `core/config.ts` (`auditFile`) · `index.ts` (construction `AdminAuditStore` + `UserConfigStore`) · `modules/userconfig/index.ts` (consomme `ctx.userConfig`)
+- `packages/web/src/components/admin/audit-log.tsx` · `backup-manager.tsx` · `pages/admin/index.tsx` (onglets « Journal » + « Sauvegarde ») · `lib/auth-api.ts` (`exportBackup`/`importBackup`)
+
+### Vérifications effectuées
+- **Tests** : **shared 389** (dont 9 admin-audit + 14 admin-backup), **server 252** (dont 7 admin-audit) — tous verts. Typecheck (shared/server/web) + `vite build` OK.
+- **API E2E (curl)** : export (5 users/3 groupes/14 modules/2 userConfigs/hashes) · import bundle modifié (1 user créé/5 maj/1 groupe créé/3 maj/2 configs restaurées) · 400 `bad-bundle` (bundle invalide) · 403 non-admin · reset→restauration user-config (fichier supprimé puis réécrit, 2710 octets identiques) · journal `backup.export`/`backup.import` tracés.
+- **Playwright E2E** : onglet « Journal » (filtres + libellés FR) · onglet « Sauvegarde » — Exporter (« Bundle exporté : 5 utilisateur(s), 3 groupe(s). ») + Importer (upload → confirmation → « Import terminé : … 2 config(s) de graphiques restaurée(s). »).
+- **Nettoyage** : artefacts d'import (importtest/GroupeImport/rename test-user) supprimés ; état propre (5 users, 3 groupes, Auditeurs `groupModules` intacts).
+
+### Docs
+- Skill `general` §11 : rapport de validation issue #2 (7 checks) + bullet journal d'audit + bullet import/export + note `AppContext.userConfig` partagé.
+- GitHub issue #2 : commentaire de clôture + state=closed.
+
 ## ⏳ À faire
 
 ### À tester / à aborder
 - [ ] **Module « Alarmes & Centreon » (centreon-nsca)** : pas encore testé de bout en bout — le daemon NSCA n'est pas installé sur cet environnement (seul le client `send_nsca` l'est) → la réception côté Centreon n'est pas encore validée (script `scripts/nsca-test.sh` fourni). → **GitHub issue #1**
-- [ ] **Gestion des utilisateurs** : pas encore abordée. → **GitHub issue #2**
+- [x] **Gestion des utilisateurs** : **livrée + validée** (issue #2, clôturée 2026-11-20) — validation des 7 checks + compléments (journal d'audit admin, import/export users+groupes+graphiques). Voir section « ✅ Fait — Issue #2 » ci-dessus.
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · #2 Gestion des utilisateurs · #3 P1 quorum · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur. Labels : `validation` / `feature` / `decision`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur. Labels : `validation` / `feature` / `decision`.
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
 TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète dans la skill
@@ -2214,11 +2370,29 @@ plugin **`node-sensors` v1** (section « Fait » ci-dessus) + **bibliothèque de
 (7 graphiques ProxMenux portés dans `hypervision_v3`/`vm-view_v4` — section « Fait » ci-dessus ;
 restent latence ping + GPU, données non collectées). Reste en P0 : **règles d'alarme**
 (SMART critique, température > seuil effectif, unité échouée) dans `centreonnsca` (issue #4).
-**P1 quorum livré** (issue #3) : champ `quorum`/`quorumState` dans le snapshot (entrée cluster
-de `/cluster/status`), métrique `cluster_quorum` + cible `kind: 'cluster'` dans `centreonnsca`,
-pénalité Health Score −25, badge page cluster + vue d'ensemble, alerte crit — **validation E2E
-en attente** (arrêt du nœud `nfs` → quorum lost). P2 moteur d'alarmes v2 (hystérésis/suppression/ack) ·
-P3 audit best-practices · P4 PBS + événements · P5 certificats + NTP.
+**P1 quorum livré + validé E2E** (issue #3, clôturée) : champ `quorum`/`quorumState` dans le
+snapshot (entrée cluster de `/cluster/status`, PVE 9 expose `quorate`), métrique `cluster_quorum`
++ cible `kind: 'cluster'` dans `centreonnsca`, pénalité Health Score −25, badge page cluster +
+vue d'ensemble, alerte crit. **Failover d'endpoint** ajouté : URL endpoint injoignable → bascule
+sur l'API d'un autre nœud du cluster (timeout connect 5 s, retour auto à la primaire) + champ
+`apiVia` + badge « API via … ». **E2E validé** (lab nested, cluster 2 nœuds + **Qdevice** sur la
+VM NFS) : nœud endpoint arrêté + Qdevice down → `quorate=0` → badge rouge « Quorum perdu » +
+badge failover, health 30 critical ; récupération → badge vert « Quorum 2/2 », `apiVia` disparu
+(screenshot `docs/screenshots/quorum-lost-failover.png`). Note : avec un Qdevice, 1 nœud down
+seul ne perd pas le quorum (le Qdevice le maintient) — l'app lit `quorate` (la vérité).
+**Surveillance du Qdevice** (état réel, P1) : l'API PVE n'expose que `quorate`+`nodes` — l'état
+du Qdevice vient de corosync via le script Telegraf `exec` `prox4u-telegraf-quorum.sh` (parse
+`pvecm status` → table `quorum_detail`) ; le poller lit le dernier point (cache 30 s) → état réel
+`up`/`down`/`absent` (repli déduction API `deriveQdeviceState`) + badge 🟢/🔴 + alerte warn
+`qdevice-down` + pénalité Health Score −10 si down + métrique Centreon `cluster_qdevice`
+(up/absent=1, down=0, unknown=null) + `cluster.quorumDetail` (votes). **Déployé** sur
+ProxSite1/ProxSite2 (2026-11-20, via QGA exec) + validé E2E avec données réelles
+(stop/start `corosync-qnetd` sur la VM Qdevice → down+alerte+score−10 / up+score restauré) —
+screenshot `docs/screenshots/qdevice-online-badge.png`.
+**P3 audit best-practices Phase 1 livrée + validée E2E** (section « Fait » ci-dessus — 2ᵉ score
+de configuration, 7 checks API, page `/audit`, score overview/endpoint, constats cliquables ;
+Phases 2/3 à venir). Reste : P2 moteur d'alarmes v2 (hystérésis/suppression/ack) · P4 PBS +
+événements · P5 certificats + NTP.
 
 ### En attente de décision utilisateur
 - [x] **Commit** : **fait le 2026-11-10** — commit `a492724` sur `master` (tout le travail accumulé : livraisons 2026-10-30, capteurs, seuils tri-state SMART, dédoublonnage iSCSI/LVM, cartographie, hiérarchie iSCSI → LVM, graphiques VG + `local`). L'ancienne consigne « pas encore de GIT » (branche `refactor/plugin-architecture`) est caduque : le repo vit désormais sur `master` (auto-backups + commits explicites). Les dossiers de référence `ProxMenux/` et `project-pegaprox/` ont été sortis du repo le 2026-10-24 (→ `/home/opencode/projet/`).

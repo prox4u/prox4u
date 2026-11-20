@@ -76,6 +76,10 @@ export type {
 } from './auth.js';
 export { PLUGIN_ID_RE, parsePluginVersion, defaultPluginVersion, groupPluginFamilies } from './module-versions.js';
 export type { PluginVersionRef } from './module-versions.js';
+export { ADMIN_AUDIT_ACTIONS, pageAuditEntries } from './admin-audit.js';
+export type { AdminAuditActor, AdminAuditAction, AdminAuditEntry, AdminAuditPage, AdminAuditPageOptions } from './admin-audit.js';
+export { mergeBackupBundle, parseBackupBundle } from './admin-backup.js';
+export type { BackupBundle, BackupMergeOptions, BackupMergeResult, BackupMergeStats } from './admin-backup.js';
 export {
   METRIC_IDS,
   NSCA_OK,

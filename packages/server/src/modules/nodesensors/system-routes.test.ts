@@ -34,6 +34,7 @@ function makeCtx(
       },
     } as unknown as AppContext['influx'],
     auth: {} as AppContext['auth'],
+    userConfig: {} as AppContext['userConfig'],
     hub: {} as AppContext['hub'],
   };
 }

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { User } from '@prox4u/shared';
+import { AdminAuditStore } from './admin-audit.js';
 import { hashPassword } from './password.js';
 import { SessionStore, SESSION_COOKIE } from './session.js';
 import { AuthStore } from './store.js';
@@ -32,7 +33,9 @@ describe('registerAuthGuard', () => {
       role: 'user',
       groupIds: [],
     });
-    auth = { store, sessions: new SessionStore(3_600_000), provider: new LocalProvider(store) };
+    const audit = new AdminAuditStore(path.join(dir, 'admin-audit.jsonl'), logger);
+    audit.init();
+    auth = { store, sessions: new SessionStore(3_600_000), provider: new LocalProvider(store), audit };
     app = Fastify();
     registerAuthGuard(app, auth);
     // routes dummy pour tester le filtrage du guard

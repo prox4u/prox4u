@@ -1,3 +1,4 @@
+import type { AdminAuditStore } from './admin-audit.js';
 import type { AuthProvider } from './providers.js';
 import type { SessionStore } from './session.js';
 import type { AuthStore } from './store.js';
@@ -12,4 +13,6 @@ export interface AuthContext {
   store: AuthStore;
   sessions: SessionStore;
   provider: AuthProvider;
+  /** Journal d'audit des actions admin (JSONL data/admin-audit.jsonl). */
+  audit: AdminAuditStore;
 }
