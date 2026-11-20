@@ -36,6 +36,12 @@ export interface NodeNetwork {
 export interface DataSource {
   readonly isMock: boolean;
 
+  /**
+   * URL qui sert l'API actuellement (failover). Absente si la source n'a pas de
+   * failover (mock) ou si c'est l'URL primaire configurée qui répond.
+   */
+  readonly activeUrl?: string;
+
   /** statut du cluster (quorum inclus) + nœuds (online, cpu, mem, uptime, rootfs…) */
   getNodes(): Promise<PveClusterStatus>;
 

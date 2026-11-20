@@ -3,9 +3,14 @@ import {
   buildStorageVolumes,
   computeHealthScore,
   computePra,
+  deriveQdeviceState,
+  qdeviceStateFromCorosync,
+  runAudit,
   usageSeverity,
   type AgentFsUsage,
   type Alert,
+  type AuditBridge,
+  type AuditScore,
   type DashboardSnapshot,
   type EndpointSnapshot,
   type KpiSummary,
@@ -14,6 +19,8 @@ import {
   type PoolAggregate,
   type PveNodeStatus,
   type PveVmResource,
+  type QdeviceState,
+  type QuorumDetail,
   type QuorumState,
   type Site,
   type StorageDiskAlloc,
@@ -50,6 +57,9 @@ export interface AppContext {
 }
 
 const DAY_MS = 86_400_000;
+
+/** TTL du cache réseau (ponts) pour l'audit — topologie quasi statique. */
+const AUDIT_NETWORK_TTL_MS = 5 * 60 * 1000;
 
 interface DailySample {
   time: number;
@@ -101,6 +111,19 @@ export class Poller {
    * à AGENT_CONCURRENCY : un guest lent n'entraîne pas le tick ni les autres VMs.
    */
   private agentRefreshing = new Set<string>();
+  /**
+   * Détail du quorum corosync (table Telegraf `quorum_detail`) par endpoint —
+   * cache 30 s (donnée quasi statique, écrite toutes les 10 s par Telegraf).
+   * `detail=null` est aussi mis en cache : pas de Qdevice / agent non déployé,
+   * on ne martèle pas InfluxDB à chaque tick.
+   */
+  private quorumDetailCache = new Map<string, { at: number; detail: QuorumDetail | null }>();
+  /**
+   * Ponts par nœud pour l'audit (check `bridge_without_ports`) — cache 5 min par
+   * endpoint : la topologie réseau est quasi statique, inutile de rappeler
+   * getNetwork() à chaque tick de 5 s. `[]` (échec) est aussi mis en cache.
+   */
+  private networkCache = new Map<string, { at: number; bridges: AuditBridge[] }>();
 
   constructor(
     private ctx: AppContext,
@@ -169,6 +192,25 @@ export class Poller {
     } finally {
       this.ticking = false;
     }
+  }
+
+  /**
+   * Ponts par nœud pour l'audit (check `bridge_without_ports`) — cache 5 min
+   * (topologie quasi statique). `[]` si getNetwork() indisponible (endpoint down)
+   * → le check est simplement sans objet, pas de faux positifs.
+   */
+  private async getAuditBridges(st: EndpointState): Promise<AuditBridge[]> {
+    const cached = this.networkCache.get(st.rt.id);
+    if (cached && Date.now() - cached.at < AUDIT_NETWORK_TTL_MS) return cached.bridges;
+    let bridges: AuditBridge[] = [];
+    try {
+      const network = await st.rt.source.getNetwork();
+      bridges = network.flatMap((n) => n.bridges.map((b) => ({ node: n.node, name: b.name, ports: b.ports })));
+    } catch {
+      bridges = [];
+    }
+    this.networkCache.set(st.rt.id, { at: Date.now(), bridges });
+    return bridges;
   }
 
   /** Poll un endpoint ; en cas d'échec, conserve le dernier snapshot connu. */
@@ -297,12 +339,23 @@ export class Poller {
       kpis.storageDaysToFull = buildForecast('disk', this.getDiskHistory(rt.id)).daysTo90;
 
       const pra = computePra(rt.sites, nodes, vms);
+      // État RÉEL du Qdevice (corosync, table Telegraf quorum_detail) — prime
+      // sur la déduction API (l'API PVE ne l'expose pas). null si agent non
+      // déployé / pas de données → repli sur la déduction.
+      const quorumDetail = await this.readQuorumDetail(rt, nodes.map((n) => n.node));
       const clusterInfo = {
         name: rt.name,
         nodesOnline: online.length,
         nodesTotal: nodes.length,
         quorum: cluster.quorum,
         quorumState: cluster.quorumState,
+        // Qdevice : état réel corosync si dispo ('up'/'down'/'absent'), sinon
+        // déduit de l'API ('up' quand les nœuds seuls ne suffisent pas mais le
+        // cluster est quorate, 'down' sinon, 'unknown' quand les nœuds suffisent).
+        qdevice: quorumDetail
+          ? qdeviceStateFromCorosync(quorumDetail.hasQdevice, quorumDetail.qdeviceOnline)
+          : deriveQdeviceState(nodes.length, online.length, cluster.quorumState),
+        quorumDetail,
       };
       const alerts = buildAlerts(nodeHealth, kpis, pra, clusterInfo);
       const health = computeHealthScore(nodeHealth, kpis, pra, clusterInfo);
@@ -356,7 +409,23 @@ export class Poller {
         ipAddresses: v.ipAddresses ?? [],
         // null = n/a (LXC/arrêtée) ou inconnu (1ers ticks, avant le réchauffage agent)
         agentActive: v.type === 'qemu' && v.status === 'running' ? st.agentActive.get(v.vmid) ?? null : null,
+        // Audit / best-practices (config, cache 1 h) — absents si config inconnue.
+        unprivileged: v.unprivileged,
+        cpuHost: v.cpuHost,
       }));
+
+      // Audit / best-practices (P3) — 2ᵉ score de CONFIGURATION. Checks purs
+      // (shared/audit.ts) ; les ponts viennent du cache 5 min (getNetwork).
+      const bridges = await this.getAuditBridges(st);
+      const audit: AuditScore = runAudit({
+        endpointId: rt.id,
+        nodes: nodeHealth,
+        vms: vmSummaries,
+        storages: storageInfos,
+        storageVolumes,
+        bridges,
+        overcommit: this.ctx.config.overcommit,
+      });
 
       const snap: DashboardSnapshot = {
         generatedAt: Date.now(),
@@ -364,6 +433,7 @@ export class Poller {
         cluster: clusterInfo,
         sites: rt.sites,
         health,
+        audit,
         kpis,
         pra,
         nodes: nodeHealth,
@@ -377,9 +447,12 @@ export class Poller {
       };
       st.snapshot = snap;
       st.lastError = null;
+      // Failover : si l'API a été servie par un autre nœud que l'URL configurée,
+      // on l'expose (transparence) — le nœud endpoint est down, l'app bascule.
+      const apiVia = rt.source.activeUrl && rt.source.activeUrl !== rt.url ? rt.source.activeUrl : undefined;
       // Séries par datastore = toutes les vues à capacité (VG compris) — pas la liste dédoublonnée.
       await this.writeInflux(rt.id, rt.source, nodes, nodeHealth, vms, kpis, storagesForMetrics);
-      return { id: rt.id, name: rt.name, url: rt.url, ok: true, snapshot: snap };
+      return { id: rt.id, name: rt.name, url: rt.url, ok: true, apiVia, snapshot: snap };
     } catch (err) {
       st.lastError = (err as Error).message;
       this.ctx.logger.error(`poller endpoint ${rt.id} en échec : ${st.lastError}`);
@@ -449,6 +522,61 @@ export class Poller {
     if (dt <= 0) return { in: 0, out: 0, rd: 0, wr: 0 };
     const rate = (c: number, p: number) => Math.max(0, (c - p) / dt);
     return { in: rate(last.in, first.in), out: rate(last.out, first.out), rd: rate(last.rd, first.rd), wr: rate(last.wr, first.wr) };
+  }
+
+  /**
+   * Détail du quorum corosync (état réel du Qdevice + votes) — lu depuis la
+   * table Telegraf `quorum_detail` (base raw, écrite par le script
+   * `prox4u-telegraf-quorum.sh` qui parse `pvecm status`). Cache 30 s par
+   * endpoint (donnée quasi statique). Renvoie null si InfluxDB désactivé,
+   * agent non déployé, ou pas de données récentes → le poller replie sur la
+   * déduction API (`deriveQdeviceState`).
+   *
+   * Fenêtre 10 min : les points Telegraf arrivent toutes les 10 s ; au-delà,
+   * l'agent est considéré muet (nœud arrêté / Telegraf arrêté).
+   */
+  private async readQuorumDetail(rt: EndpointRuntime, nodeNames: string[]): Promise<QuorumDetail | null> {
+    const influx = this.ctx.influx;
+    if (!influx.enabled || this.ctx.config.mock || nodeNames.length === 0) return null;
+    const now = Date.now();
+    const cached = this.quorumDetailCache.get(rt.id);
+    if (cached && now - cached.at < 30_000) return cached.detail;
+
+    let detail: QuorumDetail | null = null;
+    try {
+      const inList = nodeNames.map((n) => `'${n.replace(/'/g, "''")}'`).join(', ');
+      const rows = await influx.querySql<Record<string, string | number | null>>(
+        influx.rawDb,
+        `SELECT expected_votes, total_votes, quorum_threshold, quorate, has_qdevice, qdevice_online
+         FROM quorum_detail
+         WHERE node IN (${inList}) AND time >= now() - INTERVAL '10 minutes'
+         ORDER BY time DESC
+         LIMIT 1`,
+      );
+      const r = rows[0];
+      if (r) {
+        detail = {
+          expectedVotes: Number(r.expected_votes) || 0,
+          totalVotes: Number(r.total_votes) || 0,
+          quorumThreshold: Number(r.quorum_threshold) || 0,
+          quorate: Number(r.quorate) === 1,
+          hasQdevice: Number(r.has_qdevice) === 1,
+          qdeviceOnline: Number(r.qdevice_online) === 1,
+        };
+      }
+    } catch (err) {
+      // Table absente (agent Telegraf non déployé) = état attendu → silencieux.
+      // Autre erreur (InfluxDB injoignable, timeout) → warning. Dans les deux
+      // cas on garde le dernier détail connu (ou null) : la déduction API reste
+      // le repli.
+      const msg = (err as Error).message;
+      if (!/not found/i.test(msg)) {
+        this.ctx.logger.warn(`quorum_detail : lecture InfluxDB échouée pour ${rt.id} (${msg})`);
+      }
+      if (cached) detail = cached.detail;
+    }
+    this.quorumDetailCache.set(rt.id, { at: now, detail });
+    return detail;
   }
 
   /**
@@ -634,7 +762,7 @@ function buildAlerts(
   nodes: NodeHealth[],
   kpis: KpiSummary,
   pra: DashboardSnapshot['pra'],
-  cluster?: { quorumState: QuorumState | null },
+  cluster?: { quorumState: QuorumState | null; qdevice?: QdeviceState },
 ): Alert[] {
   const alerts: Alert[] = [];
   if (cluster?.quorumState === 'lost') {
@@ -644,6 +772,12 @@ function buildAlerts(
       messageKey: 'alerts.quorumLost',
       params: { online: nodes.filter((n) => n.online).length, total: nodes.length },
     });
+  }
+  // Qdevice configuré mais hors ligne : le quorum n'est plus protégé (si un
+  // nœud tombe ensuite, le quorum est perdu). 'warn' — pas d'incident immédiat
+  // tant que le quorum tient, mais risque concret.
+  if (cluster?.qdevice === 'down') {
+    alerts.push({ id: 'qdevice-down', severity: 'warn', messageKey: 'alerts.qdeviceDown' });
   }
   for (const n of nodes) {
     if (!n.online) alerts.push({ id: `node-down-${n.node}`, severity: 'crit', messageKey: 'alerts.nodeDown', params: { node: n.node } });

@@ -17,6 +17,7 @@ import { ResourceChartBody, resourceCurrent } from '../components/resource-chart
 import { KpiNodesBody, KpiCpuRamBody, KpiStorageBody, KpiVmsBody } from '../components/kpi-row';
 import { MetricsPanelBody } from '../components/metrics-panel';
 import { HealthGaugeBody } from '../components/health-gauge';
+import { AuditGaugeBody } from '../components/audit-gauge';
 import { PraPanelBody } from '../components/pra-panel';
 import { CapacityChartBody } from '../components/capacity-chart';
 import { StorageCardBody } from '../components/storage-card';
@@ -29,18 +30,33 @@ import { OvercommitCardBody } from '../components/overcommit-card';
 /** Teintes des badges de sévérité (PRA) — mêmes valeurs que pra-panel. */
 const SEV_TONE = { ok: 'ok', warn: 'warn', crit: 'crit', na: 'default' } as const;
 
+/** Host d'une URL (failover `apiVia`) — retombe sur la chaîne brute si invalide. */
+function safeHost(u: string): string {
+  try {
+    return new URL(u).host;
+  } catch {
+    return u;
+  }
+}
+
 /**
  * Layout par défaut de la page cluster = design validé v1 (store/layout
  * DEFAULT_LAYOUT — les 17 blocs, `i` → `widgetId`). Les positions persistées
  * priment ; un widget ajouté au catalogue s'ajoute en bas par le merge.
  */
-const ENDPOINT_DEFAULT_LAYOUT: WidgetItem[] = DEFAULT_LAYOUT.map((it) => ({
-  widgetId: it.i,
-  x: it.x,
-  y: it.y,
-  w: it.w,
-  h: it.h,
-}));
+const ENDPOINT_DEFAULT_LAYOUT: WidgetItem[] = [
+  ...DEFAULT_LAYOUT.map((it) => ({
+    widgetId: it.i,
+    x: it.x,
+    y: it.y,
+    w: it.w,
+    h: it.h,
+  })),
+  // Audit / best-practices (P3) — 2ᵉ score de configuration, rangée sous la
+  // surallocation. Ajouté ICI (pas dans DEFAULT_LAYOUT store/layout) pour ne pas
+  // créer de slot vide sur les pages legacy v1/v2/v3 qui l'utilisent en fallback.
+  { widgetId: 'audit', x: 0, y: 19, w: 4, h: 3 },
+];
 
 /**
  * Page CLUSTER v4 — dashboard personnalisable par utilisateur :
@@ -134,6 +150,19 @@ export function EndpointPage() {
           </Badge>
         ),
         render: () => <HealthGaugeBody health={snapshot.health} />,
+      },
+      {
+        id: 'audit',
+        title: t('audit.score'),
+        default: { w: 4, h: 3 },
+        minW: 3,
+        minH: 2,
+        extra: () => (
+          <Badge tone={snapshot.audit.score >= 80 ? 'ok' : snapshot.audit.score >= 50 ? 'warn' : 'crit'}>
+            {t(snapshot.audit.labelKey)}
+          </Badge>
+        ),
+        render: () => <AuditGaugeBody audit={snapshot.audit} />,
       },
       {
         id: 'pra',
@@ -249,6 +278,9 @@ export function EndpointPage() {
             ) : snapshot?.cluster.quorumState === 'ok' ? (
               <Badge tone="ok">{t('cluster.quorumOk', { online: snapshot.cluster.nodesOnline, total: snapshot.cluster.nodesTotal })}</Badge>
             ) : null}
+            {ep.apiVia && <Badge tone="warn">{t('cluster.apiVia', { host: safeHost(ep.apiVia) })}</Badge>}
+            {snapshot?.cluster.qdevice === 'up' && <Badge tone="ok">{t('cluster.qdeviceUp')}</Badge>}
+            {snapshot?.cluster.qdevice === 'down' && <Badge tone="crit">{t('cluster.qdeviceDown')}</Badge>}
           </div>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">{t('endpoint.hint')}</p>
           <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-muted-foreground/80">{t('widgets.customize.hint')}</p>

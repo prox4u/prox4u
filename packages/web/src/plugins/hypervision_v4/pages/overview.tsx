@@ -150,6 +150,21 @@ function healthTone(label: 'nominal' | 'degraded' | 'critical'): 'ok' | 'warn' |
   return label === 'nominal' ? 'ok' : label === 'degraded' ? 'warn' : 'crit';
 }
 
+/** Teinte du score de configuration (audit) : ≥80 ok · 50–79 warn · <50 crit. */
+function auditScoreTone(score: number): 'ok' | 'warn' | 'crit' {
+  if (score >= 80) return 'ok';
+  if (score >= 50) return 'warn';
+  return 'crit';
+}
+
+/** Cellule du score d'audit (2ᵉ score de configuration) — teinte selon le score, lien vers /audit. */
+function auditScoreCell(score: number | null) {
+  if (score === null) return <span className="text-muted-foreground">—</span>;
+  const tone = auditScoreTone(score);
+  const color = tone === 'crit' ? 'text-crit' : tone === 'warn' ? 'text-warn' : 'text-ok';
+  return <span className={`tabular-nums font-medium ${color}`}>{score}</span>;
+}
+
 /**
  * CORPS de la carte endpoint (score / erreur) — l'en-tête (nom + badge santé)
  * est porté par la frame du widget ; le badge de santé est rendu dans le slot
@@ -229,6 +244,7 @@ function EndpointsTableBody({ eps }: { eps: EndpointSnapshot[] }) {
             <TableHead title={t('overcommit.hint')}>{t('overview.col.overcommitDisk')}</TableHead>
             <TableHead title={t('overcommit.riskHint')}>{t('overview.col.risk')}</TableHead>
             <TableHead>{t('health.score')}</TableHead>
+            <TableHead title={t('audit.scoreDesc')}>{t('audit.scoreCol')}</TableHead>
           </tr>
         </TableHeader>
         <TableBody>
@@ -265,6 +281,7 @@ function EndpointsTableBody({ eps }: { eps: EndpointSnapshot[] }) {
                 <TableCell>{report ? ratioCell(report.disk) : '—'}</TableCell>
                 <TableCell>{riskCell(risk[ep.id])}</TableCell>
                 <TableCell className="tabular-nums">{ep.snapshot ? Math.round(ep.snapshot.health.score) : '—'}</TableCell>
+                <TableCell>{auditScoreCell(ep.snapshot?.audit?.score ?? null)}</TableCell>
               </tr>
             );
           })}

@@ -37,7 +37,8 @@ export interface AlarmTarget {
  * Métriques surveillables. Source : snapshot poller (VmSummary / NodeHealth /
  * cluster). Les métriques de statut sont numérisées (1 = bon état, 0 = mauvais) :
  * vm_status (running=1), node_online (online=1), ip_reachable (1 IP atteignable),
- * cluster_quorum (quorum ok=1, perdu=0 — cible « cluster »).
+ * cluster_quorum (quorum ok=1, perdu=0 — cible « cluster »),
+ * cluster_qdevice (Qdevice up/absent=1, down=0, unknown=null — cible « cluster »).
  */
 export type MetricId =
   | 'cpu_pct'
@@ -52,7 +53,8 @@ export type MetricId =
   | 'node_ram_pct'
   | 'node_disk_pct'
   | 'node_online'
-  | 'cluster_quorum';
+  | 'cluster_quorum'
+  | 'cluster_qdevice';
 
 export const METRIC_IDS: MetricId[] = [
   'cpu_pct',
@@ -68,6 +70,7 @@ export const METRIC_IDS: MetricId[] = [
   'node_disk_pct',
   'node_online',
   'cluster_quorum',
+  'cluster_qdevice',
 ];
 
 /** Poller Centreon cible (liste configurable — page de config du module). */
@@ -278,6 +281,7 @@ const METRIC_SHORT: Record<MetricId, string> = {
   node_disk_pct: 'NODE-DISK',
   node_online: 'NODE-ONLINE',
   cluster_quorum: 'CLUSTER-QUORUM',
+  cluster_qdevice: 'CLUSTER-QDEVICE',
 };
 
 /**

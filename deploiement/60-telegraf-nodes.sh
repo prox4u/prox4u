@@ -10,6 +10,8 @@
 #   dm_names (mapping device-mapper → LV PVE, pour l'I/O disque PAR DISQUE des VM)
 #   net (trafic réseau par interface) + net_if_mac (mapping interface hôte → MAC,
 #   pour le trafic PAR INTERFACE de chaque VM)
+#   quorum_detail (détail corosync `pvecm status` : état du Qdevice + votes,
+#   pour la surveillance du quorum cluster — l'API PVE ne donne que quorate)
 #
 # Consolidation : le consolidateur prox4u agrège ces tables de `raw` (31 j) vers
 # `consolidated` (rétention ∞) en buckets 15 min — historique SMART/capteurs/ZFS
@@ -268,6 +270,66 @@ else
   echo "[dry-run] installerait le script $HW_INFO_SCRIPT (empreinte matérielle CPU + DMI)"
 fi
 
+# ── 5e. Détail du quorum cluster (Qdevice + votes, consommé par le plugin exec) ──
+# L'API PVE n'expose que `quorate` + `nodes` — PAS l'état du Qdevice ni le
+# détail des votes (vérifié dans le code source PVE : /cluster/status). Le
+# plugin exec exécute ce script qui parse `pvecm status` (corosync) et écrit
+# la table quasi statique `quorum_detail` :
+#   expected_votes · total_votes · quorum_threshold · quorate
+#   has_qdevice (0/1) · qdevice_online (0/1)
+# prox4u lit le dernier point par nœud (fenêtre 10 min) pour l'état RÉEL du
+# Qdevice (up/down/absent) + l'alerte « Qdevice hors ligne ». Sur un nœud
+# hors cluster, `pvecm status` échoue → le script ne sort rien (silencieux).
+QUORUM_SCRIPT=/usr/local/lib/prox4u-telegraf-quorum.sh
+if [[ $DRY_RUN -eq 0 ]]; then
+  cat > "$QUORUM_SCRIPT" <<'EOS'
+#!/usr/bin/env bash
+# Prox4u — détail du quorum cluster (table quorum_detail pour Telegraf).
+# Exécute `pvecm status` (corosync) et parse le votequorum + le membership
+# (dont le Qdevice). L'API PVE ne donne que quorate + nodes : l'état du
+# Qdevice (en ligne / hors ligne) et le détail des votes n'existent qu'au
+# niveau corosync.
+# Sortie : line protocol InfluxDB. Le tag node est ajouté par global_tags.
+# Quasi statique (change au changement de membership) ; prox4u lit le dernier
+# point par nœud sur une fenêtre de 10 min.
+set -euo pipefail
+
+out="$(pvecm status 2>/dev/null)" || exit 0
+[[ -n "$out" ]] || exit 0
+
+# Champ « Key: value » (correspondance exacte sur la clé, valeur sans espaces).
+field() { printf '%s\n' "$out" | awk -F': *' -v k="$1" '$1==k {gsub(/ /,"",$2); print $2; exit}'; }
+expected="$(field 'Expected votes')"
+total="$(field 'Total votes')"
+threshold="$(field 'Quorum')"
+quorate="$(field 'Quorate')"
+flags="$(printf '%s\n' "$out" | awk '$1=="Flags" {sub(/^Flags *: */,""); print; exit}')"
+
+q=0; [[ "$quorate" == "Yes" ]] && q=1
+hq=0; [[ "$flags" == *Qdevice* ]] && hq=1
+
+# Qdevice dans le membership : nodeid 0x00000000 (constante corosync). On ne
+# repose PAS sur le nom exact « Qdevice » en dernier champ : quand le Qdevice
+# est hors ligne, la ligne porte un suffixe (« Qdevice (votes 1) ») et le
+# dernier champ n'est plus « Qdevice ». En ligne = votes ($2) > 0.
+qon=0
+if printf '%s\n' "$out" | awk '$1=="0x00000000" {if ($2+0>0) on=1; found=1} END{exit !(found&&on)}'; then
+  qon=1
+fi
+# Qdevice présent dans le membership (même avec 0 vote) → configuré.
+if printf '%s\n' "$out" | awk '$1=="0x00000000" {found=1} END{exit !found}'; then
+  hq=1
+fi
+
+printf 'quorum_detail expected_votes=%si,total_votes=%si,quorum_threshold=%si,quorate=%si,has_qdevice=%si,qdevice_online=%si\n' \
+  "${expected:-0}" "${total:-0}" "${threshold:-0}" "$q" "$hq" "$qon"
+EOS
+  chmod 755 "$QUORUM_SCRIPT"
+  ok "script détail quorum (Qdevice + votes) installé → $QUORUM_SCRIPT"
+else
+  echo "[dry-run] installerait le script $QUORUM_SCRIPT (détail quorum corosync : Qdevice + votes)"
+fi
+
 if [[ $DRY_RUN -eq 1 ]]; then
   # Aperçu sans écrire (et sans exposer le token en clair sur la console).
   cat <<EOF
@@ -275,7 +337,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   agent         : interval=10s, hostname=$NODE_TAG
   global_tags   : node=$NODE_TAG, node_source=telegraf
   outputs.influxdb_v2 : $INFLUX_URL (bucket=$INFLUX_BUCKET, org=$INFLUX_ORG, insecure_skip_verify=true)
-  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system, net, exec (dm_names, iface_mac, hw_info)
+  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system, net, exec (dm_names, iface_mac, hw_info, quorum)
   (token masqué)
 EOF
 else
@@ -348,6 +410,17 @@ cat > "$CONF" <<EOF
 # carte « Détails hôte » de la page nœud (identification matérielle).
 [[inputs.exec]]
   commands = ["/usr/local/lib/prox4u-telegraf-hw-info.sh"]
+  data_format = "influx"
+  timeout = "10s"
+
+# ── Détail du quorum cluster (table quorum_detail) — Qdevice + votes ──
+# pvecm status (corosync) : l'API PVE ne donne que quorate + nodes. Ce script
+# fournit l'état du Qdevice (en ligne / hors ligne) et le détail des votes
+# (expected/total/threshold). Quasi statique (change au changement de
+# membership) ; prox4u lit le dernier point par nœud (fenêtre 10 min) pour
+# l'état réel du Qdevice + l'alerte « Qdevice hors ligne ».
+[[inputs.exec]]
+  commands = ["/usr/local/lib/prox4u-telegraf-quorum.sh"]
   data_format = "influx"
   timeout = "10s"
 

@@ -95,6 +95,32 @@ describe('computeHealthScore', () => {
     expect(computeHealthScore([okNode('a')], okKpis(), okPra()).score).toBe(100);
   });
 
+  it('Qdevice down → −10 (quorum non protégé — risque, pas incident)', () => {
+    const h = computeHealthScore([okNode('a'), okNode('b')], okKpis(), okPra(), {
+      quorum: 2,
+      quorumState: 'ok',
+      qdevice: 'down',
+    });
+    expect(h.score).toBe(90);
+    expect(h.penalties[0].reasonKey).toBe('health.penalty.qdeviceDown');
+  });
+
+  it('Qdevice up / absent / inconnu → aucune pénalité', () => {
+    expect(computeHealthScore([okNode('a')], okKpis(), okPra(), { quorum: 1, quorumState: 'ok', qdevice: 'up' }).score).toBe(100);
+    expect(computeHealthScore([okNode('a')], okKpis(), okPra(), { quorum: 1, quorumState: 'ok', qdevice: 'absent' }).score).toBe(100);
+    expect(computeHealthScore([okNode('a')], okKpis(), okPra(), { quorum: 1, quorumState: 'ok', qdevice: 'unknown' }).score).toBe(100);
+  });
+
+  it('quorum perdu + Qdevice down → pénalités cumulées (−25 −10)', () => {
+    const h = computeHealthScore([okNode('a'), okNode('b')], okKpis(), okPra(), {
+      quorum: 2,
+      quorumState: 'lost',
+      qdevice: 'down',
+    });
+    expect(h.score).toBe(65);
+    expect(h.penalties.map((p) => p.reasonKey)).toEqual(['health.penalty.quorumLost', 'health.penalty.qdeviceDown']);
+  });
+
   it('borné à 0 et libellés corrects', () => {
     const h = computeHealthScore(
       [{ ...okNode('a'), online: false }, { ...okNode('b'), online: false }],

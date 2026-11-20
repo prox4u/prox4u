@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diskStorageOf, iscsiHostVg, mapLimit } from './prox4u-client.js';
+import { clusterAltUrls, diskStorageOf, iscsiHostVg, mapLimit, promoteUrl } from './prox4u-client.js';
 
 /**
  * PVE 9 ne renvoie plus le champ `storage` dans /cluster/resources :
@@ -111,5 +111,67 @@ describe('iscsiHostVg (dédoublonnage iSCSI / VG LVM)', () => {
     ];
     expect(iscsiHostVg(tricky, 'baie-iscsi')).toMatchObject({ storage: 'vg' });
     expect(iscsiHostVg(tricky, 'baie')).toBeUndefined(); // « baie-iscsi:… » ne commence pas par « baie: »
+  });
+});
+
+describe('clusterAltUrls (failover — alternatives = APIs des autres nœuds)', () => {
+  it('cluster 2 nœuds, primaire .202 → alternative .201', () => {
+    expect(clusterAltUrls('https://192.168.1.202:8006', ['192.168.1.201', '192.168.1.202'])).toEqual([
+      'https://192.168.1.201:8006',
+    ]);
+  });
+
+  it('exclut l’URL primaire (même IP, même port)', () => {
+    expect(clusterAltUrls('https://192.168.1.201:8006', ['192.168.1.201'])).toEqual([]);
+  });
+
+  it('dédoublonne les IPs en double', () => {
+    expect(clusterAltUrls('https://pve1:8006', ['10.0.0.1', '10.0.0.1', '10.0.0.2'])).toEqual([
+      'https://10.0.0.1:8006',
+      'https://10.0.0.2:8006',
+    ]);
+  });
+
+  it('ignore les IPs null/undefined', () => {
+    expect(clusterAltUrls('https://pve1:8006', [null, undefined, '10.0.0.1'])).toEqual(['https://10.0.0.1:8006']);
+  });
+
+  it('hérite le port de l’URL primaire (port custom)', () => {
+    expect(clusterAltUrls('https://pve1:9443', ['10.0.0.1'])).toEqual(['https://10.0.0.1:9443']);
+  });
+
+  it('port par défaut 443 si l’URL primaire n’en a pas', () => {
+    expect(clusterAltUrls('https://pve1', ['10.0.0.1'])).toEqual(['https://10.0.0.1:443']);
+  });
+
+  it('URL primaire invalide → liste vide (pas de failover)', () => {
+    expect(clusterAltUrls('pas une url', ['10.0.0.1'])).toEqual([]);
+  });
+
+  it('pas d’IP connue → liste vide (standalone)', () => {
+    expect(clusterAltUrls('https://pve1:8006', [undefined, null])).toEqual([]);
+  });
+});
+
+describe('promoteUrl (failover sticky — promotion de l’URL qui a répondu)', () => {
+  it('activeIndex 0 → inchangé (déjà en tête)', () => {
+    expect(promoteUrl(['a', 'b', 'c'], 0)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('activeIndex 1 → rotation : l’URL vivante passe en tête', () => {
+    expect(promoteUrl(['mort', 'vivant', 'c'], 1)).toEqual(['vivant', 'mort', 'c']);
+  });
+
+  it('activeIndex 2 → rotation complète', () => {
+    expect(promoteUrl(['a', 'b', 'c'], 2)).toEqual(['c', 'a', 'b']);
+  });
+
+  it('index hors bornes (négatif / ≥ longueur) → inchangé', () => {
+    expect(promoteUrl(['a', 'b'], -1)).toEqual(['a', 'b']);
+    expect(promoteUrl(['a', 'b'], 5)).toEqual(['a', 'b']);
+  });
+
+  it('liste à une URL → inchangé', () => {
+    expect(promoteUrl(['a'], 0)).toEqual(['a']);
   });
 });

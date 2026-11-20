@@ -72,27 +72,27 @@ agent nœud** (Telegraf/SSH) :
 | `backup.verification_state` | WARN | API (PBS) |
 | `backup.retention_defined` | WARN | API (PBS) |
 | `backup.host_recovery` | CRIT | API (PBS) |
-| `system.cluster_quorum` | CRIT | **API** — **fait** dans prox4u (métrique `cluster_quorum` + cible cluster + pénalité Health Score −25 + badge, issue #3) |
+| `system.cluster_quorum` | CRIT | **API** — **fait + validé E2E** dans prox4u (métrique `cluster_quorum` + cible cluster + pénalité Health Score −25 + badge + failover endpoint, issue #3 clôturée) |
 | `system.failed_units` | CRIT | agent (systemd) — **Telegraf** |
 | `system.ha_state` | CRIT | API |
 | `system.pending_reboot` | WARN | agent / API limitée |
 | `system.time_synchronisation` | WARN | **API** (header `Date` vs serveur) — **P5 prox4u** |
-| `system.memory_overcommit` | WARN | **déjà fait** dans prox4u (`overcommit.json`) |
+| `system.memory_overcommit` | WARN | **déjà fait** dans prox4u (`overcommit.json`) + ✅ **audit v1 Phase 1** (warn/crit) |
 | `system.kernel_current` / `update_chain` / `security_updates` | WARN | agent (apt) |
 | `system.swap_configured` / `journal_size` / `boot_loader` | INFO/WARN | agent |
 | `security.certificate_expiry` | WARN | **API** (TLS endpoints) — **P5 prox4u** |
 | `security.lynis_warnings` / `ssh_root_login` / `host_firewall_enabled` | WARN | agent / API (firewall) |
-| `guests.qemu_without_agent` | INFO | **API** (config + agent déjà lus) |
-| `guests.privileged_containers` | WARN | **API** (config) |
-| `guests.autostart` / `cpu_host_type` | INFO | **API** (config) |
+| `guests.qemu_without_agent` | INFO | **API** (config + agent déjà lus) — ✅ **audit v1 Phase 1** (crit) |
+| `guests.privileged_containers` | WARN | **API** (config) — ✅ **audit v1 Phase 1** |
+| `guests.autostart` / `cpu_host_type` | INFO | **API** (config) — `cpu_host_type` ✅ **audit v1 Phase 1** (`autostart` = Phase 2) |
 | `guests.stuck_snapshots` | WARN | **API** (snapshots déjà lus) |
 | `guests.replication_state` | WARN | **API** |
 | `storage.zfs_arc_max` / `zfs_scrub_age` | WARN | **API** (`/nodes/{n}/zfs`) |
-| `storage.thin_pool_overprovisioning` | WARN | **API** (`/nodes/{n}/disks/lvmthin` déjà pollé) |
+| `storage.thin_pool_overprovisioning` | WARN | **API** (`/nodes/{n}/disks/lvmthin` déjà pollé) — ✅ **audit v1 Phase 1** (warn/crit) |
 | `storage.orphaned_volumes` / `pool_integrity` / `connected_storage` | WARN/CRIT | API |
 | `storage.ceph_health` / `array_integrity` | CRIT | API / agent |
 | `hardware.disk_errors` / `disk_service_life` | WARN/INFO | **agent (SMART)** — **Telegraf** |
-| `network.bond_members` / `bridge_without_ports` | WARN/INFO | **API** (network déjà pollé) |
+| `network.bond_members` / `bridge_without_ports` | WARN/INFO | **API** (network déjà pollé) — `bridge_without_ports` ✅ **audit v1 Phase 1** (warn) ; `bond_members` = Phase 2 |
 
 → La grande majorité est **faisable via l'API PVE** avec les données que prox4u collecte déjà ;
 seuls SMART / températures / journal / unités systemd / apt exigent un agent (Telegraf).
@@ -146,10 +146,17 @@ Telegraf, token requis, HTTPS), module d'auth (users/groups dans `data/auth.json
 prox4u (poller distant API PVE) a déjà : health score déterministe, PRA, capacity planning,
 historique InfluxDB (raw 5 s / consolidated 5 min), alarmes Centreon (moteur ok⇄firing 15 s).
 
-- **Via l'API PVE seule** (données déjà pollées, coût faible) : **quorum** (✅ fait — issue #3 :
-  métrique `cluster_quorum` + cible cluster + pénalité Health Score −25 + badge), **certificats**
-  (expiration TLS endpoints), **drift NTP** (header `Date`), **audit best-practices** (agent
-  manquant, CT privilégiés, autostart, snapshots bloqués, bonds/bridges, ARC ZFS, thin pool).
+- **Via l'API PVE seule** (données déjà pollées, coût faible) : **quorum** (✅ fait + **validé E2E**
+  — issue #3 clôturée : métrique `cluster_quorum` + cible cluster + pénalité Health Score −25 + badge
+  rouge/vert + **failover d'endpoint** (nœud endpoint down → bascule sur l'autre nœud, champ `apiVia`)
+  + **note Qdevice** (cluster 2 nœuds + Qdevice : 1 nœud down seul ne perd pas le quorum, l'app lit
+  `quorate` PVE 9 = la vérité)), **certificats**
+  (expiration TLS endpoints), **drift NTP** (header `Date`), **audit best-practices** (✅ **Phase 1
+  livrée + validée E2E** — issue #6 : module `audit` v1, 7 checks API (agent manquant, CT
+  privilégiés, cpu=host, bridges sans port, thin pool sur-alloué, RAM sur-allouée, versions PVE
+  hétérogènes) + **2ᵉ score de configuration** + page `/audit` + constats cliquables — voir skill
+  `audit` ; restent autostart, snapshots bloqués, bonds, ARC ZFS (Phase 2) + checks agent Telegraf
+  (Phase 3)).
 - **Nécessite un agent nœud = Telegraf** : **SMART** (détection prédictive), **températures**,
   **journal/erreurs**, **unités systemd échouées**, **latence ping**.
 - **Mécanique d'alarmes à renforcer** : **hystérésis de sortie** (seuil de récupération distinct),

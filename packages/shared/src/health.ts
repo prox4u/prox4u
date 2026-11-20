@@ -5,6 +5,7 @@ import {
   NodeHealth,
   PraReport,
   THRESHOLDS,
+  type QdeviceState,
   type QuorumState,
 } from './types.js';
 
@@ -16,6 +17,7 @@ import {
  * Pénalités :
  *   - nœud hors ligne            : −25 par nœud
  *   - quorum cluster perdu       : −25   (guests actifs mais cluster en lecture seule)
+ *   - Qdevice hors ligne         : −10   (quorum non protégé si un nœud tombe — risque)
  *   - CPU cluster  > 90 %        : −20   (ou > 80 % : −10)
  *   - RAM cluster  > 90 %        : −20   (ou > 80 % : −10)
  *   - pire stockage > 90 %       : −15   (ou > 80 % : −8)
@@ -27,7 +29,7 @@ export function computeHealthScore(
   nodes: NodeHealth[],
   kpis: KpiSummary,
   pra: PraReport,
-  cluster?: { quorum: number | null; quorumState: QuorumState | null },
+  cluster?: { quorum: number | null; quorumState: QuorumState | null; qdevice?: QdeviceState },
 ): HealthScore {
   const penalties: HealthPenalty[] = [];
 
@@ -43,6 +45,13 @@ export function computeHealthScore(
       params: { online: nodes.filter((n) => n.online).length, total: nodes.length },
       points: 25,
     });
+  }
+
+  // Qdevice configuré mais hors ligne : le quorum n'est plus protégé (si un
+  // nœud tombe ensuite, le quorum est perdu). Pénalité « risque » (−10, même
+  // poids que praWarn) — pas d'incident immédiat tant que le quorum tient.
+  if (cluster?.qdevice === 'down') {
+    penalties.push({ reasonKey: 'health.penalty.qdeviceDown', points: 10 });
   }
 
   const resourcePenalty = (pct: number, critKey: string, warnKey: string) => {

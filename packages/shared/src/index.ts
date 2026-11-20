@@ -1,6 +1,6 @@
 export * from './types.js';
 export { computeHealthScore } from './health.js';
-export { deriveQuorumState } from './quorum.js';
+export { deriveQuorumState, deriveQdeviceState, qdeviceStateFromCorosync } from './quorum.js';
 export { computePra } from './pra.js';
 export { linearRegression, buildForecast } from './capacity.js';
 export type { RegressionResult } from './capacity.js';
@@ -14,6 +14,30 @@ export {
   riskSeverity,
 } from './overcommit.js';
 export type { OvercommitMetric, OvercommitReport } from './overcommit.js';
+export {
+  AUDIT_PENALTIES,
+  auditLabelKey,
+  runAudit,
+  checkQemuWithoutAgent,
+  checkPrivilegedContainers,
+  checkCpuHostType,
+  checkBridgeWithoutPorts,
+  checkThinPoolOverprovisioning,
+  checkMemoryOvercommit,
+  checkNodeVersionMismatch,
+} from './audit.js';
+export type {
+  AuditSeverity,
+  AuditTargetKind,
+  AuditTarget,
+  AuditFinding,
+  AuditCounts,
+  AuditScore,
+  AuditBridge,
+  AuditInput,
+  AuditEndpointResult,
+  AuditAllResponse,
+} from './audit.js';
 export { subnetOf, parseVmNets, buildTopology, segmentKey, impactAnalysis, ipInSubnet, internalNetworkSegments, matchAgentNetsByMac, primaryAgentIp } from './network.js';
 export type { NetworkKind } from './network.js';
 export { segmentImpact, buildNetworkInventory, buildNetworkInventoryAll, filterNetworkRows, encodeNetSel, decodeNetSel } from './network-inventory.js';

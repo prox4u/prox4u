@@ -17,6 +17,9 @@ export const fr: Record<string, string> = {
 
   'cluster.quorumOk': 'Quorum {{online}}/{{total}}',
   'cluster.quorumLost': 'Quorum perdu',
+  'cluster.apiVia': 'API via {{host}} (nœud endpoint injoignable)',
+  'cluster.qdeviceUp': 'Qdevice en ligne',
+  'cluster.qdeviceDown': 'Qdevice hors ligne',
 
   'metrics.title': 'Métriques du cluster',
   'metrics.titleCpu': 'Métriques du cluster — CPU',
@@ -178,6 +181,7 @@ export const fr: Record<string, string> = {
   'health.penalty.praCrit': 'Bascule N-1 impossible si un site tombe',
   'health.penalty.praWarn': 'Bascule N-1 possible mais sans marge si un site tombe',
   'health.penalty.quorumLost': 'Quorum cluster perdu ({{online}}/{{total}} nœuds en ligne)',
+  'health.penalty.qdeviceDown': 'Qdevice hors ligne — quorum non protégé si un nœud tombe',
 
   'kpi.nodes': 'Nœuds actifs',
   'kpi.cpuRam': 'Allocation CPU / RAM',
@@ -239,6 +243,7 @@ export const fr: Record<string, string> = {
   'alerts.praCrit': 'Si {{site}} tombe : bascule impossible — la capacité des autres sites est insuffisante',
   'alerts.praWarn': 'Si {{site}} tombe : bascule possible mais sans marge (les autres sites seraient utilisés à {{pct}} %)',
   'alerts.quorumLost': 'Quorum cluster perdu — cluster en lecture seule ({{online}}/{{total}} nœuds en ligne)',
+  'alerts.qdeviceDown': 'Qdevice hors ligne — le quorum n’est plus protégé si un nœud tombe',
 
   'nav.topology': 'Topologie réseau',
   'nav.storage': 'Stockage',
@@ -844,6 +849,7 @@ export const fr: Record<string, string> = {
   'alarm.metric.node_disk_pct': 'Disque nœud (%)',
   'alarm.metric.node_online': 'Nœud en ligne',
   'alarm.metric.cluster_quorum': 'Quorum cluster (1 = ok)',
+  'alarm.metric.cluster_qdevice': 'Qdevice cluster (1 = up/absent, 0 = down)',
   // --- Récapitulatif de provisioning ---
   'alarm.summary.title': 'Provisionnement Centreon',
   'alarm.summary.ok': 'Service créé et configuré, configuration déployée sur le poller « {{poller}} ». Les trames NSCA peuvent être reçues.',
@@ -937,4 +943,33 @@ export const fr: Record<string, string> = {
   'widgets.saveError': 'Échec de l’enregistrement — nouvelle tentative au prochain changement',
   'widgets.saveErrorShort': 'Erreur d’enregistrement',
   'widgets.close': 'Fermer la bibliothèque',
+
+  // --- Audit / best-practices (P3 — 2ᵉ score de configuration) ---
+  'nav.audit': 'Audit / best-practices',
+  'audit.title': 'Audit / best-practices',
+  'audit.score': 'Score de configuration',
+  'audit.scoreDesc': '2ᵉ score (configuration) en complément du health score (ressources). Checks purs sur les données déjà pollées — chaque constat est cliquable vers la cible concernée.',
+  'audit.label.compliant': 'Conforme',
+  'audit.label.toImprove': 'À améliorer',
+  'audit.label.toReview': 'À revoir',
+  'audit.endpoint': 'Endpoint',
+  'audit.scoreCol': 'Audit',
+  'audit.noData': 'Aucune donnée d’audit pour le moment (snapshot en cours de chargement).',
+  'audit.checksPassed': 'checks passés',
+  'audit.findings.title': 'Constats',
+  'audit.findings.desc': 'Écarts aux bonnes pratiques, par sévérité. Cliquez sur une cible pour ouvrir le détail.',
+  'audit.findings.singular': 'constat',
+  'audit.findings.plural': 'constats',
+  'audit.severity.crit': 'Critique',
+  'audit.severity.warn': 'Vigilance',
+  'audit.severity.info': 'Info',
+  'audit.openTarget': 'Ouvrir le détail',
+  'audit.empty': 'Aucun constat — configuration conforme aux bonnes pratiques.',
+  'audit.finding.qemu_without_agent': '{{name}} — VM QEMU sans agent invité (QGA)',
+  'audit.finding.privileged_containers': '{{name}} — conteneur LXC privilégié',
+  'audit.finding.cpu_host_type': '{{name}} — VM sans cpu=host (migration live limitée)',
+  'audit.finding.bridge_without_ports': '{{node}} : pont {{bridge}} sans port physique',
+  'audit.finding.thin_pool_overprovisioning': '{{storage}} — pool thin sur-alloué (ratio {{ratio}})',
+  'audit.finding.memory_overcommit': '{{node}} — RAM sur-allouée (ratio {{ratio}})',
+  'audit.finding.node_version_mismatch': 'Versions PVE hétérogènes : {{versions}}',
 };

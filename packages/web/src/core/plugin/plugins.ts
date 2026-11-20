@@ -11,6 +11,7 @@ import { vmViewPluginV4 } from '../../plugins/vm-view_v4';
 import { proxmoxInventoryPlugin } from '../../plugins/proxmox-inventory';
 import { centreonNscaPlugin } from '../../plugins/centreon-nsca';
 import { nodeSensorsPlugin } from '../../plugins/node-sensors';
+import { auditPlugin } from '../../plugins/audit';
 import { FEATURES } from '../config/features';
 import type { Plugin } from './types';
 
@@ -39,4 +40,7 @@ export const PLUGINS: Plugin[] = [
   ...(FEATURES.USE_PLUGIN_CENTREON_NSCA ? [centreonNscaPlugin] : []),
   // Famille node-sensors : métriques locales Telegraf (SMART, capteurs, ZFS, unités).
   ...(FEATURES.USE_PLUGIN_NODE_SENSORS ? [nodeSensorsPlugin] : []),
+  // Famille audit : 2ᵉ score de configuration (best-practices, P3) — checks purs,
+  // audit dans le snapshot WS, constats cliquables vers la VM/nœud/stockage.
+  ...(FEATURES.USE_PLUGIN_AUDIT ? [auditPlugin] : []),
 ];

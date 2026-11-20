@@ -1,6 +1,6 @@
 ---
 name: hypervision
-description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut) + page nœud : cartes « Détails hôte » (identification hôte + matériel CPU/DMI via /api/node-hardware) et « Capacité et utilisation » (barres used vs capacité CPU/Mémoire/Stockage) + vue d'ensemble production multi-clusters : sélecteur de cluster sur les 3 graphiques 7 j (« Tous les clusters »/[cluster] — courbes, valeur courante et ligne d'allocation suivent le cluster, /api/metrics?endpoint= déjà supportée, 100 % frontend) + carte « Nœuds — tous les clusters » (matrice : une ligne par nœud groupés par cluster, État/CPU/RAM/Disque/VMs, teintes usageSeverity overcommit.json, clic → page nœud, snapshot WS zéro API) + capacity planning par élément (3 widgets capacity-cpu/ram/disk 1 série + 1 projection + 1 badge, réemployés dans le détail VM vm-view_v4) + badge quorum cluster (page cluster + vue d'ensemble, pénalité Health Score −25, issue #3/P1). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
+description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut) + page nœud : cartes « Détails hôte » (identification hôte + matériel CPU/DMI via /api/node-hardware) et « Capacité et utilisation » (barres used vs capacité CPU/Mémoire/Stockage) + vue d'ensemble production multi-clusters : sélecteur de cluster sur les 3 graphiques 7 j (« Tous les clusters »/[cluster] — courbes, valeur courante et ligne d'allocation suivent le cluster, /api/metrics?endpoint= déjà supportée, 100 % frontend) + carte « Nœuds — tous les clusters » (matrice : une ligne par nœud groupés par cluster, État/CPU/RAM/Disque/VMs, teintes usageSeverity overcommit.json, clic → page nœud, snapshot WS zéro API) + capacity planning par élément (3 widgets capacity-cpu/ram/disk 1 série + 1 projection + 1 badge, réemployés dans le détail VM vm-view_v4) + badge quorum cluster (page cluster + vue d'ensemble, pénalité Health Score −25, issue #3/P1, E2E validé — lit `quorate` PVE 9, note Qdevice) + badge failover « API via … » (nœud endpoint injoignable → bascule sur l'autre nœud du cluster, champ `apiVia`) + surveillance du Qdevice (état réel corosync via table Telegraf `quorum_detail`/`pvecm status`, repli déduction API `deriveQdeviceState`, badge 🟢/🔴 up/down + alerte warn `qdevice-down` + pénalité Health Score −10 si down, métrique Centreon `cluster_qdevice`, `cluster.quorumDetail` votes) + score de configuration audit (P3, issue #6) : colonne « Audit » du tableau overview + widget jauge « Score de configuration » du détail endpoint (lit `snapshot.audit` calculé par le poller, zéro API — moteur + page `/audit` + constats cliquables dans la skill `audit`). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
 ---
 
 # Hypervision — Base de connaissance
@@ -385,12 +385,21 @@ Le quorum du cluster est désormais **collecté** (entrée cluster de `/cluster/
 `getNodes()` → `PveClusterStatus { nodes, quorum, quorumState }`) et **affiché** :
 
 - **Champ snapshot** : `DashboardSnapshot.cluster` += `quorum: number | null` +
-  `quorumState: 'ok' | 'lost' | null` (null = inconnu). `quorumState` = `quorum_state` PVE 8+
-  sinon dérivé `en ligne < quorum → lost` (fonction pure `deriveQuorumState` dans shared,
-  testée). Le mock force `quorumState: 'lost'` en scénario `critical`.
+  `quorumState: 'ok' | 'lost' | null` (null = inconnu). **PVE 9 expose `quorate` (1/0) — c'est
+  la vérité, lue en priorité** (spec officielle `PVE/API2/Cluster.pm` : `quorate` = « majority
+  of nodes online to make decisions », `nodes` = « count, including offline nodes » ; pas de
+  champ `quorum`/`quorum_state` en 9). Fallback : `quorum_state` ('ok'/'lost') sinon dérivé
+  `en ligne < quorum → lost` (fonction pure `deriveQuorumState` dans shared, testée). Le mock
+  force `quorumState: 'lost'` en scénario `critical`.
+  - **Note Qdevice** : un cluster 2 nœuds + **Qdevice** a 3 votes (quorum=2). 1 nœud down seul
+    **ne perd pas** le quorum (le Qdevice le maintient : 1 nœud + 1 Qdevice = 2 ≥ 2) ; il faut
+    nœud down **+** Qdevice down (ou les 2 nœuds down). L'app lit `quorate` → comportement
+    correct dans les deux cas. Le badge « Quorum X/Y » affiche le **nombre de nœuds** (pas les
+    votes — l'API n'expose pas les votes), l'état ok/lost vient de `quorate`.
 - **Badge page cluster** (`pages/endpoint.tsx`, en-tête à côté du `h1`) : `Badge tone="crit"`
   « Quorum perdu » si `lost`, `Badge tone="ok"` « Quorum {{online}}/{{total}} » si `ok`,
-  rien si inconnu (null).
+  rien si inconnu (null). **+ badge failover** `Badge tone="warn"` « API via {{host}} (nœud
+  endpoint injoignable) » si `EndpointSnapshot.apiVia` est définie (voir skill `api` §failover).
 - **Carte endpoint vue d'ensemble** (`pages/overview.tsx`, `EndpointHealthBody`) : suffixe
   rouge « · Quorum perdu » dans la ligne `x/y nœuds · …` si `lost` (compact, pas de badge).
 - **Health Score** : pénalité **−25** (`health.penalty.quorumLost`, params online/total) si
@@ -403,6 +412,102 @@ Le quorum du cluster est désormais **collecté** (entrée cluster de `/cluster/
   `alerts.quorumLost` (fr/en).
 - **Règle d'alarme** : voir skill `centreon-nsca` (métrique `cluster_quorum` + cible
   `kind: 'cluster'`).
-- **Validation** : tests shared (quorum.test.ts 3, health 2, centreon-nsca 2) + typecheck
-  shared/server/web + vite build. E2E réel à faire : arrêt du nœud `nfs` → quorum lost
-  (badge rouge + pénalité + alerte), redémarrage → récupération.
+- **Validation** : tests shared (quorum.test.ts 3, health 2, centreon-nsca 2) + tests server
+  (helpers failover `clusterAltUrls`/`promoteUrl` dans prox4u-client.test.ts) + typecheck
+  shared/server/web + vite build.
+- **E2E validé** (2026-11-20, lab nested — cluster 2 nœuds ProxSite1/ProxSite2 + Qdevice sur la
+  VM NFS 192.168.1.190) :
+  - **Perte + failover** : nœud endpoint (.202) arrêté + Qdevice (NFS) déconnecté → `quorate=0`
+    → `quorumState=lost`, health **30 critical** (nodeDown −25 + quorumLost −25 + praCrit −20),
+    alerte crit, **badge rouge « Quorum perdu »** + **badge failover « API via 192.168.1.201:8006
+    (nœud endpoint injoignable) »** (l'app a basculé sur l'autre nœud) — screenshot
+    `docs/screenshots/quorum-lost-failover.png`.
+  - **Récupération** : nœud relancé + NFS reconnectée → `quorate=1` → `state=ok`, badge vert
+    « Quorum 2/2 », `apiVia` disparu (retour auto sur l'endpoint configuré).
+
+### 11.10. Surveillance du Qdevice (état réel corosync, P1)
+
+L'API PVE n'expose **que** `quorate` + `nodes` (vérifié dans le code source PVE :
+`PVE/API2/Cluster.pm`, grep des 25 modules API2) — l'état du Qdevice (en ligne / hors ligne)
+et le détail des votes n'existent qu'au niveau **corosync** (`pvecm status`). Deux sources,
+en cascade :
+
+- **Source 1 — corosync (réelle, prioritaire)** : script Telegraf `exec`
+  `prox4u-telegraf-quorum.sh` (installé par `deploiement/60-telegraf-nodes.sh`, section 5e)
+  parse `pvecm status` → table `quorum_detail` (base `raw`) :
+  `expected_votes`, `total_votes`, `quorum_threshold`, `quorate`, `has_qdevice` (0/1),
+  `qdevice_online` (0/1). Le membre Qdevice est matché par son **nodeid `0x00000000`**
+  (constante corosync) — PAS par le nom « Qdevice » en dernier champ : quand le Qdevice est
+  hors ligne, la ligne porte un suffixe (`0x00000000  0  Qdevice (votes 1)`) et le dernier
+  champ n'est plus « Qdevice ». `qdevice_online` = votes (colonne 2) > 0 ; `has_qdevice` =
+  Flags contient « Qdevice » OU ligne nodeid `0x00000000` présente. Silencieux si `pvecm`
+  absent (nœud hors cluster).
+- **Source 2 — déduction API (repli)** : `deriveQdeviceState(nodesTotal, nodesOnline,
+  quorumState)` (shared, pure) — seuil sans Qdevice `floor(N/2)+1` ; nœuds insuffisants +
+  quorate → `up`, sinon `down` ; nœuds suffisants → `unknown`.
+
+**Chaîne** : poller `readQuorumDetail()` (querySql InfluxDB `raw`, **cache 30 s**/endpoint,
+fenêtre 10 min, filtré par nœuds de l'endpoint, `ORDER BY time DESC LIMIT 1`) → si données
+`qdeviceStateFromCorosync(hasQdevice, qdeviceOnline)` (`up`/`down`/`absent`), sinon repli
+`deriveQdeviceState`. Résultat dans `DashboardSnapshot.cluster` :
+- `qdevice: 'up' | 'down' | 'absent' | 'unknown'`
+- `quorumDetail: QuorumDetail | null` (expectedVotes, totalVotes, quorumThreshold, quorate,
+  hasQdevice, qdeviceOnline) — null si agent non déployé.
+
+**UI** (page cluster `endpoint.tsx`) : badge 🟢 `cluster.qdeviceUp` « Qdevice en ligne » si
+`up`, badge 🔴 `cluster.qdeviceDown` « Qdevice hors ligne » si `down` ; `absent`/`unknown`
+masqués (rien à surveiller / indéterminé).
+
+**Alerte** : `buildAlerts` += `qdevice-down` **warn** `alerts.qdeviceDown` si `qdevice ===
+'down'` (le quorum n'est plus protégé si un nœud tombe — pas d'incident immédiat tant que le
+quorum tient).
+
+**Health Score** : pénalité **−10** si `qdevice === 'down'` (`health.penalty.qdeviceDown`) —
+même poids que `praWarn` (risque, pas incident). Cumulable avec `quorumLost` (−25) si le
+quorum est aussi perdu. `up`/`absent`/`unknown` → aucune pénalité.
+
+**Centreon NSCA** : métrique `cluster_qdevice` (cible `kind: 'cluster'`) — Qdevice
+up/absent=1, down=0, unknown=null ; service auto-nommé `Prox4u-Alarm-CLUSTER-QDEVICE`.
+cf. skill `centreon-nsca`.
+
+**i18n** : `cluster.qdeviceUp` / `cluster.qdeviceDown` + `alerts.qdeviceDown` +
+`health.penalty.qdeviceDown` + `alarm.metric.cluster_qdevice` (fr/en).
+
+**Tests** : shared quorum.test.ts 15 (3 deriveQuorumState + 9 deriveQdeviceState + 3
+qdeviceStateFromCorosync) + health.test.ts 3 (pénalité qdevice down / up-absent-unknown /
+cumul quorumLost) + centreon-nsca.test.ts 2 (defaultServiceName + METRIC_IDS cluster_qdevice).
+**E2E validé avec données réelles** (2026-11-20, lab nested) : `systemctl stop corosync-qnetd`
+sur la VM Qdevice → `qdevice_online=0` → badge 🔴 + alerte warn + **Health Score −10**
+(quorum maintenu par les 2 nœuds, `quorumState=ok`) ; `systemctl start corosync-qnetd` →
+`qdevice_online=1, total_votes=3` → badge 🟢, alerte disparue, score restauré. Screenshot
+`docs/screenshots/qdevice-online-badge.png`.
+
+**Déployé** (2026-11-20) sur les nœuds ProxSite1/ProxSite2 (re-run
+`deploiement/60-telegraf-nodes.sh` sur un nœud = idempotent, ajoute le script + la section
+`[[inputs.exec]]`). Le Qdevice (VM NFS) n'a PAS besoin de Telegraf — l'état du Qdevice se lit
+depuis n'importe quel nœud du cluster (`pvecm status`).
+
+### 11.11. Évolution v4 (en place) — Score de configuration (audit, P3) : colonne overview + widget endpoint
+
+> **2026-11-20** — P3 (issue #6) : un **2ᵉ score de configuration** (complément du health score
+> ressources). Le moteur d'audit vit dans `shared/audit.ts` et est **calculé par le poller** à
+> chaque tick → posé dans le **snapshot WS** (`snapshot.audit`) — hypervision_v4 le lit **en
+> direct, zéro API**. Détail complet du module : **skill `audit`**. Implémenté **en place dans
+> `hypervision_v4`** (dérogation à la règle `_vN`).
+
+- **Vue d'ensemble** (`pages/overview.tsx`) : **colonne « Audit »** dans le tableau endpoints —
+  `auditScoreCell` (score coloré ≥80 ok / 50–79 warn / <50 crit, `—` si null) + `auditScoreTone`.
+  Lit `ep.snapshot.audit.score`. (Le widget `table` est étroit w7 → la colonne est en fin de
+  tableau, défilement horizontal — comportement existant du tableau 13 colonnes.)
+- **Détail endpoint** (`pages/endpoint.tsx`) : **widget « Score de configuration »** —
+  `components/audit-gauge.tsx` (`AuditGaugeBody` : jauge ECharts + liste des constats, **miroir
+  de `HealthGaugeBody`**) + slot `extra` = badge état (Conforme/À améliorer/À revoir). Ajouté au
+  **catalogue** (→ 21 widgets) + à **`ENDPOINT_DEFAULT_LAYOUT`** (y19, sous la surallocation) —
+  **pas** dans `DEFAULT_LAYOUT` (store/layout.ts) pour éviter un **slot vide** sur les pages
+  legacy v1/v2/v3 qui l'utilisent en fallback.
+- **i18n** : `audit.scoreCol` (en-tête colonne) + `audit.*` (skill `audit` §9).
+
+**Vérifications** : typecheck + build OK ; **shared 366** (dont 35 audit) + **server 240** verts ;
+Playwright — colonne « Audit » dans le tableau overview (`hasAudit: true`) + widget audit dans le
+détail endpoint (jauge 87 + badge Conforme + constats) ; constats cliquables (clic VM →
+`/vms?tree=…&vm=…`).

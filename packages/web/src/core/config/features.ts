@@ -24,6 +24,8 @@ export const FEATURES = {
   USE_PLUGIN_CENTREON_NSCA: env.VITE_USE_PLUGIN_CENTREON_NSCA !== 'false',
   // Métriques locales Telegraf (SMART, capteurs, ZFS, unités systemd) : défaut ON, disjoncteur opt-out.
   USE_PLUGIN_NODE_SENSORS: env.VITE_USE_PLUGIN_NODE_SENSORS !== 'false',
+  // Audit / best-practices (2ᵉ score de configuration, P3) : défaut ON, disjoncteur opt-out.
+  USE_PLUGIN_AUDIT: env.VITE_USE_PLUGIN_AUDIT !== 'false',
 } as const;
 
 export type FeatureFlag = keyof typeof FEATURES;

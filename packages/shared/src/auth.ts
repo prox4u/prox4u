@@ -259,4 +259,10 @@ export const DEFAULT_MODULES: ModuleDef[] = [
     description: 'Métriques locales Telegraf : SMART disques, températures, ZFS ARC, unités systemd',
     globallyEnabled: true,
   },
+  {
+    id: 'audit',
+    name: 'Audit / best-practices',
+    description: '2ᵉ score de configuration : écarts aux bonnes pratiques (agent, conteneurs, surallocation, réseau, versions)',
+    globallyEnabled: true,
+  },
 ];
