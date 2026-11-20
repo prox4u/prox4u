@@ -206,6 +206,10 @@ export const fr: Record<string, string> = {
   'pra.pctLabel': 'de la capacité libre des autres sites serait utilisée',
   'pra.cores': '{{n}} cœurs',
   'pra.ram': '{{size}}',
+  'pra.nodes': 'Nœuds',
+  'pra.unmapped': 'Nœuds non mappés dans un site (non couverts par le PRA — à mapper dans sites.json) : {{nodes}}',
+  'pra.globalTitle': 'PRA global — cross-endpoints',
+  'pra.globalHint': 'Si un bâtiment tombe, les autres sites de TOUS les clusters peuvent absorber (prérequis : stockage identique d’un site à l’autre). Complément du PRA par cluster (détail endpoint).',
 
   'capacity.title': 'Capacity planning — 30 jours',
   'capacity.titleCpu': 'Capacity planning — CPU',

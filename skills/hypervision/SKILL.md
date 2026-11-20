@@ -1,6 +1,6 @@
 ---
 name: hypervision
-description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut) + page nœud : cartes « Détails hôte » (identification hôte + matériel CPU/DMI via /api/node-hardware) et « Capacité et utilisation » (barres used vs capacité CPU/Mémoire/Stockage) + vue d'ensemble production multi-clusters : sélecteur de cluster sur les 3 graphiques 7 j (« Tous les clusters »/[cluster] — courbes, valeur courante et ligne d'allocation suivent le cluster, /api/metrics?endpoint= déjà supportée, 100 % frontend) + carte « Nœuds — tous les clusters » (matrice : une ligne par nœud groupés par cluster, État/CPU/RAM/Disque/VMs, teintes usageSeverity overcommit.json, clic → page nœud, snapshot WS zéro API) + capacity planning par élément (3 widgets capacity-cpu/ram/disk 1 série + 1 projection + 1 badge, réemployés dans le détail VM vm-view_v4) + badge quorum cluster (page cluster + vue d'ensemble, pénalité Health Score −25, issue #3/P1, E2E validé — lit `quorate` PVE 9, note Qdevice) + badge failover « API via … » (nœud endpoint injoignable → bascule sur l'autre nœud du cluster, champ `apiVia`) + surveillance du Qdevice (état réel corosync via table Telegraf `quorum_detail`/`pvecm status`, repli déduction API `deriveQdeviceState`, badge 🟢/🔴 up/down + alerte warn `qdevice-down` + pénalité Health Score −10 si down, métrique Centreon `cluster_qdevice`, `cluster.quorumDetail` votes) + score de configuration audit (P3, issue #6) : colonne « Audit » du tableau overview + widget jauge « Score de configuration » du détail endpoint (lit `snapshot.audit` calculé par le poller, zéro API — moteur + page `/audit` + constats cliquables dans la skill `audit`). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
+description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ensemble du parc multi-endpoints, détail endpoint (dashboard 17 blocs), détail nœud ; KPIs, graphiques ressources 7 jours (dont stockage VM), Health Score, PRA N-1, capacity planning, surallocation, alertes ; hypervision_v2 = vue d'ensemble en grille personnalisable par user (drag/resize/bibliothèque, persistance /api/user-config) ; hypervision_v3 = + widget « Températures — par nœud » (max capteurs + max disques SMART, live /api/node-sensors) ; hypervision_v4 = bibliothèque de graphiques étendue à TOUTES les pages (page cluster 17 blocs + page nœud unifiée KPIs/table VMs/graphiques, KPIs et table aussi déplaçables/retraitables, réemploi cross-plugin des corps du Monitor nœud vm-view_v4) + graphiques métriques unitaires du cluster (CPU / RAM / Réseau — 1 série, export CSV) et tooltip date/heure (et non timestamp unix brut) + page nœud : cartes « Détails hôte » (identification hôte + matériel CPU/DMI via /api/node-hardware) et « Capacité et utilisation » (barres used vs capacité CPU/Mémoire/Stockage) + vue d'ensemble production multi-clusters : sélecteur de cluster sur les 3 graphiques 7 j (« Tous les clusters »/[cluster] — courbes, valeur courante et ligne d'allocation suivent le cluster, /api/metrics?endpoint= déjà supportée, 100 % frontend) + carte « Nœuds — tous les clusters » (matrice : une ligne par nœud groupés par cluster, État/CPU/RAM/Disque/VMs, teintes usageSeverity overcommit.json, clic → page nœud, snapshot WS zéro API) + capacity planning par élément (3 widgets capacity-cpu/ram/disk 1 série + 1 projection + 1 badge, réemployés dans le détail VM vm-view_v4) + badge quorum cluster (page cluster + vue d'ensemble, pénalité Health Score −25, issue #3/P1, E2E validé — lit `quorate` PVE 9, note Qdevice) + badge failover « API via … » (nœud endpoint injoignable → bascule sur l'autre nœud du cluster, champ `apiVia`) + surveillance du Qdevice (état réel corosync via table Telegraf `quorum_detail`/`pvecm status`, repli déduction API `deriveQdeviceState`, badge 🟢/🔴 up/down + alerte warn `qdevice-down` + pénalité Health Score −10 si down, métrique Centreon `cluster_qdevice`, `cluster.quorumDetail` votes) + score de configuration audit (P3, issue #6) : colonne « Audit » du tableau overview + widget jauge « Score de configuration » du détail endpoint (lit `snapshot.audit` calculé par le poller, zéro API — moteur + page `/audit` + constats cliquables dans la skill `audit`) + PRA global cross-endpoints (niveau 3, widget `pra-global` de la vue d'ensemble — si un bâtiment tombe, les autres sites de TOUS les clusters peuvent absorber ; calcul serveur `computeGlobalPra()` poussé via WS `snapshot.globalPra`, sites préfixés par endpoint, condition ≥ 2 sites répartis sinon `na`, prérequis stockage ISO documenté). Use when working on the hypervision plugin (packages/web/src/plugins/hypervision/, hypervision_v2/, hypervision_v3/ ou hypervision_v4/), the /, /e/:endpointId or /e/:endpointId/n/:nodeId routes, or its components (resource-chart, kpi-row, metrics-panel, pra-panel, capacity-chart, overcommit-card, system-nodes-card, temp-nodes-card, node-widgets…).
 ---
 
 # Hypervision — Base de connaissance
@@ -511,3 +511,68 @@ depuis n'importe quel nœud du cluster (`pvecm status`).
 Playwright — colonne « Audit » dans le tableau overview (`hasAudit: true`) + widget audit dans le
 détail endpoint (jauge 87 + badge Conforme + constats) ; constats cliquables (clic VM →
 `/vms?tree=…&vm=…`).
+
+### 11.12. Évolution v4 (en place) — PRA global cross-endpoints (niveau 3, widget `pra-global`)
+
+> **2026-11-20** — PRA **multi-sites niveau 3** : le PRA par endpoint (bascule N-1 intra-cluster)
+> est complété par un **PRA global** — si un **bâtiment (site)** tombe, les **autres sites de TOUS
+> les clusters** (tous les endpoints) peuvent absorber. Complément, pas remplacement : le PRA par
+> endpoint (détail cluster, §4) reste inchangé. Implémenté **en place dans `hypervision_v4`**
+> (dérogation à la règle `_vN`).
+
+**Sémantique** (validée utilisateur) :
+- **PRA seulement si nœuds répartis** : « les clusters mono-nœud ou sur le même site, non pas de
+  PRA. Seule les clusters avec des nœuds répartis sont dans le PRA » → condition **≥ 2 sites avec
+  ≥ 1 nœud présent**, sinon `na` (non applicable).
+- **Stockage ISO** : « le stockage pour le PRA doit être iso d'un site à l'autre » → **prérequis
+  documenté** (affiché dans le hint du widget), **pas de flag de config**.
+
+**Calcul côté serveur** (`core/poller.ts`) :
+- `computeGlobalPra()` appelé à chaque `tick()` — agrège les nœuds/VMs de **tous** les endpoints
+  (`lastNodes`/`lastVms` conservés par le tick), construit une topologie de sites
+  **cross-endpoints** et appelle `computePra` (shared) avec les sites préfixés par endpoint.
+- Résultat poussé via WS dans **`MultiDashboardSnapshot.globalPra`** (champ **requis**
+  `PraReport | null` — null = aucun endpoint avec snapshot).
+- **Noms préfixés par endpoint** : les **ids de sites** sont préfixés (`clusterproxmox/ProxSite1`)
+  pour désambiguïser les bâtiments homonymes entre clusters ; les **noms de bâtiments** restent
+  intacts (affichés tels quels).
+
+**`computePra`** (`shared/pra.ts`) :
+- `multiSite` = **≥ 2 sites avec nœuds présents** (condition de PRA, sinon `na`).
+- `unmappedNodes: string[]` — nœuds sans site mappable (orphelins), calculé et exposé.
+- `SitePra.nodes: string[]` — mapping visible (les nœuds de chaque site).
+
+**Widget `pra-global`** (vue d'ensemble `pages/overview.tsx`) :
+- Entrée au **catalogue** (w12 h4, minW 6, minH 3) après `temp-nodes` ; **dans
+  `overviewDefaultLayout`** (rangée pleine largeur `PRA_ROW_Y`, `epY` décalé) — cf. piège
+  §10/§11.3 (un widget absent du default layout serait invisible pour un nouvel user).
+- Rendu : **`PraPanelBody`** (composant partagé `components/pra-panel.tsx`, **enrichi**) —
+  badge sévérité globale + hint (prérequis stockage ISO) + une ligne par site (nom bâtiment +
+  **badge endpoint** + % de capacité libre utilisée + **ligne nœuds** `SitePra.nodes` + VMs à
+  basculer / capacité libre des autres sites) + section **VMs concernées** + encart **orphelins**
+  (`unmappedNodes`, masqué si vide).
+- **Réemploi** : le même `PraPanelBody` sert le **PRA par endpoint** (détail cluster, §4) — la
+  différence est dans les données (global = cross-endpoints préfixés ; endpoint = intra-cluster
+  sans préfixe).
+
+**i18n** : `pra.globalTitle` / `pra.globalHint` / `pra.nodes` / `pra.unmapped` (fr/en).
+
+**Tests** : shared `pra.test.ts` +4 (multiSite, unmappedNodes, SitePra.nodes) + server
+`poller.test.ts` +3 (`computeGlobalPra` : null sans snapshot, cross-endpoints, préfixe endpoint).
+**shared 393** + **server 255** verts, web typecheck OK.
+
+**E2E validé** (2026-11-20, lab) :
+- **API** `/api/dashboard` → `globalPra` : `globalSeverity: crit`, `unmappedNodes: []`, sites
+  `proxmox/site-principal` **700 % crit** (49c/120G, cap 7c/34G), `clusterproxmox/proxsite1`
+  **75 % warn** (3c/2G, cap 4c/22G), `clusterproxmox/proxsite2` **66,7 % ok** (2c/2G, cap 3c/22G).
+- **UI** (vue d'ensemble v4, widget `pra-global`) : badge « Bascule à risque » (crit) + 3 lignes
+  sites (700 %/75 %/67 %) + **badge endpoint** (proxmox / clusterproxmox) + **ligne nœuds**
+  (`proxmox/proxmox`, `clusterproxmox/ProxSite1`, `clusterproxmox/ProxSite2`) + VMs concernées
+  (AMD-IA, ProxSite1, ProxSite2, ia-u24-01, Centreon) + encart orphelins masqué (vide).
+- **PRA par endpoint inchangé** : proxmox (1 site) → `na` « Bascule N-1 non applicable » ;
+  clusterproxmox (2 sites) → 75 %/67 % (capacité libre **intra-cluster** 17.1G, ≠ global 22.4G).
+
+> **Note visibilité** : le widget est une fonctionnalité **v4** — visible uniquement si l'utilisateur
+> a sélectionné `hypervision_v4` dans « Mon profil → Modules » (le module est globalement activé,
+> mais la sélection par user contrôle la visibilité — cf. skill `general` §auth). Un user sur v2/v3
+> ne le voit pas (il voit la 1ʳᵉ version visible de la famille).

@@ -270,6 +270,16 @@ export interface MultiDashboardSnapshot {
   /** politique de surallocation (overcommit.json, hot-reload) — source unique du code couleur */
   overcommit: OvercommitConfig;
   endpoints: EndpointSnapshot[];
+  /**
+   * PRA GLOBAL cross-endpoints (niveau 3) : si un bâtiment/site tombe, les
+   * AUTRES sites de TOUS les endpoints peuvent absorber (prérequis : stockage
+   * iso d'un site à l'autre). Calculé par le poller à chaque tick à partir des
+   * données brutes de tous les endpoints (noms de nœuds préfixés par l'endpoint
+   * pour éviter les collisions et clarifier l'origine). null si aucun site
+   * défini. Complément du PRA par endpoint (snapshot.pra) qui ne considère que
+   * les sites du même endpoint.
+   */
+  globalPra: PraReport | null;
 }
 
 // --- Surallocation (overcommit.json) ------------------------------------------
@@ -385,6 +395,12 @@ export interface KpiSummary {
 export interface SitePra {
   siteId: string;
   siteName: string;
+  /**
+   * Nœuds du site (mapping nœud→bâtiment, sites.json) — pour le mapping
+   * visible en UI. Dans le PRA global, les noms sont préfixés par l'endpoint
+   * (`clusterproxmox/ProxSite1`) ; dans le PRA par endpoint, non préfixés.
+   */
+  nodes: string[];
   /** cœurs alloués (toutes VMs running+stopped du site) */
   demandCpu: number;
   demandRamBytes: number;
@@ -409,6 +425,12 @@ export interface PraReport {
   globalSeverity: SeverityOrNa;
   /** VMs du site le plus contraint (vide si na/ok) */
   affectedVms: PraAffectedVm[];
+  /**
+   * Nœuds du cluster non mappés dans AUCUN site (filet de sécurité) — non
+   * couverts par le PRA, à mapper dans sites.json. Absent dans les anciens
+   * snapshots (optionnel pour la rétro-compat).
+   */
+  unmappedNodes?: string[];
 }
 
 // --- Capacity planning ---------------------------------------------------------

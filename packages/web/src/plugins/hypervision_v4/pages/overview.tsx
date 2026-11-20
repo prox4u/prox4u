@@ -21,6 +21,7 @@ import { ResourceChartBody, resourceCurrent } from '../components/resource-chart
 import { NodeMatrixBody } from '../components/node-matrix-card';
 import { SystemNodesBody } from '../components/system-nodes-card';
 import { TempNodesBody } from '../components/temp-nodes-card';
+import { PraPanelBody } from '../components/pra-panel';
 import { Badge } from '../../../components/ui/badge';
 import { Select } from '../../../components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader } from '../../../components/ui/table';
@@ -79,7 +80,9 @@ function overviewDefaultLayout(eps: EndpointSnapshot[]): WidgetItem[] {
   const SYS_ROW_H = 5;
   const TEMP_ROW_Y = SYS_ROW_Y + SYS_ROW_H;
   const TEMP_ROW_H = 4;
-  const epY = TEMP_ROW_Y + TEMP_ROW_H;
+  const PRA_ROW_Y = TEMP_ROW_Y + TEMP_ROW_H;
+  const PRA_ROW_H = 4;
+  const epY = PRA_ROW_Y + PRA_ROW_H;
   const epItems = eps.map((ep, i) => ({
     widgetId: `ep-${ep.id}`,
     x: (i % 3) * 4,
@@ -99,6 +102,7 @@ function overviewDefaultLayout(eps: EndpointSnapshot[]): WidgetItem[] {
     { widgetId: 'nodes-matrix', x: 0, y: MATRIX_ROW_Y, w: 12, h: MATRIX_ROW_H },
     { widgetId: 'sys-nodes', x: 0, y: SYS_ROW_Y, w: 12, h: SYS_ROW_H },
     { widgetId: 'temp-nodes', x: 0, y: TEMP_ROW_Y, w: 12, h: TEMP_ROW_H },
+    { widgetId: 'pra-global', x: 0, y: PRA_ROW_Y, w: 12, h: PRA_ROW_H },
     ...epItems,
     { widgetId: 'alerts', x: 0, y: bottomY, w: 5, h: 3 },
     { widgetId: 'table', x: 5, y: bottomY, w: 7, h: 3 },
@@ -149,6 +153,9 @@ function aggregateKpis(eps: EndpointSnapshot[]): KpiSummary {
 function healthTone(label: 'nominal' | 'degraded' | 'critical'): 'ok' | 'warn' | 'crit' {
   return label === 'nominal' ? 'ok' : label === 'degraded' ? 'warn' : 'crit';
 }
+
+/** Teinte de la sévérité PRA (badge du widget « PRA global »). */
+const PRA_SEV_TONE = { ok: 'ok', warn: 'warn', crit: 'crit', na: 'default' } as const;
 
 /** Teinte du score de configuration (audit) : ≥80 ok · 50–79 warn · <50 crit. */
 function auditScoreTone(score: number): 'ok' | 'warn' | 'crit' {
@@ -486,6 +493,31 @@ export function OverviewPage() {
         minH: 3,
         render: () => <TempNodesBody data={sensorsData} loading={sensorsLoading} />,
       },
+      // PRA GLOBAL cross-endpoints (niveau 3) : si un bâtiment tombe, les autres
+      // sites de TOUS les clusters peuvent absorber (prérequis stockage iso).
+      // Données du snapshot multi WS (multi.globalPra) — zéro API.
+      {
+        id: 'pra-global',
+        title: t('pra.globalTitle'),
+        subtitle: t('pra.globalHint'),
+        default: { w: 12, h: 4 },
+        minW: 6,
+        minH: 3,
+        extra: () => {
+          const g = multi?.globalPra;
+          if (!g || g.globalSeverity === 'na') return null;
+          return (
+            <Badge tone={PRA_SEV_TONE[g.globalSeverity]}>
+              {g.globalSeverity === 'ok' ? t('pra.ok') : t('pra.alert')}
+            </Badge>
+          );
+        },
+        render: () => {
+          const g = multi?.globalPra;
+          if (!g) return <p className="p-3 text-sm text-muted-foreground">—</p>;
+          return <PraPanelBody pra={g} />;
+        },
+      },
     );
     for (const ep of eps) {
       defs.push({
@@ -508,7 +540,7 @@ export function OverviewPage() {
       { id: 'table', title: t('overview.endpoints'), default: { w: 7, h: 3 }, minW: 6, minH: 2, render: () => <EndpointsTableBody eps={eps} /> },
     );
     return defs;
-  }, [eps, kpis, resEndpointId, sysRows, sysLoading, sensorsData, sensorsLoading, t, config]);
+  }, [eps, kpis, resEndpointId, sysRows, sysLoading, sensorsData, sensorsLoading, t, config, multi]);
 
   const catalogKey = useMemo(() => catalog.map((c) => c.id).join(','), [catalog]);
   const defaultLayout = useMemo(() => overviewDefaultLayout(epIdsKey ? eps : []), [epIdsKey]); // eslint-disable-line react-hooks/exhaustive-deps

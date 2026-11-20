@@ -22,7 +22,12 @@ import {
  * dépend que du CPU/RAM).
  *
  * Jauges : 🟢 < 70 % · 🟠 70–100 % · 🔴 > 100 % (« absorption impossible »)
- * Cas mono-site : absorption = null, sévérité « na » (non applicable).
+ * Le PRA ne s'applique que si les nœuds sont RÉPARTIS sur ≥ 2 sites (mono-nœud,
+ * ou tous les nœuds sur le même site → absorption = null, sévérité « na »).
+ * Prérequis : le stockage doit être identique (iso) d'un site à l'autre pour que
+ * la bascule soit valide (d'où l'exclusion du disque du calcul).
+ * `unmappedNodes` = nœuds du cluster non mappés dans un site (filet de sécurité :
+ * ces nœuds ne sont pas couverts par le PRA).
  */
 export function computePra(
   sites: Site[],
@@ -41,6 +46,16 @@ export function computePra(
     allocCpu.set(vm.node, (allocCpu.get(vm.node) ?? 0) + cpuAllocOf(vm));
     allocRam.set(vm.node, (allocRam.get(vm.node) ?? 0) + (vm.maxmem ?? 0));
   }
+
+  // Le PRA ne s'applique que si les nœuds sont RÉPARTIS sur ≥ 2 sites ayant au
+  // moins un nœud présent (mono-nœud, ou tous les nœuds sur le même site → na).
+  const multiSite = sites.filter((s) => s.nodes.some((n) => nodesById.has(n))).length > 1;
+
+  // Filet de sécurité : nœuds du cluster non mappés dans AUCUN site → non
+  // couverts par le PRA (à mapper dans sites.json).
+  const mappedNodes = new Set<string>();
+  for (const s of sites) for (const n of s.nodes) mappedNodes.add(n);
+  const unmappedNodes = nodes.map((n) => n.node).filter((n) => !mappedNodes.has(n));
 
   const siteResult: SitePra[] = sites.map((site) => {
     const siteNodes = site.nodes.filter((n) => nodesById.has(n));
@@ -62,7 +77,6 @@ export function computePra(
       capRam += Math.max(0, memTotal - (allocRam.get(n.node) ?? 0));
     }
 
-    const multiSite = sites.length > 1;
     let absorptionPct: number | null = null;
     if (multiSite) {
       const cpuRatio = capCpu > 0 ? demandCpu / capCpu : demandCpu > 0 ? Infinity : 0;
@@ -82,6 +96,7 @@ export function computePra(
     return {
       siteId: site.id,
       siteName: site.name,
+      nodes: site.nodes,
       demandCpu: round1(demandCpu),
       demandRamBytes,
       capacityElsewhereCpu: round1(capCpu),
@@ -95,7 +110,7 @@ export function computePra(
 
   const ranked = [...siteResult].sort((a, b) => (b.absorptionPct ?? -1) - (a.absorptionPct ?? -1));
   const globalSeverity =
-    sites.length <= 1
+    !multiSite
       ? 'na'
       : ranked.some((s) => s.severity === 'crit')
         ? 'crit'
@@ -119,7 +134,7 @@ export function computePra(
       .sort((a, b) => b.memBytes - a.memBytes);
   }
 
-  return { sites: siteResult, globalSeverity, affectedVms };
+  return { sites: siteResult, globalSeverity, affectedVms, unmappedNodes };
 }
 
 /** Cœurs alloués d'une VM (joint par le server depuis la config, absent de /cluster/resources). */
