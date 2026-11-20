@@ -38,7 +38,7 @@ describe('AuthStore', () => {
     const { verifyPassword } = await import('./password.js');
     expect(await verifyPassword(admin!.passwordHash!, 'proX4u')).toBe(true);
     // catalogue des familles de plugins, activé globalement par défaut
-    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory', 'centreon-nsca', 'node-sensors']);
+    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory', 'centreon-nsca', 'node-sensors', 'audit']);
     expect(store.listModules().every((m) => m.globallyEnabled)).toBe(true);
   });
 
@@ -69,7 +69,7 @@ describe('AuthStore', () => {
     const store = new AuthStore(file, logger);
     await store.init(hashPassword);
     // les ids inconnus sont retirés, le catalogue Prox4u est restauré
-    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory', 'centreon-nsca', 'node-sensors']);
+    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory', 'centreon-nsca', 'node-sensors', 'audit']);
     // les références aux modules retirés sont nettoyées
     expect(store.data.groupModules.some((gm) => gm.moduleId === 'supervision')).toBe(false);
     expect(store.data.userModules.some((um) => um.moduleId === 'dashboard')).toBe(false);
@@ -180,6 +180,7 @@ describe('AuthStore', () => {
     // 2e appel : rien à créer ; ids invalides / famille inconnue ignorés
     expect(store.syncModuleCatalog(['vm-view_v2', 'invalide!', 'unknown-module_v2', 'vm-view_v2'])).toBe(0);
     expect(store.listModules().map((m) => m.id).sort()).toEqual([
+      'audit',
       'centreon-nsca',
       'hypervision',
       'network',
@@ -219,6 +220,7 @@ describe('AuthStore', () => {
       'proxmox-inventory',
       'centreon-nsca',
       'node-sensors',
+      'audit',
       'vm-view_v2',
     ]);
     expect(store2.data.userModules).toContainEqual({ userId: u.id, moduleId: 'vm-view_v2' });

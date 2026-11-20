@@ -17,6 +17,9 @@ export const en: Record<string, string> = {
 
   'cluster.quorumOk': 'Quorum {{online}}/{{total}}',
   'cluster.quorumLost': 'Quorum lost',
+  'cluster.apiVia': 'API via {{host}} (endpoint node unreachable)',
+  'cluster.qdeviceUp': 'Qdevice online',
+  'cluster.qdeviceDown': 'Qdevice offline',
 
   'metrics.title': 'Cluster metrics',
   'metrics.titleCpu': 'Cluster metrics — CPU',
@@ -178,6 +181,7 @@ export const en: Record<string, string> = {
   'health.penalty.praCrit': 'N-1 failover impossible if a site goes down',
   'health.penalty.praWarn': 'N-1 failover possible but with no headroom if a site goes down',
   'health.penalty.quorumLost': 'Cluster quorum lost ({{online}}/{{total}} nodes online)',
+  'health.penalty.qdeviceDown': 'Qdevice offline — quorum unprotected if a node goes down',
 
   'kpi.nodes': 'Active nodes',
   'kpi.cpuRam': 'CPU / RAM allocation',
@@ -239,6 +243,7 @@ export const en: Record<string, string> = {
   'alerts.praCrit': 'If {{site}} goes down: failover impossible — remaining capacity is insufficient',
   'alerts.praWarn': 'If {{site}} goes down: failover possible but with no headroom (other sites would run at {{pct}} % of free capacity)',
   'alerts.quorumLost': 'Cluster quorum lost — cluster in read-only mode ({{online}}/{{total}} nodes online)',
+  'alerts.qdeviceDown': 'Qdevice offline — quorum is no longer protected if a node goes down',
 
   'nav.topology': 'Network topology',
   'nav.storage': 'Storage',
@@ -844,6 +849,7 @@ export const en: Record<string, string> = {
   'alarm.metric.node_disk_pct': 'Node disk (%)',
   'alarm.metric.node_online': 'Node online',
   'alarm.metric.cluster_quorum': 'Cluster quorum (1 = ok)',
+  'alarm.metric.cluster_qdevice': 'Cluster Qdevice (1 = up/absent, 0 = down)',
   // --- Provisioning summary ---
   'alarm.summary.title': 'Centreon provisioning',
   'alarm.summary.ok': 'Service created and configured, config deployed on poller “{{poller}}”. NSCA frames can be received.',
@@ -937,4 +943,33 @@ export const en: Record<string, string> = {
   'widgets.saveError': 'Save failed — will retry on next change',
   'widgets.saveErrorShort': 'Save error',
   'widgets.close': 'Close library',
+
+  // --- Audit / best-practices (P3 — 2nd configuration score) ---
+  'nav.audit': 'Audit / best-practices',
+  'audit.title': 'Audit / best-practices',
+  'audit.score': 'Configuration score',
+  'audit.scoreDesc': '2nd score (configuration) alongside the health score (resources). Pure checks on already-polled data — each finding is clickable to its target.',
+  'audit.label.compliant': 'Compliant',
+  'audit.label.toImprove': 'To improve',
+  'audit.label.toReview': 'To review',
+  'audit.endpoint': 'Endpoint',
+  'audit.scoreCol': 'Audit',
+  'audit.noData': 'No audit data yet (snapshot loading).',
+  'audit.checksPassed': 'checks passed',
+  'audit.findings.title': 'Findings',
+  'audit.findings.desc': 'Best-practice deviations, by severity. Click a target to open its detail.',
+  'audit.findings.singular': 'finding',
+  'audit.findings.plural': 'findings',
+  'audit.severity.crit': 'Critical',
+  'audit.severity.warn': 'Warning',
+  'audit.severity.info': 'Info',
+  'audit.openTarget': 'Open detail',
+  'audit.empty': 'No findings — configuration complies with best practices.',
+  'audit.finding.qemu_without_agent': '{{name}} — QEMU VM without guest agent (QGA)',
+  'audit.finding.privileged_containers': '{{name}} — privileged LXC container',
+  'audit.finding.cpu_host_type': '{{name}} — VM without cpu=host (limited live migration)',
+  'audit.finding.bridge_without_ports': '{{node}}: bridge {{bridge}} without physical port',
+  'audit.finding.thin_pool_overprovisioning': '{{storage}} — over-provisioned thin pool (ratio {{ratio}})',
+  'audit.finding.memory_overcommit': '{{node}} — over-allocated RAM (ratio {{ratio}})',
+  'audit.finding.node_version_mismatch': 'Heterogeneous PVE versions: {{versions}}',
 };

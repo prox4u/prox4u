@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { ParsedVmNet, VmAgentNetIf } from './network.js';
+import type { AuditScore } from './audit.js';
 
 export type Severity = 'ok' | 'warn' | 'crit';
 export type SeverityOrNa = Severity | 'na';
@@ -52,6 +53,10 @@ export interface PveVmResource {
   hostname?: string;
   /** Architecture (config `arch`, ex. `amd64`) — jointe depuis la config, sans agent invité. */
   arch?: string;
+  /** LXC : non privilégié ? `false` = privilégié — joint depuis la config. */
+  unprivileged?: boolean;
+  /** QEMU : `cpu=host` ? — joint depuis la config. */
+  cpuHost?: boolean;
 }
 
 export interface PveNodeStatus {
@@ -77,6 +82,26 @@ export interface PveNodeStatus {
 
 /** État du quorum cluster (entrée cluster de /cluster/status). */
 export type QuorumState = 'ok' | 'lost';
+
+/**
+ * État du Qdevice (vote externe de quorum, ex. `pvecm status` → membership
+ * « Qdevice »). Source : corosync (table Telegraf `quorum_detail`) en priorité,
+ * sinon déduit de l'API PVE (l'API n'expose pas le Qdevice).
+ * 'up' = en ligne, 'down' = configuré mais hors ligne, 'absent' = pas de
+ * Qdevice configuré, 'unknown' = indéterminé (pas de données / les nœuds
+ * suffisent et l'API ne permet pas de trancher).
+ */
+export type QdeviceState = 'up' | 'down' | 'absent' | 'unknown';
+
+/** Détail du quorum corosync (table Telegraf `quorum_detail`, `pvecm status`). */
+export interface QuorumDetail {
+  expectedVotes: number;
+  totalVotes: number;
+  quorumThreshold: number;
+  quorate: boolean;
+  hasQdevice: boolean;
+  qdeviceOnline: boolean;
+}
 
 /** Statut cluster + nœuds (GET /cluster/status) — quorum inclus. */
 export interface PveClusterStatus {
@@ -227,6 +252,12 @@ export interface EndpointSnapshot {
   url?: string;
   ok: boolean;
   error?: string;
+  /**
+   * URL qui a réellement servi les données du dernier poll (failover) — définie
+   * seulement si elle diffère de `url` (nœud endpoint down, bascule sur un autre
+   * nœud du cluster). Absente sinon.
+   */
+  apiVia?: string;
   /** dernier snapshot réussi (null si jamais réussi) */
   snapshot: DashboardSnapshot | null;
 }
@@ -501,6 +532,11 @@ export interface VmSummary {
    * · null = n/a (LXC, VM arrêtée) ou inconnu (cache agent pas encore réchauffé au démarrage).
    */
   agentActive: boolean | null;
+  // --- Audit / best-practices (config, cache 1 h) ---
+  /** LXC : non privilégié ? `false` = privilégié (audit) · absent pour QEMU. */
+  unprivileged?: boolean;
+  /** QEMU : `cpu=host` ? (audit) · absent pour LXC. */
+  cpuHost?: boolean;
 }
 
 /** Snapshot d'une VM (GET /nodes/{n}/{type}/{vmid}/snapshot). */
@@ -544,6 +580,13 @@ export interface VmConfigInfo {
   tags?: string[];
   /** description / notes (config `description`) */
   description?: string;
+  /**
+   * LXC : conteneur NON privilégié (`unprivileged=1`, défaut) ? `false` =
+   * privilégié (`unprivileged=0`, accès direct aux devices hôte). Absent pour QEMU.
+   */
+  unprivileged?: boolean;
+  /** QEMU : type CPU `host` (`cpu=host`) ? Recommandé pour la migration live. Absent pour LXC. */
+  cpuHost?: boolean;
 }
 
 /** Détail d'une VM (GET /api/vm-config?endpoint=&vmid=) : live + config + snapshots. */
@@ -720,9 +763,26 @@ export interface DashboardSnapshot {
     quorum: number | null;
     /** état du quorum — null si inconnu (PVE 7 sans dérive possible). */
     quorumState: QuorumState | null;
+    /**
+     * État du Qdevice (vote externe de quorum). Source : corosync (table
+     * Telegraf `quorum_detail`) en priorité — 'up'/'down'/'absent' — sinon
+     * déduit de l'API PVE (l'API ne l'expose pas) → 'up'/'down'/'unknown'.
+     */
+    qdevice: QdeviceState;
+    /**
+     * Détail du quorum corosync (votes, seuil, Qdevice) — null si la table
+     * Telegraf `quorum_detail` est absente (agent non déployé / pas de données).
+     */
+    quorumDetail: QuorumDetail | null;
   };
   sites: Site[];
   health: HealthScore;
+  /**
+   * Audit / best-practices (P3) — 2ᵉ score de CONFIGURATION (en complément du
+   * health score qui mesure les ressources). Calculé par le poller (checks purs
+   * shared/audit.ts) ; constats cliquables vers la VM/nœud/stockage concernée.
+   */
+  audit: AuditScore;
   kpis: KpiSummary;
   pra: PraReport;
   nodes: NodeHealth[];

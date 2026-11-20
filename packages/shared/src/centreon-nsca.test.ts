@@ -80,11 +80,17 @@ describe('defaultServiceName', () => {
   it('cluster_quorum → Prox4u-Alarm-CLUSTER-QUORUM', () => {
     expect(defaultServiceName('cluster_quorum', '')).toBe('Prox4u-Alarm-CLUSTER-QUORUM');
   });
+  it('cluster_qdevice → Prox4u-Alarm-CLUSTER-QDEVICE', () => {
+    expect(defaultServiceName('cluster_qdevice', '')).toBe('Prox4u-Alarm-CLUSTER-QDEVICE');
+  });
 });
 
 describe('METRIC_IDS', () => {
   it('inclut cluster_quorum (cible cluster)', () => {
     expect(METRIC_IDS).toContain('cluster_quorum');
+  });
+  it('inclut cluster_qdevice (cible cluster)', () => {
+    expect(METRIC_IDS).toContain('cluster_qdevice');
   });
 });
 

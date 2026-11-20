@@ -48,6 +48,32 @@ const AGENT_FSINFO_TTL_MS = 5 * 60 * 1000;
  */
 export const AGENT_CONCURRENCY = 20;
 
+/**
+ * Failover — URLs alternatives : l'API PVE des autres nœuds du cluster
+ * (même token, valable cluster-wide). Exclut l'URL primaire, dédoublonné.
+ * URL primaire invalide → liste vide (pas de failover).
+ */
+export function clusterAltUrls(primaryUrl: string, nodeIps: Array<string | null | undefined>): string[] {
+  let port: string;
+  try {
+    port = new URL(primaryUrl).port || '443';
+  } catch {
+    return [];
+  }
+  const urls = new Set<string>();
+  for (const ip of nodeIps) if (ip) urls.add(`https://${ip}:${port}`);
+  return [...urls].filter((u) => u !== primaryUrl);
+}
+
+/**
+ * Failover — promeut l'URL qui a répondu en tête de liste (sticky) :
+ * le poll suivant part du nœud vivant, sans retenter le nœud mort.
+ */
+export function promoteUrl(urls: string[], activeIndex: number): string[] {
+  if (activeIndex <= 0 || activeIndex >= urls.length) return urls;
+  return [urls[activeIndex], ...urls.slice(0, activeIndex), ...urls.slice(activeIndex + 1)];
+}
+
 interface RawVm {
   vmid: number;
   name: string;
@@ -123,6 +149,10 @@ function parseLiveNets(list: RawAgentNet[]): VmAgentNetIf[] {
 export class Prox4uClient implements DataSource {
   readonly isMock = false;
   private agent: Agent;
+  /** URLs API à essayer dans l'ordre : [primaire configurée, …autres nœuds du cluster (failover)]. */
+  private urls: string[];
+  /** URL qui a servi le dernier appel réussi — source de `activeUrl` (indépendante de l'ordre de `urls`, pas de course avec la promotion/rebuild). */
+  private lastServed: string | null = null;
   private configCache = new Map<string, { at: number; value: VmConfigInfo | null }>();
   private agentNetsCache = new Map<string, { at: number; value: VmAgentNetIf[] }>();
   private osInfoCache = new Map<string, { at: number; value: VmOsInfo | null }>();
@@ -130,16 +160,44 @@ export class Prox4uClient implements DataSource {
   private fsUsageCache = new Map<string, { at: number; value: AgentFsUsage[] }>();
 
   constructor(private ep: EndpointConfig, tlsRejectUnauthorized: boolean) {
-    this.agent = new Agent({ connect: { rejectUnauthorized: tlsRejectUnauthorized } });
+    // Timeout connect 5 s : un endpoint injoignable (nœud down) doit échouer vite
+    // pour que le failover bascule sur l'autre nœud — sans ça, TCP attend ~2 min.
+    this.agent = new Agent({ connect: { rejectUnauthorized: tlsRejectUnauthorized, timeout: 5_000 } });
+    this.urls = [ep.url];
+  }
+
+  /** URL qui a servi le dernier appel réussi (primaire, ou nœud de failover). */
+  get activeUrl(): string {
+    return this.lastServed ?? this.urls[0];
   }
 
   /**
-   * GET PVE. `timeoutMs` borne l'appel (AbortSignal) — indispensable pour les appels
+   * GET PVE avec failover : essaie les URLs dans l'ordre.
+   * - Erreur HTTP (PveError) = le serveur a répondu → inutile de basculer (même token), on lève.
+   * - Erreur de connexion (refusé/timeout/DNS) → URL suivante.
+   * - Succès via une URL alternative → promotion en tête (failover sticky).
+   * `timeoutMs` borne l'appel (AbortSignal) — indispensable pour les appels
    * agent (get-fsinfo) posés sur le chemin critique du poller : un agent lent ne doit
    * jamais bloquer le tick (garde `ticking` → tous les ticks suivants seraient sautés).
    */
   private async get<T>(path: string, timeoutMs?: number): Promise<T> {
-    const res = await fetch(`${this.ep.url}/api2/json${path}`, {
+    let lastErr: unknown = null;
+    for (let i = 0; i < this.urls.length; i++) {
+      try {
+        const data = await this.doGet<T>(this.urls[i], path, timeoutMs);
+        this.lastServed = this.urls[i];
+        if (i > 0) this.urls = promoteUrl(this.urls, i);
+        return data;
+      } catch (err) {
+        if (err instanceof PveError) throw err;
+        lastErr = err;
+      }
+    }
+    throw lastErr;
+  }
+
+  private async doGet<T>(base: string, path: string, timeoutMs?: number): Promise<T> {
+    const res = await fetch(`${base}/api2/json${path}`, {
       headers: { Authorization: `PVEAPIToken=${this.ep.tokenHeader}` },
       dispatcher: this.agent,
       ...(timeoutMs != null ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
@@ -207,6 +265,12 @@ export class Prox4uClient implements DataSource {
         }
       }),
     )).filter((n): n is PveNodeStatus => n !== null);
+    // Failover : les APIs des autres nœuds du cluster servent d'alternatives
+    // (même token, valable cluster-wide). L'URL CONFIGURÉE repasse en tête à chaque
+    // poll réussi : pendant qu'elle est down, chaque poll la retente (timeout connect
+    // 5 s) puis bascule sur un nœud alternatif ; dès qu'elle récupère, le poll suivant
+    // la reprend (apiVia disparaît) — pas de failover « sticky » jusqu'au redémarrage.
+    this.urls = [...new Set([this.ep.url, ...clusterAltUrls(this.ep.url, nodes.map((n) => n.ip))])];
     // Standalone (pas d'entrée cluster) → pas de notion de quorum (null = n/a).
     if (!clusterEntry) return { nodes, quorum: null, quorumState: null };
     // Quorum requis (majorité) : champ `quorum` si exposé, sinon floor(total/2)+1.
@@ -273,6 +337,9 @@ export class Prox4uClient implements DataSource {
         if (cached.value.hostname) v.hostname = cached.value.hostname;
         // Architecture — jointe depuis la config (sans agent invité).
         if (cached.value.arch) v.arch = cached.value.arch;
+        // Audit — LXC non-privilégié / QEMU cpu=host (config, cache 1 h).
+        if (cached.value.unprivileged != null) v.unprivileged = cached.value.unprivileged;
+        if (cached.value.cpuHost != null) v.cpuHost = cached.value.cpuHost;
       }
     }
     return vms;
@@ -458,6 +525,10 @@ export class Prox4uClient implements DataSource {
         disks: disksOf(c, type),
         tags: parseTags(c.tags),
         description: str(c.description) ?? undefined,
+        // Audit / best-practices : LXC privilégié (unprivileged=0, défaut 1) et
+        // QEMU cpu=host (recommandé pour la migration live).
+        unprivileged: type === 'lxc' ? c.unprivileged !== 0 && c.unprivileged !== '0' : undefined,
+        cpuHost: type === 'qemu' ? c.cpu === 'host' : undefined,
       };
     } catch {
       return null;
