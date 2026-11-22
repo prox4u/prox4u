@@ -253,3 +253,59 @@ InfluxDB and Explorer are Docker containers with `restart: unless-stopped` → t
 | **Backup** | all state is in `data/` (InfluxDB, consolidator state, TLS certificates, admin token) — copy `data/` + `.env` + `clusters.json` + `sites.json` |
 
 > **PBS (phase 1B)**: the Proxmox Backup Server token will be created the same way by commands (`pbs config add-user` + token via API) — procedure to be completed when PBS is deployed.
+
+## 10. Node agent (Telegraf)
+
+Optional but recommended: the PVE API does not expose **local metrics** (disk SMART,
+temperatures, ZFS ARC, systemd units, host I/O, per-NIC network, cluster quorum detail,
+pending reboot, pending security updates). The **Telegraf** agent collects them on each PVE
+node and pushes them to InfluxDB (`raw` database).
+
+> Without the agent, the application runs in **degraded mode**: no SMART/temperatures, no
+> per-disk I/O or per-VM-interface traffic, and the 5 agent-based audit checks
+> (`disk_errors`, `disk_service_life`, `failed_units`, `pending_reboot`, `security_updates`)
+> stay silent.
+
+### 10.1 Running it
+
+On **each PVE node** (bare-metal — not inside a VM/CT), as **root**, with the kit script:
+
+```bash
+export TELEGRAF_INFLUX_TOKEN="<InfluxDB admin token>"   # = INFLUX_TOKEN from the app .env
+bash 60-telegraf-nodes.sh            # or --dry-run to preview (nothing is executed)
+```
+
+The script is **idempotent and re-runnable** (redeployment): the existing `telegraf.conf` is
+backed up (`.bak.<ts>`), the exec scripts are overwritten, Telegraf is (re)started. If Telegraf
+is already installed, it does **not** re-download the InfluxData GPG key nor re-run `apt`
+(the LAN→internet network can be flaky).
+
+### 10.2 Environment variables
+
+| Variable | Required | Default | Note |
+|---|---|---|---|
+| `TELEGRAF_INFLUX_TOKEN` | **yes** | — | InfluxDB API token (= `INFLUX_TOKEN` from the app `.env`). **Different in prod** → pass the prod token |
+| `INFLUX_URL` | no | `https://192.168.1.180:8181` | InfluxDB address — **must be passed in prod** if different (default = lab) |
+| `INFLUX_BUCKET` | no | `raw` | target database |
+| `INFLUX_ORG` | no | `influxdb` | organization (`influxdb_v2` plugin) |
+| `PING_TARGET` | no | = host:port of `INFLUX_URL` | ping target (plugin currently disabled — no `CAP_NET_RAW`) |
+| `NODE_TAG` | no | `hostname` | `node` tag written to InfluxDB — **must match the node name in PVE** (otherwise the app does not consume the data) |
+
+> The InfluxData GPG key (fingerprint `24C9…F927`) is the vendor's **official signing key** —
+> identical in every environment, and no longer downloaded on redeployment.
+
+### 10.3 Verification
+
+The script **self-tests** at the end of the run (service active + InfluxDB write confirmed).
+Then, from the prox4u server, confirm the tables are populated:
+
+```bash
+cd prox4u && TOK=$(grep '^INFLUX_TOKEN=' .env | cut -d= -f2)
+curl -sk https://localhost:8181/api/v3/query_sql -H "Authorization: Bearer $TOK" \
+  -H 'Content-Type: application/json' \
+  -d '{"db":"raw","q":"SELECT table_name FROM information_schema.tables WHERE table_name IN ('\''smart_device'\'','\''sensors'\'','\''zfs'\'','\''systemd_units'\'','\''disk'\'','\''diskio'\'','\''cpu'\'','\''mem'\'','\''system'\'','\''dm_names'\'','\''net'\'','\''net_if_mac'\'','\''node_hardware'\'','\''quorum_detail'\'','\''reboot_pending'\'','\''security_updates'\'')"}'
+```
+
+**16 tables** expected (10 native plugins + 6 exec scripts). The agent-based audit checks
+activate on the next poller tick (5-min caches). Troubleshooting on the node:
+`journalctl -u telegraf -n 30 --no-pager`.

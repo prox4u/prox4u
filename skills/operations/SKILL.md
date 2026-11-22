@@ -1,6 +1,6 @@
 ---
 name: operations
-description: Runbook production de Prox4u — kit de déploiement autonome (deploiement/), pointage INFLUX_URL vers un InfluxDB externe, systemd/server.sh, logs, dépannage (WS, repli InfluxDB→RRD, TLS SAN, tokens PVE). Use when deploying, updating, or troubleshooting the app in production.
+description: Runbook production de Prox4u — kit de déploiement autonome (deploiement/), pointage INFLUX_URL vers un InfluxDB externe, agent Telegraf sur les nœuds PVE (60-telegraf-nodes.sh, 16 tables, DEPLOY.md §10), systemd/server.sh, logs, dépannage (WS, repli InfluxDB→RRD, TLS SAN, tokens PVE). Use when deploying, updating, or troubleshooting the app in production.
 ---
 
 # Prox4u — Runbook production
@@ -23,9 +23,10 @@ On déplace **tout le dossier** sur la cible et on déploie depuis lui :
 | `30-env-setup.sh <dir> <user>` | serveur applicatif | Crée `.env` depuis le template (remplit INFLUX_UID/GID, EXPLORER_SESSION_KEY) |
 | `40-tls-init.sh <dir>` | serveur applicatif | Certificats auto-signés (app + InfluxDB) ; `TLS_SAN_EXTRA="IP:<ip>"` pour l'accès distant |
 | `50-influxdb-init.sh <dir>` | serveur applicatif | Token admin InfluxDB (met à jour `.env`) — seulement si l'app gère son propre InfluxDB |
+| `60-telegraf-nodes.sh` | chaque nœud PVE (root) | Agent Telegraf : 16 tables (SMART, capteurs, ZFS, systemd, I/O, réseau, quorum, reboot, updates) — idempotent, `--dry-run`, self-test. Env : `TELEGRAF_INFLUX_TOKEN` (requis), `INFLUX_URL`/`INFLUX_BUCKET`/`INFLUX_ORG` (défauts labo). Détail : `deploiement/DEPLOY.md` §10 |
 | `prox4u.service` | systemd | Unit (`Restart=always`, user `proxmox`) |
 
-Ordre : tokens PVE → tarball → install `/opt/prox4u` + `pnpm install --prod` → 30 → 40 → (50 si besoin) → `clusters.json` + `sites.json` + `overcommit.json` → `./up.sh`.
+Ordre : tokens PVE → tarball → install `/opt/prox4u` + `pnpm install --prod` → 30 → 40 → (50 si besoin) → `clusters.json` + `sites.json` + `overcommit.json` → `./up.sh` → **60 sur chaque nœud PVE** (indépendant, peut être fait après).
 
 - **`sites.json`** (mapping nœuds → bâtiments, requis PRA) : template `sites.example.json` (JSON strict, multi-endpoints/multi-bâtiments) + guide de remplissage champ par champ dans `deploiement/DEPLOY.md` §6. Mapper **tous** les nœuds (sinon « nœuds non mappés » hors PRA) ; PRA seulement si nœuds répartis sur ≥ 2 sites.
 

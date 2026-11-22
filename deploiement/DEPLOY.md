@@ -253,3 +253,59 @@ InfluxDB et Explorer sont des conteneurs Docker avec `restart: unless-stopped` �
 | **Sauvegarde** | tout l'état est dans `data/` (InfluxDB, état du consolidateur, certificats TLS, token admin) — copier `data/` + `.env` + `clusters.json` + `sites.json` |
 
 > **PBS (phase 1B)** : le token Proxmox Backup Server se créera de la même façon par commandes (`pbs config add-user` + token via API) — procédure à compléter quand PBS sera déployé.
+
+## 10. Agent des nœuds (Telegraf)
+
+Optionnel mais recommandé : l'API PVE n'expose pas les **métriques locales** (SMART disques,
+températures, ZFS ARC, unités systemd, I/O hôte, réseau par NIC, détail du quorum cluster,
+reboot en attente, mises à jour de sécurité en attente). L'agent **Telegraf** les collecte sur
+chaque nœud PVE et les pousse dans l'InfluxDB (base `raw`).
+
+> Sans l'agent, l'application fonctionne en **mode dégradé** : pas de SMART/températures, pas
+> d'I/O par disque ni de trafic par interface de VM, et les 5 checks d'audit fondés sur l'agent
+> (`disk_errors`, `disk_service_life`, `failed_units`, `pending_reboot`, `security_updates`)
+> restent silencieux.
+
+### 10.1 Exécution
+
+Sur **chaque nœud PVE** (bare-metal — pas dans une VM/CT), en **root**, avec le script du kit :
+
+```bash
+export TELEGRAF_INFLUX_TOKEN="<token admin InfluxDB>"   # = INFLUX_TOKEN du .env de l'app
+bash 60-telegraf-nodes.sh            # ou --dry-run pour l'aperçu (rien n'est exécuté)
+```
+
+Le script est **idempotent et relançable** (redéploiement) : le `telegraf.conf` existant est
+sauvegardé (`.bak.<ts>`), les scripts exec sont écrasés, Telegraf est (re)démarré. Si Telegraf
+est déjà installé, il ne retélécharge **pas** la clé GPG InfluxData et ne relance pas `apt`
+(le réseau LAN→internet peut être instable).
+
+### 10.2 Variables d'environnement
+
+| Variable | Requête | Défaut | Note |
+|---|---|---|---|
+| `TELEGRAF_INFLUX_TOKEN` | **oui** | — | token API InfluxDB (= `INFLUX_TOKEN` du `.env` de l'app). **Différent en prod** → passer le token de prod |
+| `INFLUX_URL` | non | `https://192.168.1.180:8181` | adresse de l'InfluxDB — **à passer en prod** si différente (défaut = labo) |
+| `INFLUX_BUCKET` | non | `raw` | base cible |
+| `INFLUX_ORG` | non | `influxdb` | organisation (plugin `influxdb_v2`) |
+| `PING_TARGET` | non | = host:port de `INFLUX_URL` | cible du ping (plugin actuellement désactivé — pas de `CAP_NET_RAW`) |
+| `NODE_TAG` | non | `hostname` | tag `node` écrit dans InfluxDB — **doit correspondre au nom du nœud dans PVE** (sinon les données ne sont pas consommées par l'app) |
+
+> La clé GPG InfluxData (empreinte `24C9…F927`) est la clé de signature **officielle du
+> fournisseur** — identique dans tous les environnements, et plus téléchargée au redéploiement.
+
+### 10.3 Vérification
+
+Le script se **self-teste** en fin d'exécution (service actif + écriture InfluxDB confirmée).
+Puis, depuis le serveur prox4u, confirmer que les tables sont alimentées :
+
+```bash
+cd prox4u && TOK=$(grep '^INFLUX_TOKEN=' .env | cut -d= -f2)
+curl -sk https://localhost:8181/api/v3/query_sql -H "Authorization: Bearer $TOK" \
+  -H 'Content-Type: application/json' \
+  -d '{"db":"raw","q":"SELECT table_name FROM information_schema.tables WHERE table_name IN ('\''smart_device'\'','\''sensors'\'','\''zfs'\'','\''systemd_units'\'','\''disk'\'','\''diskio'\'','\''cpu'\'','\''mem'\'','\''system'\'','\''dm_names'\'','\''net'\'','\''net_if_mac'\'','\''node_hardware'\'','\''quorum_detail'\'','\''reboot_pending'\'','\''security_updates'\'')"}'
+```
+
+**16 tables** attendues (10 plugins natifs + 6 scripts exec). Les checks d'audit fondés sur
+l'agent s'activent au tick suivant du poller (caches 5 min). Dépannage sur le nœud :
+`journalctl -u telegraf -n 30 --no-pager`.
