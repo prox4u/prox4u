@@ -319,7 +319,7 @@ function loadOvercommitConfig(): { config: OvercommitConfig; mtime: number } {
  */
 export function reloadOvercommitConfig(cfg: AppConfig, logger: Pick<Console, 'info' | 'warn'>): void {
   for (const file of overcommitCandidates()) {
-    if (!existsSync(file)) return;
+    if (!existsSync(file)) continue; // candidat absent → on tente le suivant (racine)
     const mtime = statSync(file).mtimeMs;
     if (mtime === cfg.overcommitMtime) return;
     try {
@@ -378,7 +378,7 @@ export function reloadTunableConfigs(cfg: AppConfig, logger: Pick<Console, 'info
     apply: (v: unknown) => void,
   ) => {
     for (const file of configCandidates(name)) {
-      if (!existsSync(file)) return;
+      if (!existsSync(file)) continue; // candidat absent → on tente le suivant (racine)
       const mtime = statSync(file).mtimeMs;
       if (mtime === getMtime()) return;
       try {

@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { Boxes, CheckCircle2, Cpu, HardDrive, Server, ShieldCheck } from 'lucide-react';
-import type { AuditFinding, AuditSeverity, AuditTarget } from '@prox4u/shared';
+import { BookOpen, Boxes, CheckCircle2, ChevronDown, Cpu, HardDrive, Server, ShieldCheck } from 'lucide-react';
+import { CHECKS_META, type AuditFinding, type AuditSeverity, type AuditTarget } from '@prox4u/shared';
 import { useMulti } from '../../../core/data/use-endpoint';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Badge } from '../../../components/ui/badge';
@@ -89,6 +89,55 @@ function SeveritySection({
         ))}
       </div>
     </div>
+  );
+}
+
+/** Catalogue des checks (pourquoi / comment) — repliable, alimenté par CHECKS_META. */
+function CheckCatalog() {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  return (
+    <Card>
+      <CardHeader className="cursor-pointer select-none" onClick={() => setOpen((o) => !o)}>
+        <CardTitle className="flex items-center gap-2">
+          <BookOpen className="h-4 w-4 text-primary" />
+          {t('audit.checks.title')}
+          <ChevronDown className={`ml-auto h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+        </CardTitle>
+        <CardDescription>{t('audit.checks.desc')}</CardDescription>
+      </CardHeader>
+      {open && (
+        <CardContent className="space-y-2.5">
+          {CHECKS_META.map((m) => (
+            <div key={m.id} className="rounded-lg border bg-card p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">{t(m.titleKey)}</span>
+                <Badge tone="default" className="font-mono text-[10px]">
+                  {t('audit.checks.phase', { phase: m.phase })}
+                </Badge>
+                <Badge tone={SEV_TONE[m.severity]}>{t(`audit.severity.${m.severity}`)}</Badge>
+              </div>
+              <div className="mt-2 space-y-1 text-xs leading-relaxed text-muted-foreground">
+                <p>
+                  <span className="font-semibold text-foreground">{t('audit.checks.why')} — </span>
+                  {t(m.whyKey)}
+                </p>
+                <p>
+                  <span className="font-semibold text-foreground">{t('audit.checks.how')} — </span>
+                  {t(m.howKey)}
+                </p>
+                {m.thresholdKey && (
+                  <p>
+                    <span className="font-semibold text-foreground">{t('audit.checks.threshold')} — </span>
+                    {t(m.thresholdKey)}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      )}
+    </Card>
   );
 }
 
@@ -236,6 +285,9 @@ export function AuditPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Catalogue des checks (pourquoi / comment). */}
+      <CheckCatalog />
     </div>
   );
 }

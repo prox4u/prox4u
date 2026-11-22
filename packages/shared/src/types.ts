@@ -57,6 +57,8 @@ export interface PveVmResource {
   unprivileged?: boolean;
   /** QEMU : `cpu=host` ? — joint depuis la config. */
   cpuHost?: boolean;
+  /** autostart activé ? (config `autostart`, défaut PVE = 0/désactivé) — joint depuis la config. */
+  autostart?: boolean;
 }
 
 export interface PveNodeStatus {
@@ -559,6 +561,10 @@ export interface VmSummary {
   unprivileged?: boolean;
   /** QEMU : `cpu=host` ? (audit) · absent pour LXC. */
   cpuHost?: boolean;
+  /** autostart activé ? (audit) · `false` = désactivé (défaut PVE) · absent si config inconnue. */
+  autostart?: boolean;
+  /** Âge du snapshot le plus vieux (jours) — null si pas de snapshot · absent si inconnu (réchauffage de fond). */
+  oldestSnapshotAgeDays?: number | null;
 }
 
 /** Snapshot d'une VM (GET /nodes/{n}/{type}/{vmid}/snapshot). */
@@ -569,6 +575,15 @@ export interface PveVmSnapshot {
   /** snapshot de la mémoire (état complet) */
   memory: boolean;
   note?: string;
+}
+
+/** Statut d'un job de réplication (GET /cluster/replication — statut inclus). */
+export interface PveReplicationStatus {
+  vmid: number;
+  /** dernier résultat (« ok » / autre) — null si jamais exécuté. */
+  lastResult: string | null;
+  /** fin de la dernière exécution (unix secondes) — null si jamais exécuté. */
+  lastEndTime: number | null;
 }
 
 /** Configuration d'une VM (GET /nodes/{n}/{type}/{vmid}/config, parsé) — cache 1 h côté serveur. */
@@ -609,6 +624,8 @@ export interface VmConfigInfo {
   unprivileged?: boolean;
   /** QEMU : type CPU `host` (`cpu=host`) ? Recommandé pour la migration live. Absent pour LXC. */
   cpuHost?: boolean;
+  /** autostart activé ? (config `autostart`, défaut PVE = 0/désactivé). `false` = désactivé (absent ou 0). */
+  autostart?: boolean;
 }
 
 /** Détail d'une VM (GET /api/vm-config?endpoint=&vmid=) : live + config + snapshots. */

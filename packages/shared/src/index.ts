@@ -17,6 +17,7 @@ export type { OvercommitMetric, OvercommitReport } from './overcommit.js';
 export {
   AUDIT_PENALTIES,
   DEFAULT_AUDIT_CONFIG,
+  CHECKS_META,
   auditLabelKey,
   runAudit,
   checkQemuWithoutAgent,
@@ -26,6 +27,11 @@ export {
   checkThinPoolOverprovisioning,
   checkMemoryOvercommit,
   checkNodeVersionMismatch,
+  checkAutostart,
+  checkStuckSnapshots,
+  checkReplicationState,
+  checkBondMembers,
+  checkZfsArcMax,
 } from './audit.js';
 export type {
   AuditSeverity,
@@ -35,8 +41,12 @@ export type {
   AuditCounts,
   AuditScore,
   AuditBridge,
+  AuditBond,
+  AuditReplication,
+  AuditZfsArc,
   AuditInput,
   AuditConfig,
+  AuditCheckMeta,
   AuditEndpointResult,
   AuditAllResponse,
 } from './audit.js';
@@ -126,6 +136,7 @@ export type {
 export type {
   NodeNic,
   NodeBridge,
+  NodeBond,
   ParsedVmNet,
   VmAgentNetIf,
   NetworkSegment,

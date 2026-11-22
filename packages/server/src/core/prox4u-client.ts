@@ -4,11 +4,13 @@ import {
   parseVmNets,
   subnetOf,
   type AgentFsUsage,
+  type NodeBond,
   type NodeBridge,
   type NodeNic,
   type PveClusterStatus,
   type PveNodeStatus,
   type PvePool,
+  type PveReplicationStatus,
   type PveStorage,
   type PveVmResource,
   type PveVmSnapshot,
@@ -340,6 +342,8 @@ export class Prox4uClient implements DataSource {
         // Audit — LXC non-privilégié / QEMU cpu=host (config, cache 1 h).
         if (cached.value.unprivileged != null) v.unprivileged = cached.value.unprivileged;
         if (cached.value.cpuHost != null) v.cpuHost = cached.value.cpuHost;
+        // Audit — autostart (défaut PVE = 0/désactivé ; toujours un booléen si config lue).
+        if (cached.value.autostart != null) v.autostart = cached.value.autostart;
       }
     }
     return vms;
@@ -462,11 +466,12 @@ export class Prox4uClient implements DataSource {
     const { nodes } = await this.getNodes();
     return (await Promise.all(
       nodes.map(async (n): Promise<NodeNetwork> => {
-        if (!n.online) return { node: n.node, online: false, ip: n.ip ?? null, nics: [], bridges: [] };
+        if (!n.online) return { node: n.node, online: false, ip: n.ip ?? null, nics: [], bridges: [], bonds: [] };
         try {
           const raw = await this.get<RawNetIf[]>(`/nodes/${n.node}/network`);
           const nics: NodeNic[] = [];
           const bridges: NodeBridge[] = [];
+          const bonds: NodeBond[] = [];
           for (const e of raw) {
             const ip = str(e.cidr) ?? (str(e.address) && str(e.netmask) ? `${e.address}/${e.netmask}` : null);
             const comment = cleanComment(e.comment);
@@ -481,6 +486,12 @@ export class Prox4uClient implements DataSource {
                 altnames: altnamesOf(e),
                 active: num01(e.active),
               });
+            } else if (e.type === 'bond') {
+              bonds.push({
+                name: str(e.iface) ?? '?',
+                slaves: (str(e.bond_slaves) ?? '').split(/\s+/).filter(Boolean),
+                active: num01(e.active),
+              });
             } else {
               nics.push({
                 name: str(e.iface) ?? '?',
@@ -492,13 +503,32 @@ export class Prox4uClient implements DataSource {
               });
             }
           }
-          return { node: n.node, online: true, ip: n.ip ?? null, nics, bridges };
+          return { node: n.node, online: true, ip: n.ip ?? null, nics, bridges, bonds };
         } catch {
           // nœud injoignable pour le réseau : topologie partielle (nœud affiché sans liens)
-          return { node: n.node, online: false, ip: n.ip ?? null, nics: [], bridges: [] };
+          return { node: n.node, online: false, ip: n.ip ?? null, nics: [], bridges: [], bonds: [] };
         }
       }),
     )) as NodeNetwork[];
+  }
+
+  /**
+   * Statut des jobs de réplication du cluster (GET /cluster/replication — la liste
+   * inclut le statut de chaque job : lastResult, lastEndTime…). `[]` si aucun job
+   * configuré ou endpoint indisponible (le check `replication_state` n'a alors rien
+   * à signaler).
+   */
+  async getReplicationStatus(): Promise<PveReplicationStatus[]> {
+    try {
+      const list = await this.get<Record<string, unknown>[]>('/cluster/replication');
+      return list.map((j) => ({
+        vmid: num(j.vmid) ?? 0,
+        lastResult: str(j.lastResult) ?? null,
+        lastEndTime: num(j.lastEndTime),
+      }));
+    } catch {
+      return [];
+    }
   }
 
   async getVmConfig(node: string, vmid: number, type: 'qemu' | 'lxc'): Promise<VmConfigInfo | null> {
@@ -529,6 +559,8 @@ export class Prox4uClient implements DataSource {
         // QEMU cpu=host (recommandé pour la migration live).
         unprivileged: type === 'lxc' ? c.unprivileged !== 0 && c.unprivileged !== '0' : undefined,
         cpuHost: type === 'qemu' ? c.cpu === 'host' : undefined,
+        // autostart (défaut PVE = 0/désactivé) : 1 = activé, absent/0 = désactivé.
+        autostart: c.autostart === 1 || c.autostart === '1',
       };
     } catch {
       return null;
@@ -787,6 +819,8 @@ interface RawNetIf {
   netmask?: string | null;
   gateway?: string | null;
   bridge_ports?: string | null;
+  /** NICs esclaves d'un bond (type « bond », liste espace-séparée). */
+  bond_slaves?: string | null;
   comment?: string | null;
   /** Noms alternatifs du device noyau (ex. `enx9c6b00dd220c` pour `nic0`). */
   altnames?: string[];

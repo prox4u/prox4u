@@ -1,9 +1,11 @@
 import type {
   AgentFsUsage,
+  NodeBond,
   NodeBridge,
   NodeNic,
   PveClusterStatus,
   PvePool,
+  PveReplicationStatus,
   PveStorage,
   PveVmResource,
   PveVmSnapshot,
@@ -26,6 +28,8 @@ export interface NodeNetwork {
   ip: string | null;
   nics: NodeNic[];
   bridges: NodeBridge[];
+  /** bonds Linux (type « bond ») — vide si aucun bond. */
+  bonds: NodeBond[];
 }
 
 /**
@@ -97,8 +101,14 @@ export interface DataSource {
   /** Lecture seule du cache usage disque (aucun fetch) — undefined si jamais interrogé / périmé. */
   cachedFsUsage(node: string, vmid: number): AgentFsUsage[] | undefined;
 
-  /** réseau des nœuds (NICs + ponts) — topologie auto-découverte */
+  /** réseau des nœuds (NICs + ponts + bonds) — topologie auto-découverte */
   getNetwork(): Promise<NodeNetwork[]>;
+
+  /**
+   * Statut des jobs de réplication du cluster (GET /cluster/replication — statut
+   * inclus). `[]` si aucun job ou endpoint indisponible.
+   */
+  getReplicationStatus(): Promise<PveReplicationStatus[]>;
 
   /** historique RRD (nœud ou VM) */
   getRrddata(

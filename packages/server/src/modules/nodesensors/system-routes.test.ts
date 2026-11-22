@@ -125,6 +125,7 @@ describe('buildNodeNetIfaces', () => {
         { name: 'nic1', ip: null, subnet: null, comment: null, active: false }, // pas d'altnames → kernel inconnu
       ],
       bridges: [{ name: 'vmbr0', ip: null, subnet: null, gateway: null, ports: [], comment: null, active: true }],
+      bonds: [],
     };
     const out = buildNodeNetIfaces(net, []);
     expect(out).toEqual([
@@ -141,6 +142,7 @@ describe('buildNodeNetIfaces', () => {
       ip: null,
       nics: [{ name: 'nic2', ip: null, subnet: null, comment: null, altnames: ['enx9c6b00dd220c'], active: false }],
       bridges: [],
+      bonds: [],
     };
     const out = buildNodeNetIfaces(net, [{ iface: 'eth9' }]);
     expect(out).toEqual([{ name: 'eth9', kernels: ['eth9'], kind: 'other', active: null }]);
@@ -153,6 +155,7 @@ describe('buildNodeNetIfaces', () => {
       ip: null,
       nics: [{ name: 'nic2', ip: null, subnet: null, comment: null, altnames: ['enx9c6b00dd220c'], active: true }],
       bridges: [],
+      bonds: [],
     };
     const out = buildNodeNetIfaces(net, [{ iface: 'enx9c6b00dd220c' }, { iface: 'dock0' }]);
     expect(out).toEqual([

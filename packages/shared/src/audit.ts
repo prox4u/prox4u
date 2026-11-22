@@ -87,6 +87,35 @@ export interface AuditBridge {
   ports: string[];
 }
 
+/** Bond d'un nœud (projet de `getNetwork()`, `type: "bond"` + `bond_slaves`). */
+export interface AuditBond {
+  node: string;
+  name: string;
+  /** NICs esclaves du bond (`bond_slaves`, liste espace-séparée → tableau). */
+  slaves: string[];
+}
+
+/** Job de réplication (projet de `GET /cluster/replication` — statut inclus). */
+export interface AuditReplication {
+  vmid: number;
+  node: string;
+  /** nom de la VM (joint depuis /cluster/resources) — repli « VM <vmid> ». */
+  name: string;
+  /** dernier résultat (« ok » / autre) — null si jamais exécuté. */
+  lastResult: string | null;
+  /** âge de la dernière fin en heures — null si jamais exécuté. */
+  lastEndAgeHours: number | null;
+}
+
+/** ZFS ARC max d'un nœud (table Telegraf `zfs`, `arcstats_c_max`). */
+export interface AuditZfsArc {
+  node: string;
+  /** taille max de l'ARC (octets). */
+  arcMaxBytes: number;
+  /** RAM totale du nœud (octets). */
+  memTotalBytes: number;
+}
+
 /** Résultat d'audit d'un endpoint (GET /api/audit sans paramètre). */
 export interface AuditEndpointResult extends AuditScore {
   endpointId: string;
@@ -107,6 +136,12 @@ export interface AuditInput {
   storageVolumes: StorageVolume[];
   /** ponts par nœud — vide si `getNetwork()` indisponible. */
   bridges: AuditBridge[];
+  /** bonds par nœud — vide si `getNetwork()` indisponible ou aucun bond. */
+  bonds: AuditBond[];
+  /** jobs de réplication — vide si `GET /cluster/replication` indisponible ou aucun job. */
+  replications: AuditReplication[];
+  /** ZFS ARC max par nœud — vide si pas de données ZFS (agent non déployé). */
+  zfsArc: AuditZfsArc[];
   /** politique de surallocation (overcommit.json). */
   overcommit: OvercommitConfig;
   /** configuration de l'audit (audit.json, hot-reload) — défauts si absent. */
@@ -393,6 +428,128 @@ export function checkNodeVersionMismatch(input: AuditInput): AuditFinding[] {
   ];
 }
 
+/**
+ * `guests.autostart` (INFO) — VMs dont l'autostart est désactivé (défaut PVE) :
+ * après un reboot du nœud, elles ne redémarreront pas d'elles-mêmes. Constat
+ * AGRÉGÉ (un seul, avec un compteur) pour ne pas distordre le score — la revue
+ * « qui doit autostarter » est une décision métier, pas une erreur.
+ * `autostart === undefined` (config inconnue) n'est pas compté.
+ */
+export function checkAutostart(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['guests.autostart'].enabled) return [];
+  const count = input.vms.filter((v) => v.autostart === false).length;
+  if (count === 0) return [];
+  return [
+    {
+      check: 'guests.autostart',
+      severity: 'info',
+      messageKey: 'audit.finding.autostart',
+      params: { count },
+      target: clusterTarget(input),
+    },
+  ];
+}
+
+/**
+ * `guests.stuck_snapshots` (WARN) — snapshot le plus vieux d'une VM plus âgé que
+ * `maxAgeDays` : espace disque consommé, état obsolète, restauration risquée.
+ * `oldestSnapshotAgeDays == null` (pas de snapshot / inconnu) ne produit pas de
+ * constat.
+ */
+export function checkStuckSnapshots(input: AuditInput): AuditFinding[] {
+  const cfg = input.config.checks['guests.stuck_snapshots'];
+  if (!cfg.enabled) return [];
+  const out: AuditFinding[] = [];
+  for (const vm of input.vms) {
+    if (vm.oldestSnapshotAgeDays != null && vm.oldestSnapshotAgeDays > cfg.maxAgeDays) {
+      out.push({
+        check: 'guests.stuck_snapshots',
+        severity: 'warn',
+        messageKey: 'audit.finding.stuck_snapshots',
+        params: { name: vm.name || `VM ${vm.vmid}`, days: Math.round(vm.oldestSnapshotAgeDays) },
+        target: vmTarget(input, vm),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * `guests.replication_state` (WARN) — job de réplication dont la dernière
+ * exécution a échoué (`lastResult !== 'ok'`) ou n'a pas abouti depuis
+ * `maxStalenessHours` : la copie distante n'est plus fiable en cas de sinistre.
+ */
+export function checkReplicationState(input: AuditInput): AuditFinding[] {
+  const cfg = input.config.checks['guests.replication_state'];
+  if (!cfg.enabled) return [];
+  const out: AuditFinding[] = [];
+  for (const r of input.replications) {
+    const never = r.lastEndAgeHours == null;
+    const failed = !never && r.lastResult !== 'ok';
+    const stale = !never && !failed && r.lastEndAgeHours! > cfg.maxStalenessHours;
+    if (!never && !failed && !stale) continue; // dernière réplication ok et récente
+    const target = { kind: 'vm' as const, endpointId: input.endpointId, node: r.node, vmid: r.vmid, label: r.name };
+    if (never) {
+      out.push({ check: 'guests.replication_state', severity: 'warn', messageKey: 'audit.finding.replication_state.never', params: { name: r.name }, target });
+    } else if (failed) {
+      out.push({ check: 'guests.replication_state', severity: 'warn', messageKey: 'audit.finding.replication_state.failed', params: { name: r.name, hours: Math.round(r.lastEndAgeHours!) }, target });
+    } else {
+      out.push({ check: 'guests.replication_state', severity: 'warn', messageKey: 'audit.finding.replication_state.stale', params: { name: r.name, hours: Math.round(r.lastEndAgeHours!) }, target });
+    }
+  }
+  return out;
+}
+
+/**
+ * `network.bond_members` (WARN) — bond Linux avec moins de `minMembers` esclaves
+ * configurés : la redondance est perdue (un seul chemin réseau). Un bond à 1
+ * esclave n'a plus d'intérêt qu'une NIC simple.
+ */
+export function checkBondMembers(input: AuditInput): AuditFinding[] {
+  const cfg = input.config.checks['network.bond_members'];
+  if (!cfg.enabled) return [];
+  const out: AuditFinding[] = [];
+  for (const b of input.bonds) {
+    if (b.slaves.length < cfg.minMembers) {
+      out.push({
+        check: 'network.bond_members',
+        severity: 'warn',
+        messageKey: 'audit.finding.bond_members',
+        params: { node: b.node, bond: b.name, members: b.slaves.length },
+        target: nodeTarget(input, b.node),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * `system.zfs_arc_max` (WARN) — taille max de l'ARC ZFS au-delà de
+ * `maxPctOfRam` % de la RAM : l'ARC peut asphyxier les processus (ZFS cache
+ * agressif). Le défaut ZFS (~50 % de la RAM) est sain ; un `zfs_arc_max` monté
+ * à la main au-delà du seuil mérite une revue.
+ */
+export function checkZfsArcMax(input: AuditInput): AuditFinding[] {
+  const cfg = input.config.checks['system.zfs_arc_max'];
+  if (!cfg.enabled) return [];
+  const out: AuditFinding[] = [];
+  for (const z of input.zfsArc) {
+    if (z.memTotalBytes > 0 && z.arcMaxBytes > 0) {
+      const pct = (z.arcMaxBytes / z.memTotalBytes) * 100;
+      if (pct > cfg.maxPctOfRam) {
+        out.push({
+          check: 'system.zfs_arc_max',
+          severity: 'warn',
+          messageKey: 'audit.finding.zfs_arc_max',
+          params: { node: z.node, pct: Math.round(pct), threshold: cfg.maxPctOfRam },
+          target: nodeTarget(input, z.node),
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /** Catalogue des checks (ordre d'évaluation). */
 const CHECKS: Array<(input: AuditInput) => AuditFinding[]> = [
   checkQemuWithoutAgent,
@@ -402,6 +559,55 @@ const CHECKS: Array<(input: AuditInput) => AuditFinding[]> = [
   checkThinPoolOverprovisioning,
   checkMemoryOvercommit,
   checkNodeVersionMismatch,
+  checkAutostart,
+  checkStuckSnapshots,
+  checkReplicationState,
+  checkBondMembers,
+  checkZfsArcMax,
+];
+
+/**
+ * Métadonnées d'un check (catalogue « pourquoi / comment ») — consommé par la
+ * page « Audit » pour documenter chaque check. Les textes sont des clés i18n
+ * (`audit.check.<id>.title/.why/.how`) ; `thresholdKey` (optionnel) décrit le
+ * seuil ajustable dans `audit.json`.
+ */
+export interface AuditCheckMeta {
+  /** identifiant du check (ex. `guests.qemu_without_agent`). */
+  id: string;
+  /** phase de livraison (1 = API basique, 2 = API avancée, 3 = agent/Telegraf). */
+  phase: 1 | 2 | 3;
+  /** sévérité maximale que le check peut émettre. */
+  severity: AuditSeverity;
+  /** clé i18n du titre court. */
+  titleKey: string;
+  /** clé i18n du « pourquoi » (risque / bonne pratique). */
+  whyKey: string;
+  /** clé i18n du « comment » (source de la donnée + correction). */
+  howKey: string;
+  /** clé i18n du seuil ajustable — null si check booléen (pas de seuil). */
+  thresholdKey: string | null;
+}
+
+/** Catalogue des 16 checks (ordre = ordre d'évaluation). */
+export const CHECKS_META: AuditCheckMeta[] = [
+  { id: 'guests.qemu_without_agent', phase: 1, severity: 'crit', titleKey: 'audit.check.qemu_without_agent.title', whyKey: 'audit.check.qemu_without_agent.why', howKey: 'audit.check.qemu_without_agent.how', thresholdKey: null },
+  { id: 'guests.privileged_containers', phase: 1, severity: 'warn', titleKey: 'audit.check.privileged_containers.title', whyKey: 'audit.check.privileged_containers.why', howKey: 'audit.check.privileged_containers.how', thresholdKey: null },
+  { id: 'guests.cpu_host_type', phase: 1, severity: 'info', titleKey: 'audit.check.cpu_host_type.title', whyKey: 'audit.check.cpu_host_type.why', howKey: 'audit.check.cpu_host_type.how', thresholdKey: null },
+  { id: 'network.bridge_without_ports', phase: 1, severity: 'warn', titleKey: 'audit.check.bridge_without_ports.title', whyKey: 'audit.check.bridge_without_ports.why', howKey: 'audit.check.bridge_without_ports.how', thresholdKey: null },
+  { id: 'storage.thin_pool_overprovisioning', phase: 1, severity: 'warn', titleKey: 'audit.check.thin_pool_overprovisioning.title', whyKey: 'audit.check.thin_pool_overprovisioning.why', howKey: 'audit.check.thin_pool_overprovisioning.how', thresholdKey: null },
+  { id: 'system.memory_overcommit', phase: 1, severity: 'crit', titleKey: 'audit.check.memory_overcommit.title', whyKey: 'audit.check.memory_overcommit.why', howKey: 'audit.check.memory_overcommit.how', thresholdKey: null },
+  { id: 'system.node_version_mismatch', phase: 1, severity: 'info', titleKey: 'audit.check.node_version_mismatch.title', whyKey: 'audit.check.node_version_mismatch.why', howKey: 'audit.check.node_version_mismatch.how', thresholdKey: null },
+  { id: 'guests.autostart', phase: 2, severity: 'info', titleKey: 'audit.check.autostart.title', whyKey: 'audit.check.autostart.why', howKey: 'audit.check.autostart.how', thresholdKey: null },
+  { id: 'guests.stuck_snapshots', phase: 2, severity: 'warn', titleKey: 'audit.check.stuck_snapshots.title', whyKey: 'audit.check.stuck_snapshots.why', howKey: 'audit.check.stuck_snapshots.how', thresholdKey: 'audit.check.stuck_snapshots.threshold' },
+  { id: 'guests.replication_state', phase: 2, severity: 'warn', titleKey: 'audit.check.replication_state.title', whyKey: 'audit.check.replication_state.why', howKey: 'audit.check.replication_state.how', thresholdKey: 'audit.check.replication_state.threshold' },
+  { id: 'network.bond_members', phase: 2, severity: 'warn', titleKey: 'audit.check.bond_members.title', whyKey: 'audit.check.bond_members.why', howKey: 'audit.check.bond_members.how', thresholdKey: 'audit.check.bond_members.threshold' },
+  { id: 'system.zfs_arc_max', phase: 2, severity: 'warn', titleKey: 'audit.check.zfs_arc_max.title', whyKey: 'audit.check.zfs_arc_max.why', howKey: 'audit.check.zfs_arc_max.how', thresholdKey: 'audit.check.zfs_arc_max.threshold' },
+  { id: 'disks.disk_errors', phase: 3, severity: 'crit', titleKey: 'audit.check.disk_errors.title', whyKey: 'audit.check.disk_errors.why', howKey: 'audit.check.disk_errors.how', thresholdKey: null },
+  { id: 'disks.disk_service_life', phase: 3, severity: 'warn', titleKey: 'audit.check.disk_service_life.title', whyKey: 'audit.check.disk_service_life.why', howKey: 'audit.check.disk_service_life.how', thresholdKey: 'audit.check.disk_service_life.threshold' },
+  { id: 'system.failed_units', phase: 3, severity: 'warn', titleKey: 'audit.check.failed_units.title', whyKey: 'audit.check.failed_units.why', howKey: 'audit.check.failed_units.how', thresholdKey: null },
+  { id: 'system.pending_reboot', phase: 3, severity: 'info', titleKey: 'audit.check.pending_reboot.title', whyKey: 'audit.check.pending_reboot.why', howKey: 'audit.check.pending_reboot.how', thresholdKey: null },
+  { id: 'system.security_updates', phase: 3, severity: 'info', titleKey: 'audit.check.security_updates.title', whyKey: 'audit.check.security_updates.why', howKey: 'audit.check.security_updates.how', thresholdKey: 'audit.check.security_updates.threshold' },
 ];
 
 /**

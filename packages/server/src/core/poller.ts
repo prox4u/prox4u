@@ -9,8 +9,11 @@ import {
   usageSeverity,
   type AgentFsUsage,
   type Alert,
+  type AuditBond,
   type AuditBridge,
+  type AuditReplication,
   type AuditScore,
+  type AuditZfsArc,
   type DashboardSnapshot,
   type EndpointSnapshot,
   type KpiSummary,
@@ -62,8 +65,17 @@ export interface AppContext {
 
 const DAY_MS = 86_400_000;
 
-/** TTL du cache réseau (ponts) pour l'audit — topologie quasi statique. */
+/** TTL du cache réseau (ponts + bonds) pour l'audit — topologie quasi statique. */
 const AUDIT_NETWORK_TTL_MS = 5 * 60 * 1000;
+/** TTL du cache réplication pour l'audit (check `replication_state`). */
+const AUDIT_REPLICATION_TTL_MS = 5 * 60 * 1000;
+/** TTL du cache ZFS ARC pour l'audit (check `zfs_arc_max`) — quasi statique. */
+const AUDIT_ZFSARC_TTL_MS = 5 * 60 * 1000;
+/**
+ * TTL du réchauffage des snapshots (check `stuck_snapshots`) : les appels API
+ * (un par VM) ne se font qu'une fois par heure par VM, en background.
+ */
+const AUDIT_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
 
 interface DailySample {
   time: number;
@@ -86,6 +98,12 @@ interface EndpointState {
    * ou n/a (LXC, VM arrêtée → la clé est purgée).
    */
   agentActive: Map<number, boolean>;
+  /**
+   * Âge du snapshot le plus vieux par vmid (jours), mis à jour par le réchauffage
+   * background (check `stuck_snapshots`). `ageDays=null` = pas de snapshot.
+   * Absence d'entrée = inconnu (1ers ticks) → le check ne produit pas de constat.
+   */
+  snapshotAge: Map<number, { at: number; ageDays: number | null }>;
   /**
    * Données brutes du dernier poll RÉUSSI (nœuds + VMs) — conservées pour le
    * PRA global cross-endpoints (tick) : un endpoint down garde son dernier état
@@ -123,6 +141,12 @@ export class Poller {
    */
   private agentRefreshing = new Set<string>();
   /**
+   * Guard single-flight du réchauffage des snapshots (check `stuck_snapshots`), par
+   * endpoint. Le TTL de 1 h (SNAPSHOT_TTL_MS) est vérifié par VM dans l'état : les
+   * vrais appels API ne se font qu'une fois par heure par VM, en background.
+   */
+  private snapshotRefreshing = new Set<string>();
+  /**
    * Détail du quorum corosync (table Telegraf `quorum_detail`) par endpoint —
    * cache 30 s (donnée quasi statique, écrite toutes les 10 s par Telegraf).
    * `detail=null` est aussi mis en cache : pas de Qdevice / agent non déployé,
@@ -130,11 +154,21 @@ export class Poller {
    */
   private quorumDetailCache = new Map<string, { at: number; detail: QuorumDetail | null }>();
   /**
-   * Ponts par nœud pour l'audit (check `bridge_without_ports`) — cache 5 min par
-   * endpoint : la topologie réseau est quasi statique, inutile de rappeler
-   * getNetwork() à chaque tick de 5 s. `[]` (échec) est aussi mis en cache.
+   * Réseau par nœud pour l'audit (checks `bridge_without_ports` + `bond_members`) —
+   * cache 5 min par endpoint : la topologie réseau est quasi statique, inutile de
+   * rappeler getNetwork() à chaque tick de 5 s. `[]` (échec) est aussi mis en cache.
    */
-  private networkCache = new Map<string, { at: number; bridges: AuditBridge[] }>();
+  private networkCache = new Map<string, { at: number; bridges: AuditBridge[]; bonds: AuditBond[] }>();
+  /**
+   * Statut des jobs de réplication pour l'audit (check `replication_state`) —
+   * cache 5 min par endpoint. `[]` (aucun job / échec) est aussi mis en cache.
+   */
+  private replicationCache = new Map<string, { at: number; replications: AuditReplication[] }>();
+  /**
+   * ZFS ARC max par nœud pour l'audit (check `zfs_arc_max`) — cache 5 min par
+   * endpoint (table Telegraf `zfs`, quasi statique). `[]` (pas de données) mis en cache.
+   */
+  private zfsArcCache = new Map<string, { at: number; zfsArc: AuditZfsArc[] }>();
 
   constructor(
     private ctx: AppContext,
@@ -149,6 +183,7 @@ export class Poller {
         daily: [],
         lastDayKey: null,
         agentActive: new Map(),
+        snapshotAge: new Map(),
         lastNodes: [],
         lastVms: [],
       });
@@ -252,18 +287,93 @@ export class Poller {
    * (topologie quasi statique). `[]` si getNetwork() indisponible (endpoint down)
    * → le check est simplement sans objet, pas de faux positifs.
    */
-  private async getAuditBridges(st: EndpointState): Promise<AuditBridge[]> {
+  /**
+   * Réseau pour l'audit (ponts + bonds) — cache 5 min par endpoint. Les deux
+   * checks réseau (`bridge_without_ports`, `bond_members`) partagent le même
+   * getNetwork() : un seul appel, deux vues.
+   */
+  private async getAuditNetwork(st: EndpointState): Promise<{ bridges: AuditBridge[]; bonds: AuditBond[] }> {
     const cached = this.networkCache.get(st.rt.id);
-    if (cached && Date.now() - cached.at < AUDIT_NETWORK_TTL_MS) return cached.bridges;
+    if (cached && Date.now() - cached.at < AUDIT_NETWORK_TTL_MS) return { bridges: cached.bridges, bonds: cached.bonds };
     let bridges: AuditBridge[] = [];
+    let bonds: AuditBond[] = [];
     try {
       const network = await st.rt.source.getNetwork();
       bridges = network.flatMap((n) => n.bridges.map((b) => ({ node: n.node, name: b.name, ports: b.ports })));
+      bonds = network.flatMap((n) => n.bonds.map((b) => ({ node: n.node, name: b.name, slaves: b.slaves })));
     } catch {
       bridges = [];
+      bonds = [];
     }
-    this.networkCache.set(st.rt.id, { at: Date.now(), bridges });
-    return bridges;
+    this.networkCache.set(st.rt.id, { at: Date.now(), bridges, bonds });
+    return { bridges, bonds };
+  }
+
+  /**
+   * Statut des jobs de réplication pour l'audit (check `replication_state`) —
+   * cache 5 min. L'âge (heures) est calculé ici (le check reste pur) ; le nom de
+   * la VM est joint depuis /cluster/resources.
+   */
+  private async getAuditReplications(st: EndpointState, vms: PveVmResource[]): Promise<AuditReplication[]> {
+    const cached = this.replicationCache.get(st.rt.id);
+    if (cached && Date.now() - cached.at < AUDIT_REPLICATION_TTL_MS) return cached.replications;
+    let replications: AuditReplication[] = [];
+    try {
+      const jobs = await st.rt.source.getReplicationStatus();
+      const nowSec = Date.now() / 1000;
+      const vmByVmid = new Map(vms.map((v) => [v.vmid, v]));
+      replications = jobs.map((j) => {
+        const vm = vmByVmid.get(j.vmid);
+        return {
+          vmid: j.vmid,
+          node: vm?.node ?? '',
+          name: vm?.name || `VM ${j.vmid}`,
+          lastResult: j.lastResult,
+          lastEndAgeHours: j.lastEndTime != null ? (nowSec - j.lastEndTime) / 3600 : null,
+        };
+      });
+    } catch {
+      replications = [];
+    }
+    this.replicationCache.set(st.rt.id, { at: Date.now(), replications });
+    return replications;
+  }
+
+  /**
+   * ZFS ARC max par nœud pour l'audit (check `zfs_arc_max`) — cache 5 min. Lit la
+   * table Telegraf `zfs` (arcstats_c_max, quasi statique) sur une fenêtre de 1 h ;
+   * la RAM vient du poll courant (nodeHealth). Pas de données (agent non déployé)
+   * → `[]` (le check n'a rien à signaler).
+   */
+  private async getAuditZfsArc(st: EndpointState, nodes: NodeHealth[]): Promise<AuditZfsArc[]> {
+    const cached = this.zfsArcCache.get(st.rt.id);
+    if (cached && Date.now() - cached.at < AUDIT_ZFSARC_TTL_MS) return cached.zfsArc;
+    const influx = this.ctx.influx;
+    let zfsArc: AuditZfsArc[] = [];
+    if (influx.enabled && !this.ctx.config.mock && nodes.length > 0) {
+      try {
+        const inList = nodes.map((n) => `'${n.node.replace(/'/g, "''")}'`).join(', ');
+        const rows = await influx.querySql<Record<string, string | number | null>>(
+          influx.rawDb,
+          `SELECT node, max(arcstats_c_max) AS arc_max
+           FROM zfs
+           WHERE node IN (${inList}) AND time >= now() - INTERVAL '1 hour'
+           GROUP BY node`,
+        );
+        const memByNode = new Map(nodes.map((n) => [n.node, n.memTotalBytes ?? 0]));
+        zfsArc = rows
+          .map((r) => ({ node: String(r.node), arcMaxBytes: Number(r.arc_max) || 0, memTotalBytes: memByNode.get(String(r.node)) ?? 0 }))
+          .filter((z) => z.arcMaxBytes > 0 && z.memTotalBytes > 0);
+      } catch (err) {
+        // Table absente (agent non déployé) = état attendu → silencieux.
+        const msg = (err as Error).message;
+        if (!/not found/i.test(msg)) {
+          this.ctx.logger.warn(`zfs (audit) : lecture InfluxDB échouée pour ${st.rt.id} (${msg})`);
+        }
+      }
+    }
+    this.zfsArcCache.set(st.rt.id, { at: Date.now(), zfsArc });
+    return zfsArc;
   }
 
   /** Poll un endpoint ; en cas d'échec, conserve le dernier snapshot connu. */
@@ -281,6 +391,10 @@ export class Poller {
       // partagée avec la route proxmox-inventory. `void` (hors du tick) + single-flight : le
       // tick ne bloque JAMAIS derrière un appel agent, quelle que soit la taille du parc.
       void this.refreshAgentData(rt, vms);
+
+      // Réchauffage BACKGROUND des snapshots (check `stuck_snapshots`, TTL 1 h) —
+      // un appel API par VM, une fois par heure, hors du tick.
+      void this.refreshSnapshotData(rt, vms);
 
       // Allocations VMs (templates exclus) : par nœud et au total — ratios de surallocation
       const allocVms = vms.filter((v) => !v.template);
@@ -465,11 +579,20 @@ export class Poller {
         // Audit / best-practices (config, cache 1 h) — absents si config inconnue.
         unprivileged: v.unprivileged,
         cpuHost: v.cpuHost,
+        autostart: v.autostart,
+        // null = pas de snapshot ou inconnu (1ers ticks, avant le réchauffage) — le
+        // check `stuck_snapshots` ne produit pas de constat sur null.
+        oldestSnapshotAgeDays: st.snapshotAge.get(v.vmid)?.ageDays ?? null,
       }));
 
       // Audit / best-practices (P3) — 2ᵉ score de CONFIGURATION. Checks purs
-      // (shared/audit.ts) ; les ponts viennent du cache 5 min (getNetwork).
-      const bridges = await this.getAuditBridges(st);
+      // (shared/audit.ts) ; réseau (ponts+bonds) cache 5 min, réplication cache
+      // 5 min, ZFS ARC cache 5 min (table Telegraf), snapshots réchauffés 1 h.
+      const { bridges, bonds } = await this.getAuditNetwork(st);
+      const [replications, zfsArc] = await Promise.all([
+        this.getAuditReplications(st, vms),
+        this.getAuditZfsArc(st, nodeHealth),
+      ]);
       const audit: AuditScore = runAudit({
         endpointId: rt.id,
         nodes: nodeHealth,
@@ -477,6 +600,9 @@ export class Poller {
         storages: storageInfos,
         storageVolumes,
         bridges,
+        bonds,
+        replications,
+        zfsArc,
         overcommit: this.ctx.config.overcommit,
         config: this.ctx.config.audit,
       });
@@ -540,6 +666,40 @@ export class Poller {
       });
     } finally {
       this.agentRefreshing.delete(rt.id);
+    }
+  }
+
+  /**
+   * Réchauffe en background l'âge du snapshot le plus vieux par VM (check
+   * `stuck_snapshots`). Single-flight par endpoint + concurrence bornée à
+   * AGENT_CONCURRENCY. Le TTL de 1 h (vérifié par VM dans l'état) fait que les
+   * vrais appels API (un par VM) ne se font qu'une fois par heure par VM — le
+   * tick de 5 s ne déclenche rien tant que le cache est frais.
+   */
+  private async refreshSnapshotData(rt: EndpointRuntime, vms: PveVmResource[]): Promise<void> {
+    if (this.snapshotRefreshing.has(rt.id)) return;
+    this.snapshotRefreshing.add(rt.id);
+    try {
+      const st = this.states.get(rt.id)!;
+      const now = Date.now();
+      const targets = vms.filter((v) => !v.template);
+      await mapLimit(targets, AGENT_CONCURRENCY, async (v) => {
+        const cached = st.snapshotAge.get(v.vmid);
+        if (cached && now - cached.at < AUDIT_SNAPSHOT_TTL_MS) return; // frais
+        const snaps = await rt.source.getVmSnapshots(v.node, v.vmid, v.type);
+        // snapshot le plus vieux = min(snaptime) ; null si aucun snapshot.
+        let oldest: number | null = null;
+        for (const s of snaps) {
+          if (s.time != null && (oldest == null || s.time < oldest)) oldest = s.time;
+        }
+        const ageDays = oldest != null ? (now / 1000 - oldest) / 86400 : null;
+        st.snapshotAge.set(v.vmid, { at: now, ageDays });
+      });
+      // purge des VMs disparues (supprimées / migrées)
+      const current = new Set(targets.map((v) => v.vmid));
+      for (const vmid of st.snapshotAge.keys()) if (!current.has(vmid)) st.snapshotAge.delete(vmid);
+    } finally {
+      this.snapshotRefreshing.delete(rt.id);
     }
   }
 

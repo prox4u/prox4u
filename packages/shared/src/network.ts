@@ -36,6 +36,15 @@ export interface NodeBridge {
   active?: boolean | null;
 }
 
+/** Bond Linux d'un nœud (type « bond » dans l'API PVE). */
+export interface NodeBond {
+  name: string;
+  /** NICs esclaves du bond (champ `bond_slaves`, liste espace-séparée → tableau). */
+  slaves: string[];
+  /** UP/DOWN côté PVE (champ `active`) — null/absent si inconnu. */
+  active?: boolean | null;
+}
+
 /** Interface réseau d'une VM/CT → pont (parsing de la config). */
 export interface ParsedVmNet {
   /** net0 / mp0… */

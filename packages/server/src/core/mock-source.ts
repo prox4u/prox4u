@@ -1,4 +1,4 @@
-import type { AgentFsUsage, ParsedVmNet, PveClusterStatus, PveNodeStatus, PvePool, PveStorage, PveVmResource, PveVmSnapshot, QuorumState, RrddataPoint, VmAgentNetIf, VmOsInfo } from '@prox4u/shared';
+import type { AgentFsUsage, ParsedVmNet, PveClusterStatus, PveNodeStatus, PvePool, PveReplicationStatus, PveStorage, PveVmResource, PveVmSnapshot, QuorumState, RrddataPoint, VmAgentNetIf, VmOsInfo } from '@prox4u/shared';
 import type { DataSource, NodeNetwork, Timeframe, VmConfigInfo } from './data-source.js';
 
 const GB = 1024 ** 3;
@@ -294,9 +294,15 @@ export class MockSource implements DataSource {
               ? [{ name: 'nfs', ip: null, subnet: null, gateway: null, ports: [], comment: 'Stockage NFS' }]
               : []),
           ],
+          bonds: [],
         };
       }),
     );
+  }
+
+  /** Aucun job de réplication dans le mock. */
+  async getReplicationStatus(): Promise<PveReplicationStatus[]> {
+    return [];
   }
 
   async getVmConfig(node: string, vmid: number): Promise<VmConfigInfo | null> {

@@ -9,6 +9,11 @@ import {
   checkPrivilegedContainers,
   checkQemuWithoutAgent,
   checkThinPoolOverprovisioning,
+  checkAutostart,
+  checkStuckSnapshots,
+  checkReplicationState,
+  checkBondMembers,
+  checkZfsArcMax,
   runAudit,
   DEFAULT_AUDIT_CONFIG,
   type AuditInput,
@@ -90,6 +95,9 @@ const input = (over: Partial<AuditInput> = {}): AuditInput => ({
   storages: [],
   storageVolumes: [],
   bridges: [],
+  bonds: [],
+  replications: [],
+  zfsArc: [],
   overcommit: DEFAULT_OVERCOMMIT_CONFIG,
   config: DEFAULT_AUDIT_CONFIG,
   ...over,
@@ -293,6 +301,131 @@ describe('checkNodeVersionMismatch', () => {
         input({ nodes: [node({ node: 'n1', version: '9.1.1' }), node({ node: 'n2', online: false, version: '9.0.3' })] }),
       ),
     ).toHaveLength(0);
+  });
+});
+
+// --- checkAutostart (Phase 2) ----------------------------------------------------
+
+describe('checkAutostart', () => {
+  it('N VMs sans autostart → 1 constat info agrégé (cible cluster)', () => {
+    const f = checkAutostart(
+      input({ vms: [vm({ vmid: 1, autostart: false }), vm({ vmid: 2, autostart: false }), vm({ vmid: 3, autostart: true })] }),
+    );
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('info');
+    expect(f[0].check).toBe('guests.autostart');
+    expect(f[0].params).toMatchObject({ count: 2 });
+    expect(f[0].target.kind).toBe('cluster');
+  });
+
+  it('toutes autostart=true (ou inconnu) → aucun constat', () => {
+    expect(
+      checkAutostart(input({ vms: [vm({ vmid: 1, autostart: true }), vm({ vmid: 2 })] })),
+    ).toHaveLength(0);
+  });
+
+  it('désactivé (enabled=false) → aucun constat', () => {
+    const cfg = { ...DEFAULT_AUDIT_CONFIG, checks: { ...DEFAULT_AUDIT_CONFIG.checks, 'guests.autostart': { enabled: false } } };
+    expect(checkAutostart(input({ vms: [vm({ autostart: false })], config: cfg }))).toHaveLength(0);
+  });
+});
+
+// --- checkStuckSnapshots (Phase 2) -----------------------------------------------
+
+describe('checkStuckSnapshots', () => {
+  it('snapshot le plus vieux > maxAgeDays → 1 constat warn par VM', () => {
+    const f = checkStuckSnapshots(input({ vms: [vm({ vmid: 1, oldestSnapshotAgeDays: 10 }), vm({ vmid: 2, oldestSnapshotAgeDays: 3 })] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('warn');
+    expect(f[0].check).toBe('guests.stuck_snapshots');
+    expect(f[0].params).toMatchObject({ days: 10 });
+    expect(f[0].target.vmid).toBe(1);
+  });
+
+  it('snapshot jeune (≤ maxAgeDays) ou absent (null) → aucun constat', () => {
+    expect(
+      checkStuckSnapshots(input({ vms: [vm({ vmid: 1, oldestSnapshotAgeDays: 7 }), vm({ vmid: 2, oldestSnapshotAgeDays: null }), vm({ vmid: 3 })] })),
+    ).toHaveLength(0);
+  });
+
+  it('seuil ajustable (maxAgeDays=2) → snapshot de 3 j flaggé', () => {
+    const cfg = { ...DEFAULT_AUDIT_CONFIG, checks: { ...DEFAULT_AUDIT_CONFIG.checks, 'guests.stuck_snapshots': { enabled: true, maxAgeDays: 2 } } };
+    expect(checkStuckSnapshots(input({ vms: [vm({ oldestSnapshotAgeDays: 3 })], config: cfg }))).toHaveLength(1);
+  });
+});
+
+// --- checkReplicationState (Phase 2) ---------------------------------------------
+
+describe('checkReplicationState', () => {
+  it('jamais abouti (lastEndAgeHours=null) → constat « never »', () => {
+    const f = checkReplicationState(input({ replications: [{ vmid: 1, node: 'n1', name: 'vm1', lastResult: null, lastEndAgeHours: null }] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].messageKey).toBe('audit.finding.replication_state.never');
+    expect(f[0].severity).toBe('warn');
+  });
+
+  it('dernière en échec (lastResult≠ok) → constat « failed »', () => {
+    const f = checkReplicationState(input({ replications: [{ vmid: 1, node: 'n1', name: 'vm1', lastResult: 'error', lastEndAgeHours: 2 }] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].messageKey).toBe('audit.finding.replication_state.failed');
+    expect(f[0].params).toMatchObject({ hours: 2 });
+  });
+
+  it('ok mais obsolète (> maxStalenessHours) → constat « stale »', () => {
+    const f = checkReplicationState(input({ replications: [{ vmid: 1, node: 'n1', name: 'vm1', lastResult: 'ok', lastEndAgeHours: 30 }] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].messageKey).toBe('audit.finding.replication_state.stale');
+  });
+
+  it('ok et récente (≤ maxStalenessHours) → aucun constat', () => {
+    expect(
+      checkReplicationState(input({ replications: [{ vmid: 1, node: 'n1', name: 'vm1', lastResult: 'ok', lastEndAgeHours: 2 }] })),
+    ).toHaveLength(0);
+  });
+
+  it('aucun job → aucun constat', () => {
+    expect(checkReplicationState(input({}))).toHaveLength(0);
+  });
+});
+
+// --- checkBondMembers (Phase 2) ---------------------------------------------------
+
+describe('checkBondMembers', () => {
+  it('bond à 1 esclave (< minMembers) → 1 constat warn', () => {
+    const f = checkBondMembers(input({ bonds: [{ node: 'n1', name: 'bond0', slaves: ['eth0'] }] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('warn');
+    expect(f[0].check).toBe('network.bond_members');
+    expect(f[0].params).toMatchObject({ members: 1 });
+  });
+
+  it('bond à 2 esclaves (≥ minMembers) → aucun constat', () => {
+    expect(checkBondMembers(input({ bonds: [{ node: 'n1', name: 'bond0', slaves: ['eth0', 'eth1'] }] }))).toHaveLength(0);
+  });
+
+  it('aucun bond → aucun constat', () => {
+    expect(checkBondMembers(input({}))).toHaveLength(0);
+  });
+});
+
+// --- checkZfsArcMax (Phase 2) -----------------------------------------------------
+
+describe('checkZfsArcMax', () => {
+  it('ARC max > maxPctOfRam % de la RAM → 1 constat warn', () => {
+    // 100 Go d'ARC max sur 100 Go de RAM = 100 % > 75 %
+    const f = checkZfsArcMax(input({ zfsArc: [{ node: 'n1', arcMaxBytes: 100 * GB, memTotalBytes: 100 * GB }] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('warn');
+    expect(f[0].check).toBe('system.zfs_arc_max');
+    expect(f[0].params).toMatchObject({ pct: 100, threshold: 75 });
+  });
+
+  it('ARC max ≤ maxPctOfRam % (50 %) → aucun constat', () => {
+    expect(checkZfsArcMax(input({ zfsArc: [{ node: 'n1', arcMaxBytes: 50 * GB, memTotalBytes: 100 * GB }] }))).toHaveLength(0);
+  });
+
+  it('pas de données ZFS (RAM 0 / ARC 0) → aucun constat', () => {
+    expect(checkZfsArcMax(input({ zfsArc: [{ node: 'n1', arcMaxBytes: 0, memTotalBytes: 100 * GB }] }))).toHaveLength(0);
   });
 });
 
