@@ -92,10 +92,12 @@ function SeveritySection({
   );
 }
 
-/** Catalogue des checks (pourquoi / comment) — repliable, alimenté par CHECKS_META. */
+/** Catalogue des checks (pourquoi / comment) — repliable, alimenté par CHECKS_META.
+ *  Déplié par défaut : c'est la doc « pourquoi c'est une bonne pratique / comment
+ *  corriger » que l'utilisateur vient chercher sur cette page. */
 function CheckCatalog() {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   return (
     <Card>
       <CardHeader className="cursor-pointer select-none" onClick={() => setOpen((o) => !o)}>
