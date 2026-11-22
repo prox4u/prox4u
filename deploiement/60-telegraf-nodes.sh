@@ -83,7 +83,11 @@ ok "Cible ping : $PING_TARGET"
 # telegraf n'est PAS dans les dépôts Debian : il vient de repos.influxdata.com.
 # Si le dépôt n'est pas encore déclaré, on l'ajoute (clé GPG + source).
 # On ne touche PAS aux dépôts Proxmox Enterprise (licence payante / pve-no-subscription).
-if ! apt-config dump 2>/dev/null | grep -qi "repos.influxdata.com"; then
+# Redéploiement (telegraf déjà installé) : on saute le dépôt — pas besoin de
+# télécharger la clé GPG (le réseau internet peut être instable sur le LAN).
+if command -v telegraf >/dev/null 2>&1; then
+  ok "telegraf déjà installé — dépôt InfluxData ignoré (redéploiement, pas de téléchargement GPG)"
+elif ! apt-config dump 2>/dev/null | grep -qi "repos.influxdata.com"; then
   if [[ $DRY_RUN -eq 1 ]]; then
     echo "[dry-run] ajouterait le dépôt InfluxData (clé GPG + /etc/apt/sources.list.d/influxdata.list)"
   else
@@ -129,9 +133,13 @@ fi
 # ou dépôts Enterprise 401 sans licence), les listes déjà cachées dans /var/lib/apt/lists
 # suffisent souvent pour l'install. Seul l'install est fatal (sans les paquets, pas de
 # déploiement). Les dépôts Enterprise 401 n'empêchent PAS d'installer telegraf (Débian).
-run apt-get update -qq || \
-  warn "apt-get update a échelé — on continue avec les listes cachées. Sur le nœud : cat /etc/os-release && cat /etc/apt/sources.list"
-run apt-get install -y -qq telegraf smartmontools lm-sensors
+if command -v telegraf >/dev/null 2>&1 && dpkg -s smartmontools lm-sensors >/dev/null 2>&1; then
+  ok "paquets déjà installés (telegraf + smartmontools + lm-sensors) — apt ignoré (redéploiement)"
+else
+  run apt-get update -qq || \
+    warn "apt-get update a échelé — on continue avec les listes cachées. Sur le nœud : cat /etc/os-release && cat /etc/apt/sources.list"
+  run apt-get install -y -qq telegraf smartmontools lm-sensors
+fi
 
 # ── 3. Détection des capteurs (lm-sensors) — non interactif ────────────────
 if [[ $DRY_RUN -eq 0 ]]; then
