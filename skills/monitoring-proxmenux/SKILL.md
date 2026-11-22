@@ -168,7 +168,7 @@ historique InfluxDB (raw 5 s / consolidated 5 min), alarmes Centreon (moteur ok�
 ## 5. Décisions actées & plan Telegraf
 
 ### 5.1 Arbitrages (validés)
-- Fichier d'actions `MONITORING-ACTIONS.md` à la **racine** de prox4u.
+- **Suivi des tâches P0→P5 dans les issues GitHub** (`github.com/prox4u/prox4u`) — l'ancien fichier d'actions `MONITORING-ACTIONS.md` (racine) a été retiré le 2026-11-22 : le tracking ne vit plus que sur GitHub (les `*.md` conservent l'historique/référence).
 - **Token Telegraf** : réutilise le **token admin** de `.env` par défaut, mais **choix dans la
   config** — paramètre `TELEGRAF_INFLUX_TOKEN` surchargeable (token dédié possible).
 - **Nouveau module web = Option A** : nouvelle **famille de plugin `node-sensors` (v1)** (page
@@ -228,4 +228,4 @@ historique InfluxDB (raw 5 s / consolidated 5 min), alarmes Centreon (moteur ok�
 - `packages/server/src/core/influx.ts` — écriture `/api/v3/write_lp?db=raw`
 - `packages/server/src/modules/centreonnsca/` — moteur d'alarmes existant (ok⇄firing)
 - `deploiement/` — scripts numérotés (10 token, 40 TLS, 50 influx, **60 telegraf livré**)
-- `MONITORING-ACTIONS.md` (racine) — TODO priorisée (P0 Telegraf → P5 certificats/NTP)
+- **Issues GitHub** (`github.com/prox4u/prox4u`) — suivi des tâches P0→P5 (#4 P0 alarmes capteurs · #5 P2 moteur v2 · #6 P3 audit · #7 P5 certificats/NTP · #8 P4 PBS/événements · #3 P1 quorum clôturée) — remplace `MONITORING-ACTIONS.md` (retiré 2026-11-22)

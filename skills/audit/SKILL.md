@@ -12,7 +12,7 @@ mesure les **ressources**). Il détecte les **écarts aux bonnes pratiques** sur
 > P3 (GitHub issue #6, label `feature`). **Phase 1 livrée** (7 checks API + page + score +
 > constats cliquables). Phases 2/3 à venir (checks API supplémentaires + checks agent Telegraf).
 > Architecture globale : skill `general`. Analyse de référence ProxMenux + phasage P0→P5 :
-> skill `monitoring-proxmenux` + `MONITORING-ACTIONS.md` §P3.
+> skill `monitoring-proxmenux` + GitHub issue #6 (P3 — suivi des tâches sur GitHub).
 
 ## 1. Architecture (décision « Option A »)
 

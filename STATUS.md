@@ -2411,87 +2411,15 @@ Export/restore de l'administration (users + groupes + **layouts de grilles par u
  - Skill `general` §4.1 (flux PRA global dans le poller).
  - GitHub issue #11 (PRA multi-sites) : **clôturée 2026-11-22** — commentaire « PRA global livré » + commentaire de clôture (code terminé ; `sites.json` = config par déploiement, documentée via `sites.example.json` + guide `DEPLOY.md` §6 — commit `ff598c9`).
 
-## ⏳ À faire
+## ⏳ Suivi des tâches (GitHub)
 
-### À tester / à aborder
-- [ ] **Module « Alarmes & Centreon » (centreon-nsca)** : pas encore testé de bout en bout — le daemon NSCA n'est pas installé sur cet environnement (seul le client `send_nsca` l'est) → la réception côté Centreon n'est pas encore validée (script `scripts/nsca-test.sh` fourni). → **GitHub issue #1**
-- [x] **Gestion des utilisateurs** : **livrée + validée** (issue #2, clôturée 2026-11-20) — validation des 7 checks + compléments (journal d'audit admin, import/export users+groupes+graphiques). Voir section « ✅ Fait — Issue #2 » ci-dessus.
+Le **backlog et le suivi des tâches** sont désormais dans les **issues GitHub**
+(`github.com/prox4u/prox4u`) — les fichiers `*.md` ne font plus de tracking.
+Les sections « ✅ Fait » ci-dessus conservent l'historique des livraisons ; le détail
+de référence (ProxMenux, Telegraf) est dans les skills (`monitoring-proxmenux`, `audit`,
+`node-sensors`, `centreon-nsca`).
 
 > **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)**. Labels : `validation` / `feature` / `decision`.
-
-### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
-TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète dans la skill
-**`skills/monitoring-proxmenux`**. **P0 livré** : Telegraf bare-metal sur les 3 nœuds Proxmox +
-plugin **`node-sensors` v1** (section « Fait » ci-dessus) + **bibliothèque de widgets complétée**
-(7 graphiques ProxMenux portés dans `hypervision_v3`/`vm-view_v4` — section « Fait » ci-dessus ;
-restent latence ping + GPU, données non collectées). Reste en P0 : **règles d'alarme**
-(SMART critique, température > seuil effectif, unité échouée) dans `centreonnsca` (issue #4).
-**P1 quorum livré + validé E2E** (issue #3, clôturée) : champ `quorum`/`quorumState` dans le
-snapshot (entrée cluster de `/cluster/status`, PVE 9 expose `quorate`), métrique `cluster_quorum`
-+ cible `kind: 'cluster'` dans `centreonnsca`, pénalité Health Score −25, badge page cluster +
-vue d'ensemble, alerte crit. **Failover d'endpoint** ajouté : URL endpoint injoignable → bascule
-sur l'API d'un autre nœud du cluster (timeout connect 5 s, retour auto à la primaire) + champ
-`apiVia` + badge « API via … ». **E2E validé** (lab nested, cluster 2 nœuds + **Qdevice** sur la
-VM NFS) : nœud endpoint arrêté + Qdevice down → `quorate=0` → badge rouge « Quorum perdu » +
-badge failover, health 30 critical ; récupération → badge vert « Quorum 2/2 », `apiVia` disparu
-(screenshot `docs/screenshots/quorum-lost-failover.png`). Note : avec un Qdevice, 1 nœud down
-seul ne perd pas le quorum (le Qdevice le maintient) — l'app lit `quorate` (la vérité).
-**Surveillance du Qdevice** (état réel, P1) : l'API PVE n'expose que `quorate`+`nodes` — l'état
-du Qdevice vient de corosync via le script Telegraf `exec` `prox4u-telegraf-quorum.sh` (parse
-`pvecm status` → table `quorum_detail`) ; le poller lit le dernier point (cache 30 s) → état réel
-`up`/`down`/`absent` (repli déduction API `deriveQdeviceState`) + badge 🟢/🔴 + alerte warn
-`qdevice-down` + pénalité Health Score −10 si down + métrique Centreon `cluster_qdevice`
-(up/absent=1, down=0, unknown=null) + `cluster.quorumDetail` (votes). **Déployé** sur
-ProxSite1/ProxSite2 (2026-11-20, via QGA exec) + validé E2E avec données réelles
-(stop/start `corosync-qnetd` sur la VM Qdevice → down+alerte+score−10 / up+score restauré) —
-screenshot `docs/screenshots/qdevice-online-badge.png`.
-**P3 audit best-practices Phase 1 livrée + validée E2E** (section « Fait » ci-dessus — 2ᵉ score
-de configuration, 7 checks API, page `/audit`, score overview/endpoint, constats cliquables ;
-Phases 2/3 à venir). Reste : P2 moteur d'alarmes v2 (hystérésis/suppression/ack) · P4 PBS +
-événements · P5 certificats + NTP.
-
-### En attente de décision utilisateur
-- [x] **Commit** : **fait le 2026-11-10** — commit `a492724` sur `master` (tout le travail accumulé : livraisons 2026-10-30, capteurs, seuils tri-state SMART, dédoublonnage iSCSI/LVM, cartographie, hiérarchie iSCSI → LVM, graphiques VG + `local`). L'ancienne consigne « pas encore de GIT » (branche `refactor/plugin-architecture`) est caduque : le repo vit désormais sur `master` (auto-backups + commits explicites). Les dossiers de référence `ProxMenux/` et `project-pegaprox/` ont été sortis du repo le 2026-10-24 (→ `/home/opencode/projet/`).
-- [ ] **`docker-compose.yml`** (influxdb + explorer, tracké) : dev local uniquement vs retrait du repo
-- [x] **Push** : **fait le 2026-11-10** — `master` poussé sur **`https://gitea.priv/prox4u/prox4u.git`** (remote `origin`, token intégré à l'URL ; l'ancien « Push GitHub » est remplacé par ce remote Gitea privé). Local et remote synchrones à `a492724`.
-- [x] **Fusion dans main** : caduque — le travail est **directement sur `master`** (branche de travail = branche remote), plus de branche `refactor/plugin-architecture` à fusionner.
-
-### Prochain jalon — Suite de la Phase 1B (stockage, backups PBS, alarmes)
-La topologie réseau **et la vue stockage** sont **livrées** (sections « Fait » ci-dessus). Il reste en 1B :
-- [ ] **Stockage 2ᵉ temps** : **panneau Ceph auto** (HEALTH, grille OSDs, PGs) + **graphes I/O lecture/écriture** (la table vCenter + drill-down + recherche + export sont livrés, voir section « Fait »)
-- [ ] **Backups PBS** : KPI couverture backup (< 7 j), tableau par VM, capacité datastores PBS — nécessite token API PBS dans `.env` (mode mock PBS à prévoir)
-- [ ] **Disponibilité & événements** : sonde active 30 s par nœud, quorum/uptime, moteur d'alarmes (hystérésis OK→WARN→CRIT), feed d'événements
-
-### Idées pour la suite (à valider)
-- Projection du risque (« surallocation dangereuse dans ~X jours » à la croissance actuelle), top VMs contribuant à la demande pire cas, alerte au changement de niveau de risque (🟢→🟠→🔴), détail de la surallocation par nœud
-
-### Phase 1 — finitions / points de vigilance
-- [x] **Refonte UI** (dark mode natif + drag & drop des blocs + restyle shadcn/ui) : livrée — thème sombre + accents personnalisables, restyle design system, drag & drop + resize sur `/` et `/e/:id` (voir section « Fait » ci-dessus) ; plan d'origine dans [`PLAN-refonte-ui.md`](./PLAN-refonte-ui.md)
-- [~] **PRA multi-bâtiment réel** : validé en mock (3 scénarios) + **simulation 2 sites activée dans `sites.json`** (`ProxSite1` / `ProxSite2`, endpoint `clusterproxmox`) → PRA N-1 calculé sur le vrai cluster (absorption 100 % 🟠 si ProxSite1 tombe, 1 VM affectée) — à affiner quand la topologie réelle des bâtiments sera connue
-- [~] **Capacity planning** : pipeline validé le 2026-10-08 — `/api/capacity` lit InfluxDB (`source: influx`), historique quotidien cohérent avec `consolidated`, prévision correctement en attente (`insufficientData: true`, 2-3 j d'historique seulement car app arrêtée du 3 au 7 oct) — la justesse des courbes se confirmera à l'accumulation (30 j)
-- [x] **Consolidated** : validé le 2026-10-08 — le timeframe `month` lit bien `consolidated` en continu (`source: influx`, points quotidiens pour chaque jour ayant des données ; les jours vides = app arrêtée, pas un défaut du pipeline) · consolidateur à jour (état `lastTs` = maintenant)
-
-### Phase 1B — Supervision & vues graphiques (jalon suivant)
-Périmètre (détail dans le skill §4B) :
-- [x] **Topologie réseau** React Flow (`@xyflow/react`) : switches → nœuds → bridges → [segments VLAN] → VMs, liens ∝ débit réel, clic → détail, filtre multi-sélection, analyse d'impact incident, **mode simulation PRA**, nœuds déplaçables, libellés d'interface collés aux VMs — **livrée** (section « Fait » ci-dessus) ; `network.json` restant optionnel
-- [x] **Vue stockage** type vCenter : table de datastores + **barre de capacité colorée** + icône de type + nœud/partagé + **drill-down des VMs** + recherche + déroulé de type + vue agrégée + deep-link + export CSV — **livrée** (section « Fait » ci-dessus) ; **panneau Ceph auto** (HEALTH, grille OSDs, PGs) + graphes I/O lecture/écriture = 2ᵉ temps
-- [ ] **Backups PBS** : KPI couverture backup (< 7 j), tableau par VM, capacité datastores PBS — nécessite token API PBS dans `.env`
-- [ ] **Disponibilité & événements** : sonde active 30 s par nœud, quorum/uptime, **moteur d'alarmes** (hystérésis OK→WARN→CRIT), feed d'événements (tâches + changements détectés)
-- [~] **Page détail nœud** : *KPIs + historique CPU/RAM/réseau + VMs hébergées déjà livrés* (route `/e/:endpointId/n/:nodeId`, sidebar) — reste : interfaces réseau (up/down, vitesse), tâches en cours
-- Ajouts techniques : dépendance `@xyflow/react`, poller étendu (débits = delta compteurs + ring buffer 1 h), `modules/supervision/` côté serveur
-
-### Phases suivantes (roadmap)
-| Phase | Contenu |
-|---|---|
-| 2 | Inventaire + page détail VM (graphes live + historique) — **inventaire, détail plein écran, onglet Monitor (historique CPU/RAM InfluxDB + export CSV) et détail nœud Proxmox (Résumé/Monitor/VMs) livrés** (sections « Fait » ci-dessus) |
-| 3 | Opérations : start/stop/reboot/migrate/snapshot + journal d'audit |
-| 4 | Wizard de déploiement depuis templates (clone) |
-| 5 | Storage/réseau avancés, rapports PDF/CSV, moteur d'alarmes custom (seuils) |
-
-### Prérequis utilisateur encore attendus
-- [ ] (1B) Token API PBS + URL du serveur PBS → `.env` — **pas de serveur PBS dans l'infra pour l'instant** (confirmé utilisateur, 2026-10-08) : le module Backups attend le déploiement PBS ; prévoir un **mode mock PBS** (comme le mock Proxmox) pour développer/démontrer le module sans serveur réel
-- [ ] (1B) Schéma de câblage switches/liens → `network.json`
-- [ ] (Phase 1) Mapping nœuds → bâtiments complet dans `sites.json` si le cluster multi-sites est en place
 
 ---
 
