@@ -225,7 +225,7 @@ A `clusters.json` file at the root declares the Proxmox endpoints (one per clust
 
 - **`clusters.json` is gitignored** (contains tokens); the `clusters.example.json` template is committed.
 - Without this file, the app falls back to a single `default` endpoint built from the `.env` `PVE_*` variables.
-- Each site in `sites.json` is bound to an endpoint via its `"endpoint"` field (id).
+- Each site in `sites.json` is bound to an endpoint via its `"endpoint"` field (id); example template: `sites.example.json` (node → building mapping, required for PRA — field-by-field filling guide in `deploiement/DEPLOY.en.md` §6).
 - InfluxDB history is tagged by `cluster`; rows written before multi-cluster support (untagged) are attributed to the default endpoint — no backfill needed.
 
 ## InfluxDB 3 Core
@@ -324,7 +324,7 @@ pnpm build        # production build (shared → server → web)
 │   └── prox4u.service  # systemd unit of the application server (boot + auto restart)
 ├── docker-compose.yml        # InfluxDB 3 Core (8181) + Explorer UI (8888), secret token
 ├── clusters.json             # multi-cluster Proxmox endpoints (600, gitignored) — template: clusters.example.json
-├── sites.json                # sites/buildings topology (PRA), binding per endpoint
+├── sites.json                # sites/buildings topology (PRA), binding per endpoint — template: sites.example.json
 ├── overcommit.json           # overcommit policy + usage thresholds (hot-reload, single source of the color code)
 ├── skills/                   # knowledge base (13 SKILL.md + README.md) — human or AI handover
 ├── STATUS.md                 # progress status: delivered milestones, fixed pitfalls, pending items

@@ -156,7 +156,32 @@ cp clusters.example.json clusters.json    # remplir un bloc par cluster (§2)
 chmod 600 clusters.json
 ```
 
-- **`sites.json`** (déjà dans le paquet) : adapter le mapping nœuds → bâtiments à la topologie réelle — requis pour le PRA.
+- **`sites.json`** (déjà dans le paquet, modèle `sites.example.json`) : mapping nœuds → bâtiments, **requis pour le PRA** (bascule N-1 + PRA global cross-endpoints). Chaque site (bâtiment) se rattache à un endpoint via le champ `endpoint`.
+
+  | Champ | Type | Rôle |
+  |---|---|---|
+  | `id` | string | Identifiant stable (slug) du site — utilisé dans les URLs, le tag InfluxDB et l'id de site du PRA. |
+  | `name` | string | Nom d'affichage (le bâtiment). |
+  | `endpoint` | string | Id de l'endpoint rattaché (cf. `clusters.json`). **Omis = par défaut** (le site s'applique à tous les endpoints). |
+  | `nodes` | string[] | Noms des nœuds PVE appartenant à ce bâtiment (tels que dans Proxmox). |
+
+  **Exemple** (`sites.example.json`) :
+  ```json
+  {
+    "sites": [
+      { "id": "batiment-a", "name": "Bâtiment A — datacenter", "endpoint": "cluster-prod", "nodes": ["pve-node1", "pve-node2"] },
+      { "id": "batiment-b", "name": "Bâtiment B — annexe", "endpoint": "cluster-prod", "nodes": ["pve-node3"] },
+      { "id": "site-agence", "name": "Site agence", "endpoint": "cluster-agence", "nodes": ["pve-agence1"] }
+    ]
+  }
+  ```
+
+  **Règles** :
+  - **Mapper tous les nœuds** vers un bâtiment : un nœud non mappé apparaît dans l'encart « nœuds non mappés » de l'UI et n'est **pas couvert par le PRA**.
+  - Le **PRA ne se calcule que si les nœuds sont répartis sur ≥ 2 sites** (cluster mono-nœud, ou tous les nœuds sur le même site → `na`).
+  - Le **PRA global** (cross-endpoints) réutilise ce même mapping : si un bâtiment tombe, les autres bâtiments de **tous** les endpoints peuvent absorber (prérequis : stockage identique d'un site à l'autre — le disque est exclu du calcul).
+  - Après modification de `sites.json` → **restart** de l'application.
+
 - **`overcommit.json`** (déjà dans le paquet) : seuils de surallocation + code couleur d'usage ; défauts sains fournis, ajustable à chaud (hot-reload, pas de restart).
 
 ## 7. Démarrage + vérification

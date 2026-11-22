@@ -225,7 +225,7 @@ Un fichier `clusters.json` à la racine déclare les endpoints Proxmox (un par c
 
 - **`clusters.json` est gitignored** (contient des tokens) ; le template `clusters.example.json` est commité.
 - Sans ce fichier, l'app repasse en **mono-endpoint** `default` construit depuis `PVE_URL`/`PVE_USER`/`PVE_TOKEN_*` du `.env`.
-- Chaque site de `sites.json` se rattache à un endpoint via son champ `"endpoint"` (id).
+- Chaque site de `sites.json` se rattache à un endpoint via son champ `"endpoint"` (id) ; template d'exemple : `sites.example.json` (mapping nœuds → bâtiments, requis pour le PRA — guide de remplissage champ par champ dans `deploiement/DEPLOY.md` §6).
 - L'historique InfluxDB est taggé par `cluster` ; les lignes écrites avant le multi-cluster (sans tag) sont attribuées à l'endpoint par défaut — aucun backfill nécessaire.
 
 ## InfluxDB 3 Core
@@ -324,7 +324,7 @@ pnpm build        # build production (shared → server → web)
 │   └── prox4u.service  # unit systemd du serveur applicatif (boot + restart auto)
 ├── docker-compose.yml        # InfluxDB 3 Core (8181) + Explorer UI (8888), secret token
 ├── clusters.json             # endpoints Proxmox multi-cluster (600, gitignored) — template : clusters.example.json
-├── sites.json                # topologie des sites/bâtiments (PRA), rattachement par endpoint
+├── sites.json                # topologie des sites/bâtiments (PRA), rattachement par endpoint — template : sites.example.json
 ├── overcommit.json           # politique de surallocation + seuils d'usage (hot-reload, source unique du code couleur)
 ├── skills/                   # base de connaissance (13 SKILL.md + README.md) — reprise humain ou IA
 ├── STATUS.md                 # état d'avancement : jalons livrés, pièges corrigés, points en attente

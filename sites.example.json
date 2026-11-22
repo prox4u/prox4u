@@ -1,0 +1,22 @@
+{
+  "sites": [
+    {
+      "id": "batiment-a",
+      "name": "Bâtiment A — datacenter principal",
+      "endpoint": "cluster-prod",
+      "nodes": ["pve-node1", "pve-node2"]
+    },
+    {
+      "id": "batiment-b",
+      "name": "Bâtiment B — annexe",
+      "endpoint": "cluster-prod",
+      "nodes": ["pve-node3"]
+    },
+    {
+      "id": "site-agence",
+      "name": "Site agence — distal",
+      "endpoint": "cluster-agence",
+      "nodes": ["pve-agence1"]
+    }
+  ]
+}

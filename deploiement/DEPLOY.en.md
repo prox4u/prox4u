@@ -156,7 +156,32 @@ cp clusters.example.json clusters.json    # fill in one block per cluster (§2)
 chmod 600 clusters.json
 ```
 
-- **`sites.json`** (already in the package): adapt the node → building mapping to the real topology — required for PRA.
+- **`sites.json`** (already in the package, template `sites.example.json`): node → building mapping, **required for PRA** (N-1 failover + global cross-endpoint PRA). Each site (building) is bound to an endpoint via the `endpoint` field.
+
+  | Field | Type | Role |
+  |---|---|---|
+  | `id` | string | Stable site identifier (slug) — used in URLs, the InfluxDB tag and the PRA site id. |
+  | `name` | string | Display name (the building). |
+  | `endpoint` | string | Id of the bound endpoint (cf. `clusters.json`). **Omitted = default** (the site applies to all endpoints). |
+  | `nodes` | string[] | Names of the PVE nodes belonging to this building (as in Proxmox). |
+
+  **Example** (`sites.example.json`):
+  ```json
+  {
+    "sites": [
+      { "id": "batiment-a", "name": "Building A — datacenter", "endpoint": "cluster-prod", "nodes": ["pve-node1", "pve-node2"] },
+      { "id": "batiment-b", "name": "Building B — annex", "endpoint": "cluster-prod", "nodes": ["pve-node3"] },
+      { "id": "site-agence", "name": "Branch site", "endpoint": "cluster-agence", "nodes": ["pve-agence1"] }
+    ]
+  }
+  ```
+
+  **Rules**:
+  - **Map every node** to a building: an unmapped node shows up in the UI's "unmapped nodes" box and is **not covered by PRA**.
+  - **PRA is only computed when nodes are spread across ≥ 2 sites** (single-node cluster, or all nodes on the same site → `na`).
+  - The **global PRA** (cross-endpoint) reuses this same mapping: if a building goes down, the other buildings of **all** endpoints can absorb it (prerequisite: identical storage across sites — disk is excluded from the calculation).
+  - After modifying `sites.json` → **restart** the application.
+
 - **`overcommit.json`** (already in the package): overcommit thresholds + usage color code; sane defaults provided, hot-reloadable (no restart).
 
 ## 7. Start + verification

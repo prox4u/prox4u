@@ -27,6 +27,8 @@ On déplace **tout le dossier** sur la cible et on déploie depuis lui :
 
 Ordre : tokens PVE → tarball → install `/opt/prox4u` + `pnpm install --prod` → 30 → 40 → (50 si besoin) → `clusters.json` + `sites.json` + `overcommit.json` → `./up.sh`.
 
+- **`sites.json`** (mapping nœuds → bâtiments, requis PRA) : template `sites.example.json` (JSON strict, multi-endpoints/multi-bâtiments) + guide de remplissage champ par champ dans `deploiement/DEPLOY.md` §6. Mapper **tous** les nœuds (sinon « nœuds non mappés » hors PRA) ; PRA seulement si nœuds répartis sur ≥ 2 sites.
+
 ## 3. Pointage InfluxDB externe (décision actée)
 - `.env` : `INFLUX_URL=https://<influx-prod>:8181`, `INFLUX_TOKEN=<token>`, `INFLUX_CA_CERT=<cert CA>` (auto-signé → chemin du CA).
 - `INFLUX_TOKEN` vide → InfluxDB désactivé, **repli RRD Proxmox automatique** (l'app marche, sans historique long terme).
