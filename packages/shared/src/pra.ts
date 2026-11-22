@@ -33,7 +33,11 @@ export function computePra(
   sites: Site[],
   nodes: PveNodeStatus[],
   vms: PveVmResource[],
+  /** Seuils d'absorption (défaut : `THRESHOLDS.praWarn/praCrit`) — pilotés par `health.json`. */
+  thresholds?: { praWarn: number; praCrit: number },
 ): PraReport {
+  const praWarn = thresholds?.praWarn ?? THRESHOLDS.praWarn;
+  const praCrit = thresholds?.praCrit ?? THRESHOLDS.praCrit;
   const nodeBySite = new Map<string, string>(); // nodeId -> siteId
   for (const s of sites) for (const n of s.nodes) nodeBySite.set(n, s.id);
 
@@ -87,9 +91,9 @@ export function computePra(
     const severity =
       absorptionPct === null
         ? 'na'
-        : absorptionPct > THRESHOLDS.praCrit
+        : absorptionPct > praCrit
           ? 'crit'
-          : absorptionPct >= THRESHOLDS.praWarn
+          : absorptionPct >= praWarn
             ? 'warn'
             : 'ok';
 

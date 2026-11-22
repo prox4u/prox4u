@@ -28,7 +28,7 @@ import {
   type StorageVolume,
   type TopConsumer,
 } from '@prox4u/shared';
-import { reloadOvercommitConfig, type AppConfig } from './config.js';
+import { reloadOvercommitConfig, reloadTunableConfigs, type AppConfig } from './config.js';
 import type { DataSource } from './data-source.js';
 import { AGENT_CONCURRENCY, mapLimit } from './prox4u-client.js';
 import { buildLine, type InfluxClient } from './influx.js';
@@ -200,6 +200,7 @@ export class Poller {
     this.ticking = true;
     try {
       reloadOvercommitConfig(this.ctx.config, this.ctx.logger);
+      reloadTunableConfigs(this.ctx.config, this.ctx.logger);
       const endpoints = await Promise.all([...this.states.values()].map((st) => this.pollEndpoint(st)));
       this.multi = {
         generatedAt: Date.now(),
@@ -243,7 +244,7 @@ export class Poller {
       for (const v of st.lastVms) allVms.push({ ...v, node: `${ep}/${v.node}` });
     }
     if (allSites.length === 0) return null;
-    return computePra(allSites, allNodes, allVms);
+    return computePra(allSites, allNodes, allVms, this.ctx.config.health.thresholds);
   }
 
   /**
@@ -390,7 +391,7 @@ export class Poller {
       this.updateDaily(st, kpis);
       kpis.storageDaysToFull = buildForecast('disk', this.getDiskHistory(rt.id)).daysTo90;
 
-      const pra = computePra(rt.sites, nodes, vms);
+      const pra = computePra(rt.sites, nodes, vms, this.ctx.config.health.thresholds);
       // État RÉEL du Qdevice (corosync, table Telegraf quorum_detail) — prime
       // sur la déduction API (l'API PVE ne l'expose pas). null si agent non
       // déployé / pas de données → repli sur la déduction.
@@ -410,7 +411,7 @@ export class Poller {
         quorumDetail,
       };
       const alerts = buildAlerts(nodeHealth, kpis, pra, clusterInfo);
-      const health = computeHealthScore(nodeHealth, kpis, pra, clusterInfo);
+      const health = computeHealthScore(nodeHealth, kpis, pra, clusterInfo, this.ctx.config.health);
 
       const storageInfos = storWithCap.map((s) => ({
         storage: s.storage,
@@ -477,6 +478,7 @@ export class Poller {
         storageVolumes,
         bridges,
         overcommit: this.ctx.config.overcommit,
+        config: this.ctx.config.audit,
       });
 
       const snap: DashboardSnapshot = {

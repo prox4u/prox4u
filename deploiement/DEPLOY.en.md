@@ -184,6 +184,27 @@ chmod 600 clusters.json
 
 - **`overcommit.json`** (already in the package): overcommit thresholds + usage color code; sane defaults provided, hot-reloadable (no restart).
 
+- **`health.json`** (already in the package, template `health.example.json`): **Health Score + PRA thresholds and penalties**; sane defaults provided, **hot-reloadable (no restart)**. Optional file — absent → built-in defaults.
+
+  | Block | Fields | Role |
+  |---|---|---|
+  | `thresholds` | `warn`, `crit` | Cluster CPU/RAM usage: ≥ `warn` → warn penalty, > `crit` → crit penalty (%). |
+  | | `praWarn`, `praCrit` | PRA absorption: ≥ `praWarn` → warn, > `praCrit` → crit (%). |
+  | | `healthNominal`, `healthDegraded` | Score label: ≥ nominal → Nominal, ≥ degraded → Degraded, else Critical. |
+  | `penalties` | `nodeDown`, `quorumLost`, `qdeviceDown`, `cpuCrit`/`cpuWarn`, `ramCrit`/`ramWarn`, `diskCrit`/`diskWarn`, `praCrit`/`praWarn` | Points removed from 100 for each penalty reason. |
+
+  **Rules**: `crit ≥ warn`, `praCrit ≥ praWarn`, `healthNominal ≥ healthDegraded` (validated on load). After modification → **applied on the next tick, no restart**.
+
+- **`audit.json`** (already in the package, template `audit.example.json`): **configuration score checks** (Audit / best-practices module); sane defaults provided, **hot-reloadable (no restart)**. Optional file — absent → built-in defaults.
+
+  | Block | Fields | Role |
+  |---|---|---|
+  | `penalties` | `crit`, `warn`, `info` | Points removed from 100 per finding of each severity. |
+  | `labelNominal`, `labelDegraded` | — | Score label: ≥ nominal → Compliant, ≥ degraded → To improve, else To review. |
+  | `checks` | one block per check (`enabled` + thresholds) | Enable/disable each check + tune its thresholds (e.g. `stuck_snapshots.maxAgeDays`, `disk_service_life.warnPct`/`critPct`, `zfs_arc_max.maxPctOfRam`). |
+
+  **Rules**: each check can be disabled (`"enabled": false`); thresholds only apply when the check is enabled. After modification → **applied on the next tick, no restart**. The full check catalog (why / how / thresholds) is in the `audit` skill.
+
 ## 7. Start + verification
 
 ```bash

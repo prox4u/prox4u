@@ -834,3 +834,65 @@ export const THRESHOLDS = {
   healthNominal: 80,
   healthDegraded: 50,
 } as const;
+
+/**
+ * Configuration du Health Score + des seuils PRA — externalisée dans
+ * `health.json` (racine, hot-reload, pattern `overcommit.json`). `THRESHOLDS`
+ * reste la source des **défauts** ; le fichier est optionnel (absent → défauts).
+ */
+export interface HealthThresholds {
+  /** usage CPU/RAM cluster ≥ warn → pénalité warn, > crit → pénalité crit (%) */
+  warn: number;
+  crit: number;
+  /** absorption PRA ≥ praWarn → warn, > praCrit → crit (%) */
+  praWarn: number;
+  praCrit: number;
+  /** libellé du health score : ≥ nominal → Nominal, ≥ degraded → Dégradé, sinon Critique */
+  healthNominal: number;
+  healthDegraded: number;
+}
+
+/** Pénalités du Health Score (points retirés à 100). */
+export interface HealthPenalties {
+  nodeDown: number;
+  quorumLost: number;
+  qdeviceDown: number;
+  cpuCrit: number;
+  cpuWarn: number;
+  ramCrit: number;
+  ramWarn: number;
+  diskCrit: number;
+  diskWarn: number;
+  praCrit: number;
+  praWarn: number;
+}
+
+export interface HealthConfig {
+  thresholds: HealthThresholds;
+  penalties: HealthPenalties;
+}
+
+/** Défauts du Health Score (valeurs documentées — identiques au durci historique). */
+export const DEFAULT_HEALTH_CONFIG: HealthConfig = {
+  thresholds: {
+    warn: THRESHOLDS.warn,
+    crit: THRESHOLDS.crit,
+    praWarn: THRESHOLDS.praWarn,
+    praCrit: THRESHOLDS.praCrit,
+    healthNominal: THRESHOLDS.healthNominal,
+    healthDegraded: THRESHOLDS.healthDegraded,
+  },
+  penalties: {
+    nodeDown: 25,
+    quorumLost: 25,
+    qdeviceDown: 10,
+    cpuCrit: 20,
+    cpuWarn: 10,
+    ramCrit: 20,
+    ramWarn: 10,
+    diskCrit: 15,
+    diskWarn: 8,
+    praCrit: 20,
+    praWarn: 10,
+  },
+};

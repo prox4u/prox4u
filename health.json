@@ -1,0 +1,23 @@
+{
+  "thresholds": {
+    "warn": 70,
+    "crit": 90,
+    "praWarn": 70,
+    "praCrit": 100,
+    "healthNominal": 80,
+    "healthDegraded": 50
+  },
+  "penalties": {
+    "nodeDown": 25,
+    "quorumLost": 25,
+    "qdeviceDown": 10,
+    "cpuCrit": 20,
+    "cpuWarn": 10,
+    "ramCrit": 20,
+    "ramWarn": 10,
+    "diskCrit": 15,
+    "diskWarn": 8,
+    "praCrit": 20,
+    "praWarn": 10
+  }
+}

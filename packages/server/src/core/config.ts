@@ -2,7 +2,14 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { DEFAULT_OVERCOMMIT_CONFIG, type OvercommitConfig } from '@prox4u/shared';
+import {
+  DEFAULT_AUDIT_CONFIG,
+  DEFAULT_HEALTH_CONFIG,
+  DEFAULT_OVERCOMMIT_CONFIG,
+  type AuditConfig,
+  type HealthConfig,
+  type OvercommitConfig,
+} from '@prox4u/shared';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -93,6 +100,14 @@ export interface AppConfig {
   overcommit: OvercommitConfig;
   /** mtime du dernier overcommit.json appliqué (détection de changement) */
   overcommitMtime: number;
+  /** seuils + pénalités Health Score / PRA (health.json, hot-reload) */
+  health: HealthConfig;
+  /** mtime du dernier health.json appliqué (détection de changement) */
+  healthMtime: number;
+  /** checks + seuils du score de configuration (audit.json, hot-reload) */
+  audit: AuditConfig;
+  /** mtime du dernier audit.json appliqué (détection de changement) */
+  auditMtime: number;
   /**
    * Taille d'autorité des LUN iSCSI par nom de datastore (storage-volumes.json, optionnel) :
    * `{ "lunSizes": { "baie-iscsi": 644245094400 } }`. Quand la taille d'un LUN est inconnue de
@@ -195,8 +210,91 @@ const overcommitSchema = z.object({
   risk: riskSchema.default(DEFAULT_OVERCOMMIT_CONFIG.risk),
 });
 
+// --- health.json (seuils + pénalités du Health Score / PRA) ---------------------
+
+const healthThresholdsSchema = z
+  .object({
+    warn: z.number().min(0).max(100),
+    crit: z.number().min(0).max(100),
+    praWarn: z.number().min(0).max(100),
+    praCrit: z.number().min(0).max(100),
+    healthNominal: z.number().min(0).max(100),
+    healthDegraded: z.number().min(0).max(100),
+  })
+  .refine(
+    (t) => t.crit >= t.warn && t.praCrit >= t.praWarn && t.healthNominal >= t.healthDegraded,
+    { message: 'crit ≥ warn, praCrit ≥ praWarn, healthNominal ≥ healthDegraded' },
+  );
+
+const healthPenaltiesSchema = z.object({
+  nodeDown: z.number().min(0),
+  quorumLost: z.number().min(0),
+  qdeviceDown: z.number().min(0),
+  cpuCrit: z.number().min(0),
+  cpuWarn: z.number().min(0),
+  ramCrit: z.number().min(0),
+  ramWarn: z.number().min(0),
+  diskCrit: z.number().min(0),
+  diskWarn: z.number().min(0),
+  praCrit: z.number().min(0),
+  praWarn: z.number().min(0),
+});
+
+const healthSchema = z.object({
+  thresholds: healthThresholdsSchema.default(DEFAULT_HEALTH_CONFIG.thresholds),
+  penalties: healthPenaltiesSchema.default(DEFAULT_HEALTH_CONFIG.penalties),
+});
+
+// --- audit.json (checks + seuils + pénalités du score de configuration) ---------
+
+const auditChecksSchema = z.object({
+  'guests.qemu_without_agent': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['guests.qemu_without_agent']),
+  'guests.privileged_containers': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['guests.privileged_containers']),
+  'guests.cpu_host_type': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['guests.cpu_host_type']),
+  'network.bridge_without_ports': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['network.bridge_without_ports']),
+  'storage.thin_pool_overprovisioning': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['storage.thin_pool_overprovisioning']),
+  'system.memory_overcommit': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['system.memory_overcommit']),
+  'system.node_version_mismatch': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['system.node_version_mismatch']),
+  'guests.autostart': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['guests.autostart']),
+  'guests.stuck_snapshots': z
+    .object({ enabled: z.boolean(), maxAgeDays: z.number().positive() })
+    .default(DEFAULT_AUDIT_CONFIG.checks['guests.stuck_snapshots']),
+  'guests.replication_state': z
+    .object({ enabled: z.boolean(), maxStalenessHours: z.number().positive() })
+    .default(DEFAULT_AUDIT_CONFIG.checks['guests.replication_state']),
+  'network.bond_members': z
+    .object({ enabled: z.boolean(), minMembers: z.number().int().positive() })
+    .default(DEFAULT_AUDIT_CONFIG.checks['network.bond_members']),
+  'system.zfs_arc_max': z
+    .object({ enabled: z.boolean(), maxPctOfRam: z.number().min(0).max(100) })
+    .default(DEFAULT_AUDIT_CONFIG.checks['system.zfs_arc_max']),
+  'disks.disk_errors': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['disks.disk_errors']),
+  'disks.disk_service_life': z
+    .object({ enabled: z.boolean(), warnPct: z.number().min(0).max(100), critPct: z.number().min(0).max(100) })
+    .refine((c) => c.critPct >= c.warnPct, { message: 'critPct doit être ≥ warnPct' })
+    .default(DEFAULT_AUDIT_CONFIG.checks['disks.disk_service_life']),
+  'system.failed_units': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['system.failed_units']),
+  'system.pending_reboot': z.object({ enabled: z.boolean() }).default(DEFAULT_AUDIT_CONFIG.checks['system.pending_reboot']),
+  'system.security_updates': z
+    .object({ enabled: z.boolean(), warnCount: z.number().int().nonnegative() })
+    .default(DEFAULT_AUDIT_CONFIG.checks['system.security_updates']),
+});
+
+const auditSchema = z.object({
+  penalties: z
+    .object({ crit: z.number().min(0), warn: z.number().min(0), info: z.number().min(0) })
+    .default(DEFAULT_AUDIT_CONFIG.penalties),
+  labelNominal: z.number().min(0).max(100).default(DEFAULT_AUDIT_CONFIG.labelNominal),
+  labelDegraded: z.number().min(0).max(100).default(DEFAULT_AUDIT_CONFIG.labelDegraded),
+  checks: auditChecksSchema.default(DEFAULT_AUDIT_CONFIG.checks),
+});
+
 function overcommitCandidates(): string[] {
   return [path.resolve(process.cwd(), 'overcommit.json'), path.resolve(here, '../../../../overcommit.json')];
+}
+
+function configCandidates(name: string): string[] {
+  return [path.resolve(process.cwd(), name), path.resolve(here, '../../../../', name)];
 }
 
 /** Charge overcommit.json (racine du repo) ; absent → defaults intégrés, invalide → fail-fast. */
@@ -236,6 +334,68 @@ export function reloadOvercommitConfig(cfg: AppConfig, logger: Pick<Console, 'in
   }
 }
 
+/** Charge health.json (racine) ; absent → défauts intégrés, invalide → fail-fast. */
+function loadHealthConfig(): { config: HealthConfig; mtime: number } {
+  for (const file of configCandidates('health.json')) {
+    if (!existsSync(file)) continue;
+    let parsed: HealthConfig;
+    try {
+      parsed = healthSchema.parse(JSON.parse(readFileSync(file, 'utf8')));
+    } catch (err) {
+      throw new Error(`health.json invalide (${file}) : ${(err as Error).message}`);
+    }
+    return { config: parsed, mtime: statSync(file).mtimeMs };
+  }
+  return { config: DEFAULT_HEALTH_CONFIG, mtime: 0 };
+}
+
+/** Charge audit.json (racine) ; absent → défauts intégrés, invalide → fail-fast. */
+function loadAuditConfig(): { config: AuditConfig; mtime: number } {
+  for (const file of configCandidates('audit.json')) {
+    if (!existsSync(file)) continue;
+    let parsed: AuditConfig;
+    try {
+      parsed = auditSchema.parse(JSON.parse(readFileSync(file, 'utf8')));
+    } catch (err) {
+      throw new Error(`audit.json invalide (${file}) : ${(err as Error).message}`);
+    }
+    return { config: parsed, mtime: statSync(file).mtimeMs };
+  }
+  return { config: DEFAULT_AUDIT_CONFIG, mtime: 0 };
+}
+
+/**
+ * Hot-reload de health.json + audit.json (appelé à chaque tick du poller) : même
+ * mécanique que overcommit.json — fichier modifié + valide → appliqué sans restart ;
+ * invalide → configuration précédente conservée (warning).
+ */
+export function reloadTunableConfigs(cfg: AppConfig, logger: Pick<Console, 'info' | 'warn'>): void {
+  const reload = (
+    name: string,
+    schema: z.ZodTypeAny,
+    getMtime: () => number,
+    setMtime: (ms: number) => void,
+    apply: (v: unknown) => void,
+  ) => {
+    for (const file of configCandidates(name)) {
+      if (!existsSync(file)) return;
+      const mtime = statSync(file).mtimeMs;
+      if (mtime === getMtime()) return;
+      try {
+        apply(schema.parse(JSON.parse(readFileSync(file, 'utf8'))));
+        setMtime(mtime);
+        logger.info(`${name} modifié : configuration rechargée`);
+      } catch (err) {
+        setMtime(mtime);
+        logger.warn(`${name} invalide, configuration précédente conservée : ${(err as Error).message}`);
+      }
+      return;
+    }
+  };
+  reload('health.json', healthSchema, () => cfg.healthMtime, (ms) => (cfg.healthMtime = ms), (v) => (cfg.health = v as HealthConfig));
+  reload('audit.json', auditSchema, () => cfg.auditMtime, (ms) => (cfg.auditMtime = ms), (v) => (cfg.audit = v as AuditConfig));
+}
+
 const storageVolumesSchema = z.object({
   /** Taille d'autorité d'un LUN iSCSI (octets), par nom de datastore iSCSI. */
   lunSizes: z.record(z.string(), z.number().int().positive()).default({}),
@@ -262,6 +422,8 @@ export function loadConfig(): AppConfig {
   const env = envSchema.parse(process.env);
   const { endpoints, defaultEndpointId } = loadEndpoints(env);
   const { config: overcommit, mtime: overcommitMtime } = loadOvercommitConfig();
+  const { config: health, mtime: healthMtime } = loadHealthConfig();
+  const { config: audit, mtime: auditMtime } = loadAuditConfig();
   const lunSizes = loadStorageVolumesConfig();
   const cfg: AppConfig = {
     endpoints,
@@ -272,6 +434,10 @@ export function loadConfig(): AppConfig {
     port: env.PORT,
     overcommit,
     overcommitMtime,
+    health,
+    healthMtime,
+    audit,
+    auditMtime,
     lunSizes,
     influx: {
       enabled: env.INFLUX_TOKEN.length > 0,

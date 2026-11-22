@@ -16,6 +16,7 @@ export {
 export type { OvercommitMetric, OvercommitReport } from './overcommit.js';
 export {
   AUDIT_PENALTIES,
+  DEFAULT_AUDIT_CONFIG,
   auditLabelKey,
   runAudit,
   checkQemuWithoutAgent,
@@ -35,6 +36,7 @@ export type {
   AuditScore,
   AuditBridge,
   AuditInput,
+  AuditConfig,
   AuditEndpointResult,
   AuditAllResponse,
 } from './audit.js';

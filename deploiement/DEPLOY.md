@@ -184,6 +184,27 @@ chmod 600 clusters.json
 
 - **`overcommit.json`** (déjà dans le paquet) : seuils de surallocation + code couleur d'usage ; défauts sains fournis, ajustable à chaud (hot-reload, pas de restart).
 
+- **`health.json`** (déjà dans le paquet, modèle `health.example.json`) : **seuils + pénalités du Health Score et du PRA** ; défauts sains fournis, **ajustable à chaud (hot-reload, pas de restart)**. Fichier optionnel — absent → défauts intégrés.
+
+  | Bloc | Champs | Rôle |
+  |---|---|---|
+  | `thresholds` | `warn`, `crit` | Usage CPU/RAM cluster : ≥ `warn` → pénalité warn, > `crit` → pénalité crit (%). |
+  | | `praWarn`, `praCrit` | Absorption PRA : ≥ `praWarn` → warn, > `praCrit` → crit (%). |
+  | | `healthNominal`, `healthDegraded` | Libellé du score : ≥ nominal → Nominal, ≥ degraded → Dégradé, sinon Critique. |
+  | `penalties` | `nodeDown`, `quorumLost`, `qdeviceDown`, `cpuCrit`/`cpuWarn`, `ramCrit`/`ramWarn`, `diskCrit`/`diskWarn`, `praCrit`/`praWarn` | Points retirés à 100 pour chaque motif de pénalité. |
+
+  **Règles** : `crit ≥ warn`, `praCrit ≥ praWarn`, `healthNominal ≥ healthDegraded` (validé au chargement). Après modification → **appliqué au tick suivant, sans restart**.
+
+- **`audit.json`** (déjà dans le paquet, modèle `audit.example.json`) : **checks du score de configuration** (module Audit / best-practices) ; défauts sains fournis, **ajustable à chaud (hot-reload, pas de restart)**. Fichier optionnel — absent → défauts intégrés.
+
+  | Bloc | Champs | Rôle |
+  |---|---|---|
+  | `penalties` | `crit`, `warn`, `info` | Points retirés à 100 par constat de chaque sévérité. |
+  | `labelNominal`, `labelDegraded` | — | Libellé du score : ≥ nominal → Conforme, ≥ degraded → À améliorer, sinon À revoir. |
+  | `checks` | un bloc par check (`enabled` + seuils) | Activer/désactiver chaque check + ajuster ses seuils (ex. `stuck_snapshots.maxAgeDays`, `disk_service_life.warnPct`/`critPct`, `zfs_arc_max.maxPctOfRam`). |
+
+  **Règles** : chaque check peut être désactivé (`"enabled": false`) ; les seuils n'ont d'effet que si le check est activé. Après modification → **appliqué au tick suivant, sans restart**. Le catalogue complet des checks (pourquoi / comment / seuils) est dans le skill `audit`.
+
 ## 7. Démarrage + vérification
 
 ```bash

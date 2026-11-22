@@ -10,6 +10,7 @@ import {
   checkQemuWithoutAgent,
   checkThinPoolOverprovisioning,
   runAudit,
+  DEFAULT_AUDIT_CONFIG,
   type AuditInput,
 } from './audit.js';
 import { DEFAULT_OVERCOMMIT_CONFIG } from './overcommit.js';
@@ -90,6 +91,7 @@ const input = (over: Partial<AuditInput> = {}): AuditInput => ({
   storageVolumes: [],
   bridges: [],
   overcommit: DEFAULT_OVERCOMMIT_CONFIG,
+  config: DEFAULT_AUDIT_CONFIG,
   ...over,
 });
 

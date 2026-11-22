@@ -2433,6 +2433,8 @@ data/                         # tls/, influxdb/ + explorer/ (chown 1500:1500), c
 .env / sites.json             # config cluster (repli mono-endpoint) + topologie sites (champ endpoint)
 clusters.json                 # endpoints Proxmox multi-cluster (600, gitignored) — template : clusters.example.json
 overcommit.json               # politique de surallocation + seuils d'usage (hot-reload, source unique du code couleur)
+health.json                   # seuils + pénalités Health Score / PRA (hot-reload) — template : health.example.json
+audit.json                    # checks + seuils du score de configuration (hot-reload) — template : audit.example.json
 packages/shared/src/          # types (MultiDashboardSnapshot…), health.ts, pra.ts, capacity.ts, overcommit.ts, network.ts (builder topologie pur, 22 tests), storage-inventory.ts (vue stockage vCenter, 18 tests), storage-volumes.ts (cartographie iSCSI → LVM en arbre, 15 tests), vm-inventory.ts (filtre/tri/tree inventaire VM, 15 tests), i18n/ (+ 8 suites de tests)
 packages/server/src/core/     # config (clusters.json + overcommit.json hot-reload), proxmox-client (getNetwork, getStorage, diskStorageOf — parse du datastore du disque VM), mock-source, poller multi-endpoints, influx, influx-consolidator, ws-hub
 packages/server/src/modules/dashboard/routes.ts   # /api/* (?endpoint=, InfluxDB d'abord, repli RRD + "source")

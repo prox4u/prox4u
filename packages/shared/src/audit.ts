@@ -109,22 +109,90 @@ export interface AuditInput {
   bridges: AuditBridge[];
   /** politique de surallocation (overcommit.json). */
   overcommit: OvercommitConfig;
+  /** configuration de l'audit (audit.json, hot-reload) — défauts si absent. */
+  config: AuditConfig;
 }
 
-/** Pénalités par sévérité (formule documentée ci-dessus). */
+/** Pénalités par sévérité (défauts — formule documentée ci-dessus). */
 export const AUDIT_PENALTIES: Record<AuditSeverity, number> = {
   crit: 10,
   warn: 5,
   info: 1,
 } as const;
 
+/**
+ * Configuration de l'audit — externalisée dans `audit.json` (racine, hot-reload,
+ * pattern `overcommit.json`). Fichier optionnel : absent → `DEFAULT_AUDIT_CONFIG`.
+ *
+ * Chaque check peut être **activé/désactivé** (`enabled`) et, s'il a des seuils,
+ * ceux-ci sont ajustables sans toucher au code. Les checks Phase 2/3 (absents du
+ * catalogue pour l'instant) ont déjà leur entrée de config — ils la liront quand
+ * ils seront implémentés.
+ */
+export interface AuditConfig {
+  /** Pénalités par sévérité (formule du score). */
+  penalties: Record<AuditSeverity, number>;
+  /** Libellé du score : ≥ nominal → Conforme, ≥ degraded → À améliorer, sinon À revoir. */
+  labelNominal: number;
+  labelDegraded: number;
+  /** Paramètres par check (enabled + seuils). */
+  checks: {
+    // Phase 1 (livrés)
+    'guests.qemu_without_agent': { enabled: boolean };
+    'guests.privileged_containers': { enabled: boolean };
+    'guests.cpu_host_type': { enabled: boolean };
+    'network.bridge_without_ports': { enabled: boolean };
+    'storage.thin_pool_overprovisioning': { enabled: boolean };
+    'system.memory_overcommit': { enabled: boolean };
+    'system.node_version_mismatch': { enabled: boolean };
+    // Phase 2 (checks API)
+    'guests.autostart': { enabled: boolean };
+    'guests.stuck_snapshots': { enabled: boolean; maxAgeDays: number };
+    'guests.replication_state': { enabled: boolean; maxStalenessHours: number };
+    'network.bond_members': { enabled: boolean; minMembers: number };
+    'system.zfs_arc_max': { enabled: boolean; maxPctOfRam: number };
+    // Phase 3 (checks agent / Telegraf)
+    'disks.disk_errors': { enabled: boolean };
+    'disks.disk_service_life': { enabled: boolean; warnPct: number; critPct: number };
+    'system.failed_units': { enabled: boolean };
+    'system.pending_reboot': { enabled: boolean };
+    'system.security_updates': { enabled: boolean; warnCount: number };
+  };
+}
+
+/** Défauts de l'audit (tous checks activés, seuils documentés). */
+export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
+  penalties: { ...AUDIT_PENALTIES },
+  labelNominal: 80,
+  labelDegraded: 50,
+  checks: {
+    'guests.qemu_without_agent': { enabled: true },
+    'guests.privileged_containers': { enabled: true },
+    'guests.cpu_host_type': { enabled: true },
+    'network.bridge_without_ports': { enabled: true },
+    'storage.thin_pool_overprovisioning': { enabled: true },
+    'system.memory_overcommit': { enabled: true },
+    'system.node_version_mismatch': { enabled: true },
+    'guests.autostart': { enabled: true },
+    'guests.stuck_snapshots': { enabled: true, maxAgeDays: 7 },
+    'guests.replication_state': { enabled: true, maxStalenessHours: 24 },
+    'network.bond_members': { enabled: true, minMembers: 2 },
+    'system.zfs_arc_max': { enabled: true, maxPctOfRam: 75 },
+    'disks.disk_errors': { enabled: true },
+    'disks.disk_service_life': { enabled: true, warnPct: 80, critPct: 90 },
+    'system.failed_units': { enabled: true },
+    'system.pending_reboot': { enabled: true },
+    'system.security_updates': { enabled: true, warnCount: 5 },
+  },
+};
+
 /** Ordre d'affichage des sévérités (crit d'abord). */
 const SEVERITY_ORDER: Record<AuditSeverity, number> = { crit: 0, warn: 1, info: 2 };
 
-/** Libellé du score (clé i18n). */
-export function auditLabelKey(score: number): string {
-  if (score >= 80) return 'audit.label.compliant';
-  if (score >= 50) return 'audit.label.toImprove';
+/** Libellé du score (clé i18n) — seuils pilotés par `audit.json`. */
+export function auditLabelKey(score: number, nominal = 80, degraded = 50): string {
+  if (score >= nominal) return 'audit.label.compliant';
+  if (score >= degraded) return 'audit.label.toImprove';
   return 'audit.label.toReview';
 }
 
@@ -165,6 +233,7 @@ function clusterTarget(input: AuditInput): AuditTarget {
  * flag que l'inactif certain (`false`).
  */
 export function checkQemuWithoutAgent(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['guests.qemu_without_agent'].enabled) return [];
   const out: AuditFinding[] = [];
   for (const vm of input.vms) {
     if (vm.type === 'qemu' && vm.status === 'running' && vm.agentActive === false) {
@@ -186,6 +255,7 @@ export function checkQemuWithoutAgent(input: AuditInput): AuditFinding[] {
  * large. `unprivileged === undefined` (config inconnue) ne produit pas de constat.
  */
 export function checkPrivilegedContainers(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['guests.privileged_containers'].enabled) return [];
   const out: AuditFinding[] = [];
   for (const vm of input.vms) {
     if (vm.type === 'lxc' && vm.unprivileged === false) {
@@ -208,6 +278,7 @@ export function checkPrivilegedContainers(input: AuditInput): AuditFinding[] {
  * `cpuHost === undefined` (config inconnue / LXC) ne produit pas de constat.
  */
 export function checkCpuHostType(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['guests.cpu_host_type'].enabled) return [];
   const out: AuditFinding[] = [];
   for (const vm of input.vms) {
     if (vm.type === 'qemu' && vm.cpuHost === false) {
@@ -229,6 +300,7 @@ export function checkCpuHostType(input: AuditInput): AuditFinding[] {
  * externe (souvent une méconfig, parfois volontaire — d'où WARN).
  */
 export function checkBridgeWithoutPorts(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['network.bridge_without_ports'].enabled) return [];
   const out: AuditFinding[] = [];
   for (const b of input.bridges) {
     if (b.ports.length === 0) {
@@ -251,6 +323,7 @@ export function checkBridgeWithoutPorts(input: AuditInput): AuditFinding[] {
  * dupliqué.
  */
 export function checkThinPoolOverprovisioning(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['storage.thin_pool_overprovisioning'].enabled) return [];
   const out: AuditFinding[] = [];
   const seen = new Set<string>();
   const walk = (v: StorageVolume): void => {
@@ -277,6 +350,7 @@ export function checkThinPoolOverprovisioning(input: AuditInput): AuditFinding[]
  * appliquée par nœud. Nœuds hors ligne ignorés.
  */
 export function checkMemoryOvercommit(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['system.memory_overcommit'].enabled) return [];
   const out: AuditFinding[] = [];
   const provision = input.overcommit.hostRamProvisionPct / 100;
   for (const n of input.nodes) {
@@ -302,6 +376,7 @@ export function checkMemoryOvercommit(input: AuditInput): AuditFinding[] {
  * pas de constat.
  */
 export function checkNodeVersionMismatch(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['system.node_version_mismatch'].enabled) return [];
   const versions = new Set<string>();
   for (const n of input.nodes) {
     if (n.online && n.version) versions.add(n.version);
@@ -345,7 +420,7 @@ export function runAudit(input: AuditInput): AuditScore {
   let penalty = 0;
   for (const f of findings) {
     counts[f.severity]++;
-    penalty += AUDIT_PENALTIES[f.severity];
+    penalty += input.config.penalties[f.severity];
   }
   const score = Math.max(0, Math.min(100, 100 - penalty));
   findings.sort(
@@ -353,7 +428,7 @@ export function runAudit(input: AuditInput): AuditScore {
   );
   return {
     score,
-    labelKey: auditLabelKey(score),
+    labelKey: auditLabelKey(score, input.config.labelNominal, input.config.labelDegraded),
     findings,
     counts,
     checksTotal: CHECKS.length,

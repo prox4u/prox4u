@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PveNodeStatus, PveVmResource, Site } from '@prox4u/shared';
+import { DEFAULT_AUDIT_CONFIG, DEFAULT_HEALTH_CONFIG, type PveNodeStatus, type PveVmResource, type Site } from '@prox4u/shared';
 import { Poller, type AppContext, type EndpointRuntime } from './poller.js';
 
 const GB = 1024 ** 3;
@@ -50,7 +50,10 @@ const ep = (id: string, sites: Site[]): EndpointRuntime => ({
 
 /** Poller avec les endpoints donnés ; les champs AppContext non utilisés par computeGlobalPra sont vides. */
 function makePoller(endpoints: EndpointRuntime[]): Poller {
-  const ctx = { endpoints } as unknown as AppContext;
+  const ctx = {
+    endpoints,
+    config: { health: DEFAULT_HEALTH_CONFIG, audit: DEFAULT_AUDIT_CONFIG },
+  } as unknown as AppContext;
   return new Poller(ctx, {} as AppContext['hub']);
 }
 

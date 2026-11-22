@@ -1,0 +1,24 @@
+{
+  "penalties": { "crit": 10, "warn": 5, "info": 1 },
+  "labelNominal": 80,
+  "labelDegraded": 50,
+  "checks": {
+    "guests.qemu_without_agent": { "enabled": true },
+    "guests.privileged_containers": { "enabled": true },
+    "guests.cpu_host_type": { "enabled": true },
+    "network.bridge_without_ports": { "enabled": true },
+    "storage.thin_pool_overprovisioning": { "enabled": true },
+    "system.memory_overcommit": { "enabled": true },
+    "system.node_version_mismatch": { "enabled": true },
+    "guests.autostart": { "enabled": true },
+    "guests.stuck_snapshots": { "enabled": true, "maxAgeDays": 7 },
+    "guests.replication_state": { "enabled": true, "maxStalenessHours": 24 },
+    "network.bond_members": { "enabled": true, "minMembers": 2 },
+    "system.zfs_arc_max": { "enabled": true, "maxPctOfRam": 75 },
+    "disks.disk_errors": { "enabled": true },
+    "disks.disk_service_life": { "enabled": true, "warnPct": 80, "critPct": 90 },
+    "system.failed_units": { "enabled": true },
+    "system.pending_reboot": { "enabled": true },
+    "system.security_updates": { "enabled": true, "warnCount": 5 }
+  }
+}
