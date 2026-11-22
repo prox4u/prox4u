@@ -2409,6 +2409,7 @@ Export/restore de l'administration (users + groupes + **layouts de grilles par u
 ### Docs
  - Skill `hypervision` §11.12 (widget `pra-global`, sémantique, calcul serveur, E2E) + description.
  - Skill `general` §4.1 (flux PRA global dans le poller).
+ - GitHub issue #11 (PRA multi-sites) : commentaire « PRA global livré » (2026-11-22) — issue restée open (mapping `sites.json` prod à compléter).
 
 ## ⏳ À faire
 
@@ -2416,7 +2417,7 @@ Export/restore de l'administration (users + groupes + **layouts de grilles par u
 - [ ] **Module « Alarmes & Centreon » (centreon-nsca)** : pas encore testé de bout en bout — le daemon NSCA n'est pas installé sur cet environnement (seul le client `send_nsca` l'est) → la réception côté Centreon n'est pas encore validée (script `scripts/nsca-test.sh` fourni). → **GitHub issue #1**
 - [x] **Gestion des utilisateurs** : **livrée + validée** (issue #2, clôturée 2026-11-20) — validation des 7 checks + compléments (journal d'audit admin, import/export users+groupes+graphiques). Voir section « ✅ Fait — Issue #2 » ci-dessus.
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur. Labels : `validation` / `feature` / `decision`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · #11 PRA multi-sites (mapping `sites.json` + PRA global cross-endpoints — livré 2026-11-20). Labels : `validation` / `feature` / `decision`.
 
 ### Monitoring — référence ProxMenux + Telegraf (2026-11-04)
 TODO priorisée dans **`MONITORING-ACTIONS.md`** (racine) ; analyse complète dans la skill
