@@ -9,10 +9,11 @@ Plugin **`audit` v1** : un **2ᵉ score** (configuration) en **complément** du 
 mesure les **ressources**). Il détecte les **écarts aux bonnes pratiques** sur les données
 **déjà pollées** (API PVE) — chaque constat est **cliquable** vers la cible concernée.
 
-> P3 (GitHub issue #6, label `feature`). **Toutes les phases livrées** (17 checks : 7 API
-> basiques + 5 API avancées + 5 agent Telegraf + page + score + constats cliquables + catalogue
-> CHECKS_META + seuils externalisés `audit.json`). Prérequis Phase 3 : déploiement de l'agent
-> Telegraf sur les nœuds (`deploiement/60-telegraf-nodes.sh` — scripts exec `reboot`/`updates`).
+> P3 (GitHub issue #6, label `feature`, **clôturée**). **Toutes les phases livrées et validées
+> E2E** (17 checks : 7 API basiques + 5 API avancées + 5 agent Telegraf + page + score +
+> constats cliquables + catalogue CHECKS_META + seuils externalisés `audit.json`). Agent
+> Telegraf déployé sur les nœuds (`deploiement/60-telegraf-nodes.sh`, `DEPLOY.md` §10) —
+> tables `reboot_pending`/`security_updates` alimentées, checks P3 opérationnels.
 > Architecture globale : skill `general`. Analyse de référence ProxMenux + phasage P0→P5 :
 > skill `monitoring-proxmenux` + GitHub issue #6 (P3 — suivi des tâches sur GitHub).
 
@@ -345,12 +346,13 @@ vers `audit.json` (ex. « défaut 7 j — modifiable dans `audit.json` »).
 - **Phase 1 — LIVRÉE** : 7 checks API basiques.
 - **Phase 2 — LIVRÉE** (C5) : `autostart`, `stuck_snapshots`, `replication_state`,
   `bond_members`, `zfs_arc_max` + `CHECKS_META` + `audit.json` (hot-reload).
-- **Phase 3 — LIVRÉE** (C6) : `disk_errors`, `disk_service_life` (usure SSD 80/90 %),
-  `failed_units`, `pending_reboot`, `security_updates` (warnCount 5) — base `raw` + pattern
-  `node-sensors`. 2 scripts exec ajoutés dans `deploiement/60-telegraf-nodes.sh`.
-  **Reste à faire (action user)** : **redéploiement de l'agent Telegraf sur les nœuds** pour
-  activer `pending_reboot`/`security_updates` (les 2 nouvelles tables). `failed_units`/
-  `disk_errors`/`disk_service_life` sont déjà actifs (tables existantes).
+- **Phase 3 — LIVRÉE + VALIDÉE E2E** (C6) : `disk_errors`, `disk_service_life` (usure SSD
+  80/90 %), `failed_units`, `pending_reboot`, `security_updates` (warnCount 5) — base `raw` +
+  pattern `node-sensors`. 2 scripts exec dans `deploiement/60-telegraf-nodes.sh`. Agent
+  **déployé sur les nœuds** (tables `reboot_pending`/`security_updates` alimentées) —
+  validation E2E : `security_updates` déclenche (23/20/20 ≥ 5), `failed_units` actif
+  (`openipmi.service`, `ceph-mon@ProxSite1.service`), `pending_reboot` silencieux (tous 0),
+  disques sains silencieux. **Les 17 checks sont tous opérationnels.**
 - **Évolutions possibles** : règles d'alarme Centreon sur les constats (skill `centreon-nsca`),
   deep-link vers la page `/node-sensors` pour les constats disques (aujourd'hui cible = nœud).
 
