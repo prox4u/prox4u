@@ -11,8 +11,12 @@ import {
   type Alert,
   type AuditBond,
   type AuditBridge,
+  type AuditFailedUnit,
+  type AuditRebootPending,
   type AuditReplication,
   type AuditScore,
+  type AuditSecurityUpdates,
+  type AuditSmartDisk,
   type AuditZfsArc,
   type DashboardSnapshot,
   type EndpointSnapshot,
@@ -71,6 +75,14 @@ const AUDIT_NETWORK_TTL_MS = 5 * 60 * 1000;
 const AUDIT_REPLICATION_TTL_MS = 5 * 60 * 1000;
 /** TTL du cache ZFS ARC pour l'audit (check `zfs_arc_max`) — quasi statique. */
 const AUDIT_ZFSARC_TTL_MS = 5 * 60 * 1000;
+/** TTL du cache SMART pour l'audit (checks `disk_errors`/`disk_service_life`). */
+const AUDIT_SMART_TTL_MS = 5 * 60 * 1000;
+/** TTL du cache unités systemd pour l'audit (check `failed_units`). */
+const AUDIT_UNITS_TTL_MS = 5 * 60 * 1000;
+/** TTL du cache reboot en attente pour l'audit (check `pending_reboot`). */
+const AUDIT_REBOOT_TTL_MS = 5 * 60 * 1000;
+/** TTL du cache mises à jour sécurité pour l'audit (check `security_updates`). */
+const AUDIT_UPDATES_TTL_MS = 5 * 60 * 1000;
 /**
  * TTL du réchauffage des snapshots (check `stuck_snapshots`) : les appels API
  * (un par VM) ne se font qu'une fois par heure par VM, en background.
@@ -169,6 +181,26 @@ export class Poller {
    * endpoint (table Telegraf `zfs`, quasi statique). `[]` (pas de données) mis en cache.
    */
   private zfsArcCache = new Map<string, { at: number; zfsArc: AuditZfsArc[] }>();
+  /**
+   * SMART des disques pour l'audit (checks `disk_errors`/`disk_service_life`) —
+   * cache 5 min par endpoint (table Telegraf `smart_device`). `[]` mis en cache.
+   */
+  private smartDiskCache = new Map<string, { at: number; smartDisks: AuditSmartDisk[] }>();
+  /**
+   * Unités systemd en échec pour l'audit (check `failed_units`) — cache 5 min
+   * par endpoint (table Telegraf `systemd_units`). `[]` mis en cache.
+   */
+  private failedUnitCache = new Map<string, { at: number; failedUnits: AuditFailedUnit[] }>();
+  /**
+   * Nœuds avec reboot en attente pour l'audit (check `pending_reboot`) — cache
+   * 5 min par endpoint (table Telegraf `reboot_pending`). `[]` mis en cache.
+   */
+  private rebootCache = new Map<string, { at: number; rebootPending: AuditRebootPending[] }>();
+  /**
+   * Mises à jour sécurité en attente pour l'audit (check `security_updates`) —
+   * cache 5 min par endpoint (table Telegraf `security_updates`). `[]` mis en cache.
+   */
+  private updatesCache = new Map<string, { at: number; securityUpdates: AuditSecurityUpdates[] }>();
 
   constructor(
     private ctx: AppContext,
@@ -374,6 +406,176 @@ export class Poller {
     }
     this.zfsArcCache.set(st.rt.id, { at: Date.now(), zfsArc });
     return zfsArc;
+  }
+
+  /**
+   * SMART des disques pour l'audit (checks `disk_errors`/`disk_service_life`) —
+   * cache 5 min. Lit la table Telegraf `smart_device` (dernier point par
+   * (node, device), fenêtre 1 h) sur les nœuds de l'endpoint. Pas de données
+   * (agent non déployé) → `[]` (les checks n'ont rien à signaler).
+   */
+  private async getAuditSmartDisks(st: EndpointState, nodes: NodeHealth[]): Promise<AuditSmartDisk[]> {
+    const cached = this.smartDiskCache.get(st.rt.id);
+    if (cached && Date.now() - cached.at < AUDIT_SMART_TTL_MS) return cached.smartDisks;
+    const influx = this.ctx.influx;
+    let smartDisks: AuditSmartDisk[] = [];
+    if (influx.enabled && !this.ctx.config.mock && nodes.length > 0) {
+      try {
+        const inList = nodes.map((n) => `'${n.node.replace(/'/g, "''")}'`).join(', ');
+        const rows = await influx.querySql<Record<string, string | number | null>>(
+          influx.rawDb,
+          `SELECT node, device, model, health_ok, reallocated_sectors_count, pending_sector_count,
+                  uncorrectable_sector_count, udma_crc_errors, percentage_used
+           FROM smart_device
+           WHERE node IN (${inList}) AND time >= now() - INTERVAL '1 hour'
+           ORDER BY time DESC`,
+        );
+        const map = new Map<string, AuditSmartDisk>();
+        for (const r of rows) {
+          const key = `${r.node}/${r.device}`;
+          if (map.has(key)) continue;
+          map.set(key, {
+            node: String(r.node ?? ''),
+            device: String(r.device ?? ''),
+            model: (r.model as string) ?? null,
+            // NULL (pas de SMART : disque virtuel / RAID) → null (inconnu), pas false.
+            healthOk: r.health_ok == null ? null : Boolean(r.health_ok),
+            reallocatedSectors: (r.reallocated_sectors_count as number) ?? null,
+            pendingSectors: (r.pending_sector_count as number) ?? null,
+            uncorrectableSectors: (r.uncorrectable_sector_count as number) ?? null,
+            udmaCrcErrors: (r.udma_crc_errors as number) ?? null,
+            percentageUsed: (r.percentage_used as number) ?? null,
+          });
+        }
+        smartDisks = [...map.values()];
+      } catch (err) {
+        // Table absente (agent non déployé) = état attendu → silencieux.
+        const msg = (err as Error).message;
+        if (!/not found/i.test(msg)) {
+          this.ctx.logger.warn(`smart_device (audit) : lecture InfluxDB échouée pour ${st.rt.id} (${msg})`);
+        }
+      }
+    }
+    this.smartDiskCache.set(st.rt.id, { at: Date.now(), smartDisks });
+    return smartDisks;
+  }
+
+  /**
+   * Unités systemd en échec pour l'audit (check `failed_units`) — cache 5 min.
+   * Lit la table Telegraf `systemd_units` (SEULES les vraies alertes :
+   * `active='failed'` ou `load='error'` — jamais `sub='dead'`, état de repos
+   * normal), dernier point par (node, name), fenêtre 1 h.
+   */
+  private async getAuditFailedUnits(st: EndpointState, nodes: NodeHealth[]): Promise<AuditFailedUnit[]> {
+    const cached = this.failedUnitCache.get(st.rt.id);
+    if (cached && Date.now() - cached.at < AUDIT_UNITS_TTL_MS) return cached.failedUnits;
+    const influx = this.ctx.influx;
+    let failedUnits: AuditFailedUnit[] = [];
+    if (influx.enabled && !this.ctx.config.mock && nodes.length > 0) {
+      try {
+        const inList = nodes.map((n) => `'${n.node.replace(/'/g, "''")}'`).join(', ');
+        const rows = await influx.querySql<Record<string, string | number | null>>(
+          influx.rawDb,
+          `SELECT node, name
+           FROM systemd_units
+           WHERE node IN (${inList}) AND time >= now() - INTERVAL '1 hour'
+             AND (active = 'failed' OR load = 'error')
+           ORDER BY time DESC`,
+        );
+        const map = new Map<string, AuditFailedUnit>();
+        for (const r of rows) {
+          const key = `${r.node}/${r.name}`;
+          if (map.has(key)) continue;
+          map.set(key, { node: String(r.node ?? ''), name: String(r.name ?? '') });
+        }
+        failedUnits = [...map.values()];
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (!/not found/i.test(msg)) {
+          this.ctx.logger.warn(`systemd_units (audit) : lecture InfluxDB échouée pour ${st.rt.id} (${msg})`);
+        }
+      }
+    }
+    this.failedUnitCache.set(st.rt.id, { at: Date.now(), failedUnits });
+    return failedUnits;
+  }
+
+  /**
+   * Nœuds avec un redémarrage en attente pour l'audit (check `pending_reboot`) —
+   * cache 5 min. Lit la table Telegraf `reboot_pending` (script exec,
+   * `pending=1` si /var/run/reboot-required existe), dernier point par nœud,
+   * fenêtre 1 h. Ne renvoie QUE les nœuds en attente.
+   */
+  private async getAuditReboot(st: EndpointState, nodes: NodeHealth[]): Promise<AuditRebootPending[]> {
+    const cached = this.rebootCache.get(st.rt.id);
+    if (cached && Date.now() - cached.at < AUDIT_REBOOT_TTL_MS) return cached.rebootPending;
+    const influx = this.ctx.influx;
+    let rebootPending: AuditRebootPending[] = [];
+    if (influx.enabled && !this.ctx.config.mock && nodes.length > 0) {
+      try {
+        const inList = nodes.map((n) => `'${n.node.replace(/'/g, "''")}'`).join(', ');
+        const rows = await influx.querySql<Record<string, string | number | null>>(
+          influx.rawDb,
+          `SELECT node, pending
+           FROM reboot_pending
+           WHERE node IN (${inList}) AND time >= now() - INTERVAL '1 hour'
+           ORDER BY time DESC`,
+        );
+        const map = new Map<string, number>();
+        for (const r of rows) {
+          const key = String(r.node ?? '');
+          if (map.has(key)) continue;
+          map.set(key, Number(r.pending) || 0);
+        }
+        rebootPending = [...map.entries()].filter(([, p]) => p === 1).map(([node]) => ({ node }));
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (!/not found/i.test(msg)) {
+          this.ctx.logger.warn(`reboot_pending (audit) : lecture InfluxDB échouée pour ${st.rt.id} (${msg})`);
+        }
+      }
+    }
+    this.rebootCache.set(st.rt.id, { at: Date.now(), rebootPending });
+    return rebootPending;
+  }
+
+  /**
+   * Mises à jour de sécurité en attente pour l'audit (check `security_updates`)
+   * — cache 5 min. Lit la table Telegraf `security_updates` (script exec,
+   * `updates` = nb de paquets de sécurité en attente), dernier point par nœud,
+   * fenêtre 1 h.
+   */
+  private async getAuditUpdates(st: EndpointState, nodes: NodeHealth[]): Promise<AuditSecurityUpdates[]> {
+    const cached = this.updatesCache.get(st.rt.id);
+    if (cached && Date.now() - cached.at < AUDIT_UPDATES_TTL_MS) return cached.securityUpdates;
+    const influx = this.ctx.influx;
+    let securityUpdates: AuditSecurityUpdates[] = [];
+    if (influx.enabled && !this.ctx.config.mock && nodes.length > 0) {
+      try {
+        const inList = nodes.map((n) => `'${n.node.replace(/'/g, "''")}'`).join(', ');
+        const rows = await influx.querySql<Record<string, string | number | null>>(
+          influx.rawDb,
+          `SELECT node, updates
+           FROM security_updates
+           WHERE node IN (${inList}) AND time >= now() - INTERVAL '1 hour'
+           ORDER BY time DESC`,
+        );
+        const map = new Map<string, number>();
+        for (const r of rows) {
+          const key = String(r.node ?? '');
+          if (map.has(key)) continue;
+          map.set(key, Number(r.updates) || 0);
+        }
+        securityUpdates = [...map.entries()].map(([node, count]) => ({ node, count }));
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (!/not found/i.test(msg)) {
+          this.ctx.logger.warn(`security_updates (audit) : lecture InfluxDB échouée pour ${st.rt.id} (${msg})`);
+        }
+      }
+    }
+    this.updatesCache.set(st.rt.id, { at: Date.now(), securityUpdates });
+    return securityUpdates;
   }
 
   /** Poll un endpoint ; en cas d'échec, conserve le dernier snapshot connu. */
@@ -589,9 +791,13 @@ export class Poller {
       // (shared/audit.ts) ; réseau (ponts+bonds) cache 5 min, réplication cache
       // 5 min, ZFS ARC cache 5 min (table Telegraf), snapshots réchauffés 1 h.
       const { bridges, bonds } = await this.getAuditNetwork(st);
-      const [replications, zfsArc] = await Promise.all([
+      const [replications, zfsArc, smartDisks, failedUnits, rebootPending, securityUpdates] = await Promise.all([
         this.getAuditReplications(st, vms),
         this.getAuditZfsArc(st, nodeHealth),
+        this.getAuditSmartDisks(st, nodeHealth),
+        this.getAuditFailedUnits(st, nodeHealth),
+        this.getAuditReboot(st, nodeHealth),
+        this.getAuditUpdates(st, nodeHealth),
       ]);
       const audit: AuditScore = runAudit({
         endpointId: rt.id,
@@ -603,6 +809,10 @@ export class Poller {
         bonds,
         replications,
         zfsArc,
+        smartDisks,
+        failedUnits,
+        rebootPending,
+        securityUpdates,
         overcommit: this.ctx.config.overcommit,
         config: this.ctx.config.audit,
       });

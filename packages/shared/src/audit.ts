@@ -116,6 +116,39 @@ export interface AuditZfsArc {
   memTotalBytes: number;
 }
 
+/** SMART d'un disque (table Telegraf `smart_device`) — projection pour les checks disques. */
+export interface AuditSmartDisk {
+  node: string;
+  device: string;
+  /** modèle (lisible) — null si inconnu. */
+  model: string | null;
+  /** état SMART global — true=PASSED, false=FAILED, null=inconnu (pas de SMART). */
+  healthOk: boolean | null;
+  reallocatedSectors: number | null;
+  pendingSectors: number | null;
+  uncorrectableSectors: number | null;
+  udmaCrcErrors: number | null;
+  /** usure NVMe (0–100 %) — null si pas de NVMe / inconnu. */
+  percentageUsed: number | null;
+}
+
+/** Unité systemd en échec (table Telegraf `systemd_units`, `active=failed` ou `load=error`). */
+export interface AuditFailedUnit {
+  node: string;
+  name: string;
+}
+
+/** Nœud avec un redémarrage en attente (table Telegraf `reboot_pending`, `pending=1`). */
+export interface AuditRebootPending {
+  node: string;
+}
+
+/** Mises à jour de sécurité en attente sur un nœud (table Telegraf `security_updates`). */
+export interface AuditSecurityUpdates {
+  node: string;
+  count: number;
+}
+
 /** Résultat d'audit d'un endpoint (GET /api/audit sans paramètre). */
 export interface AuditEndpointResult extends AuditScore {
   endpointId: string;
@@ -142,6 +175,14 @@ export interface AuditInput {
   replications: AuditReplication[];
   /** ZFS ARC max par nœud — vide si pas de données ZFS (agent non déployé). */
   zfsArc: AuditZfsArc[];
+  /** disques SMART — vide si pas de données (agent non déployé). */
+  smartDisks: AuditSmartDisk[];
+  /** unités systemd en échec — vide si aucune. */
+  failedUnits: AuditFailedUnit[];
+  /** nœuds avec un redémarrage en attente — vide si aucun. */
+  rebootPending: AuditRebootPending[];
+  /** mises à jour de sécurité en attente par nœud — vide si aucune donnée. */
+  securityUpdates: AuditSecurityUpdates[];
   /** politique de surallocation (overcommit.json). */
   overcommit: OvercommitConfig;
   /** configuration de l'audit (audit.json, hot-reload) — défauts si absent. */
@@ -160,9 +201,8 @@ export const AUDIT_PENALTIES: Record<AuditSeverity, number> = {
  * pattern `overcommit.json`). Fichier optionnel : absent → `DEFAULT_AUDIT_CONFIG`.
  *
  * Chaque check peut être **activé/désactivé** (`enabled`) et, s'il a des seuils,
- * ceux-ci sont ajustables sans toucher au code. Les checks Phase 2/3 (absents du
- * catalogue pour l'instant) ont déjà leur entrée de config — ils la liront quand
- * ils seront implémentés.
+ * ceux-ci sont ajustables sans toucher au code. Les 17 checks (P1+P2+P3) sont
+ * implémentés et lisent cette config.
  */
 export interface AuditConfig {
   /** Pénalités par sévérité (formule du score). */
@@ -550,6 +590,122 @@ export function checkZfsArcMax(input: AuditInput): AuditFinding[] {
   return out;
 }
 
+/**
+ * `disks.disk_errors` (CRIT) — disque SMART dégradé : état global FAILED ou
+ * secteurs réalloués / en attente / non corrigeables / erreurs CRC > 0 : risque
+ * de perte de données. `healthOk === null` (pas de SMART) et secteurs `null`
+ * (non lus) ne produisent pas de constat (pas de faux positif).
+ */
+export function checkDiskErrors(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['disks.disk_errors'].enabled) return [];
+  const out: AuditFinding[] = [];
+  for (const d of input.smartDisks) {
+    const bad =
+      d.healthOk === false ||
+      (d.reallocatedSectors ?? 0) > 0 ||
+      (d.pendingSectors ?? 0) > 0 ||
+      (d.uncorrectableSectors ?? 0) > 0 ||
+      (d.udmaCrcErrors ?? 0) > 0;
+    if (bad) {
+      out.push({
+        check: 'disks.disk_errors',
+        severity: 'crit',
+        messageKey: 'audit.finding.disk_errors',
+        params: { node: d.node, device: d.device, model: d.model ?? d.device },
+        target: nodeTarget(input, d.node),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * `disks.disk_service_life` (WARN/CRIT) — usure NVMe (`percentage_used`) au-delà
+ * de `warnPct` (warn) ou `critPct` (crit) : le SSD approche / atteint la fin de
+ * sa durée de vie nominale. `percentageUsed === null` (pas de NVMe) → pas de
+ * constat.
+ */
+export function checkDiskServiceLife(input: AuditInput): AuditFinding[] {
+  const cfg = input.config.checks['disks.disk_service_life'];
+  if (!cfg.enabled) return [];
+  const out: AuditFinding[] = [];
+  for (const d of input.smartDisks) {
+    if (d.percentageUsed == null) continue;
+    const sev = d.percentageUsed >= cfg.critPct ? 'crit' : d.percentageUsed >= cfg.warnPct ? 'warn' : null;
+    if (sev) {
+      out.push({
+        check: 'disks.disk_service_life',
+        severity: sev,
+        messageKey: 'audit.finding.disk_service_life',
+        params: { node: d.node, device: d.device, pct: Math.round(d.percentageUsed) },
+        target: nodeTarget(input, d.node),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * `system.failed_units` (WARN) — unités systemd en échec (`active=failed` ou
+ * `load=error`) : un service ou un montage n'a pas démarré. Un constat par unité.
+ */
+export function checkFailedUnits(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['system.failed_units'].enabled) return [];
+  const out: AuditFinding[] = [];
+  for (const u of input.failedUnits) {
+    out.push({
+      check: 'system.failed_units',
+      severity: 'warn',
+      messageKey: 'audit.finding.failed_units',
+      params: { node: u.node, unit: u.name },
+      target: nodeTarget(input, u.node),
+    });
+  }
+  return out;
+}
+
+/**
+ * `system.pending_reboot` (INFO) — un redémarrage est en attente sur le nœud
+ * (noyau / paquets mis à jour non appliqués). Un constat par nœud.
+ */
+export function checkPendingReboot(input: AuditInput): AuditFinding[] {
+  if (!input.config.checks['system.pending_reboot'].enabled) return [];
+  const out: AuditFinding[] = [];
+  for (const r of input.rebootPending) {
+    out.push({
+      check: 'system.pending_reboot',
+      severity: 'info',
+      messageKey: 'audit.finding.pending_reboot',
+      params: { node: r.node },
+      target: nodeTarget(input, r.node),
+    });
+  }
+  return out;
+}
+
+/**
+ * `system.security_updates` (INFO) — `warnCount` correctifs de sécurité ou plus
+ * en attente sur le nœud : exposition à des CVE connues. Un constat par nœud
+ * (seuil `warnCount`).
+ */
+export function checkSecurityUpdates(input: AuditInput): AuditFinding[] {
+  const cfg = input.config.checks['system.security_updates'];
+  if (!cfg.enabled) return [];
+  const out: AuditFinding[] = [];
+  for (const s of input.securityUpdates) {
+    if (s.count >= cfg.warnCount) {
+      out.push({
+        check: 'system.security_updates',
+        severity: 'info',
+        messageKey: 'audit.finding.security_updates',
+        params: { node: s.node, count: s.count, threshold: cfg.warnCount },
+        target: nodeTarget(input, s.node),
+      });
+    }
+  }
+  return out;
+}
+
 /** Catalogue des checks (ordre d'évaluation). */
 const CHECKS: Array<(input: AuditInput) => AuditFinding[]> = [
   checkQemuWithoutAgent,
@@ -564,6 +720,11 @@ const CHECKS: Array<(input: AuditInput) => AuditFinding[]> = [
   checkReplicationState,
   checkBondMembers,
   checkZfsArcMax,
+  checkDiskErrors,
+  checkDiskServiceLife,
+  checkFailedUnits,
+  checkPendingReboot,
+  checkSecurityUpdates,
 ];
 
 /**
@@ -589,7 +750,7 @@ export interface AuditCheckMeta {
   thresholdKey: string | null;
 }
 
-/** Catalogue des 16 checks (ordre = ordre d'évaluation). */
+/** Catalogue des 17 checks (ordre = ordre d'évaluation). */
 export const CHECKS_META: AuditCheckMeta[] = [
   { id: 'guests.qemu_without_agent', phase: 1, severity: 'crit', titleKey: 'audit.check.qemu_without_agent.title', whyKey: 'audit.check.qemu_without_agent.why', howKey: 'audit.check.qemu_without_agent.how', thresholdKey: null },
   { id: 'guests.privileged_containers', phase: 1, severity: 'warn', titleKey: 'audit.check.privileged_containers.title', whyKey: 'audit.check.privileged_containers.why', howKey: 'audit.check.privileged_containers.how', thresholdKey: null },
@@ -604,7 +765,7 @@ export const CHECKS_META: AuditCheckMeta[] = [
   { id: 'network.bond_members', phase: 2, severity: 'warn', titleKey: 'audit.check.bond_members.title', whyKey: 'audit.check.bond_members.why', howKey: 'audit.check.bond_members.how', thresholdKey: 'audit.check.bond_members.threshold' },
   { id: 'system.zfs_arc_max', phase: 2, severity: 'warn', titleKey: 'audit.check.zfs_arc_max.title', whyKey: 'audit.check.zfs_arc_max.why', howKey: 'audit.check.zfs_arc_max.how', thresholdKey: 'audit.check.zfs_arc_max.threshold' },
   { id: 'disks.disk_errors', phase: 3, severity: 'crit', titleKey: 'audit.check.disk_errors.title', whyKey: 'audit.check.disk_errors.why', howKey: 'audit.check.disk_errors.how', thresholdKey: null },
-  { id: 'disks.disk_service_life', phase: 3, severity: 'warn', titleKey: 'audit.check.disk_service_life.title', whyKey: 'audit.check.disk_service_life.why', howKey: 'audit.check.disk_service_life.how', thresholdKey: 'audit.check.disk_service_life.threshold' },
+  { id: 'disks.disk_service_life', phase: 3, severity: 'crit', titleKey: 'audit.check.disk_service_life.title', whyKey: 'audit.check.disk_service_life.why', howKey: 'audit.check.disk_service_life.how', thresholdKey: 'audit.check.disk_service_life.threshold' },
   { id: 'system.failed_units', phase: 3, severity: 'warn', titleKey: 'audit.check.failed_units.title', whyKey: 'audit.check.failed_units.why', howKey: 'audit.check.failed_units.how', thresholdKey: null },
   { id: 'system.pending_reboot', phase: 3, severity: 'info', titleKey: 'audit.check.pending_reboot.title', whyKey: 'audit.check.pending_reboot.why', howKey: 'audit.check.pending_reboot.how', thresholdKey: null },
   { id: 'system.security_updates', phase: 3, severity: 'info', titleKey: 'audit.check.security_updates.title', whyKey: 'audit.check.security_updates.why', howKey: 'audit.check.security_updates.how', thresholdKey: 'audit.check.security_updates.threshold' },

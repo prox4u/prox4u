@@ -1026,6 +1026,11 @@ export const en: Record<string, string> = {
   'audit.finding.replication_state.stale': '{{name}} — replication stale (last one {{hours}} h ago)',
   'audit.finding.bond_members': '{{node}}: bond {{bond}} with {{members}} slave(s) (redundancy lost)',
   'audit.finding.zfs_arc_max': '{{node}} — ZFS ARC max at {{pct}} % of RAM (threshold {{threshold}} %)',
+  'audit.finding.disk_errors': '{{node}}: disk {{device}} with SMART errors ({{model}})',
+  'audit.finding.disk_service_life': '{{node}}: SSD {{device}} at {{pct}} % wear (end of life near)',
+  'audit.finding.failed_units': '{{node}}: failed systemd unit ({{unit}})',
+  'audit.finding.pending_reboot': '{{node}}: reboot pending (updates not applied)',
+  'audit.finding.security_updates': '{{node}}: {{count}} pending security updates (threshold {{threshold}})',
 
   // --- Check catalog (why / how) — “Audit” page ---
   'audit.checks.title': 'Check catalog',

@@ -12,6 +12,8 @@
 #   pour le trafic PAR INTERFACE de chaque VM)
 #   quorum_detail (détail corosync `pvecm status` : état du Qdevice + votes,
 #   pour la surveillance du quorum cluster — l'API PVE ne donne que quorate)
+#   reboot_pending (1 si /var/run/reboot-required — check d'audit pending_reboot)
+#   security_updates (nb de correctifs de sécurité en attente — check d'audit)
 #
 # Consolidation : le consolidateur prox4u agrège ces tables de `raw` (31 j) vers
 # `consolidated` (rétention ∞) en buckets 15 min — historique SMART/capteurs/ZFS
@@ -330,6 +332,61 @@ else
   echo "[dry-run] installerait le script $QUORUM_SCRIPT (détail quorum corosync : Qdevice + votes)"
 fi
 
+# ── 5f. Redémarrage en attente (consommé par le plugin exec) ──
+# dpkg crée /var/run/reboot-required quand un redémarrage est requis (noyau /
+# paquets mis à jour non appliqués). Le plugin exec exécute ce script à chaque
+# cycle et écrit la table quasi statique `reboot_pending` (pending=1 si le
+# fichier existe, 0 sinon). prox4u lit le dernier point par nœud (fenêtre 1 h)
+# pour le check d'audit `pending_reboot`. Toujours une ligne (pending=0/1) :
+# prox4u distingue « pas de reboot en attente » (0) de « inconnu » (pas de data).
+REBOOT_SCRIPT=/usr/local/lib/prox4u-telegraf-reboot.sh
+if [[ $DRY_RUN -eq 0 ]]; then
+  cat > "$REBOOT_SCRIPT" <<'EOS'
+#!/usr/bin/env bash
+# Prox4u — redémarrage en attente (table reboot_pending pour Telegraf).
+# Sortie : line protocol InfluxDB. Le champ pending=1i/0i est obligatoire
+# (une ligne line-protocol sans champ n'est pas valide). Le tag node est
+# ajouté par global_tags. Quasi statique (change à la mise à jour / au reboot).
+set -euo pipefail
+p=0
+[[ -e /var/run/reboot-required ]] && p=1
+printf 'reboot_pending pending=%si\n' "$p"
+EOS
+  chmod 755 "$REBOOT_SCRIPT"
+  ok "script reboot en attente installé → $REBOOT_SCRIPT"
+else
+  echo "[dry-run] installerait le script $REBOOT_SCRIPT (redémarrage en attente)"
+fi
+
+# ── 5g. Mises à jour de sécurité en attente (consommé par le plugin exec) ──
+# Compte les paquets de sécurité en attente (apt list --upgradable, repo
+# « security »). Le plugin exec exécute ce script à chaque cycle et écrit la
+# table `security_updates` (updates = nombre). prox4u lit le dernier point par
+# nœud (fenêtre 1 h) pour le check d'audit `security_updates` (seuil warnCount).
+# `apt list` lit les listes déjà cachées (pas de réseau) ; ~1–3 s. Toujours une
+# ligne (updates=0 si rien) : prox4u distingue « 0 update » de « inconnu ».
+UPDATES_SCRIPT=/usr/local/lib/prox4u-telegraf-updates.sh
+if [[ $DRY_RUN -eq 0 ]]; then
+  cat > "$UPDATES_SCRIPT" <<'EOS'
+#!/usr/bin/env bash
+# Prox4u — mises à jour de sécurité en attente (table security_updates pour
+# Telegraf). Compte les paquets upgradables issus du dépôt « security ».
+# Sortie : line protocol InfluxDB. Le champ updates=Ni est obligatoire. Le
+# tag node est ajouté par global_tags. Quasi statique (change à chaque apt).
+set -euo pipefail
+count=0
+if out="$(apt list --upgradable 2>/dev/null)"; then
+  count="$(printf '%s\n' "$out" | grep -c 'security' || true)"
+fi
+[[ "$count" =~ ^[0-9]+$ ]] || count=0
+printf 'security_updates updates=%si\n' "$count"
+EOS
+  chmod 755 "$UPDATES_SCRIPT"
+  ok "script mises à jour sécurité installé → $UPDATES_SCRIPT"
+else
+  echo "[dry-run] installerait le script $UPDATES_SCRIPT (mises à jour sécurité en attente)"
+fi
+
 if [[ $DRY_RUN -eq 1 ]]; then
   # Aperçu sans écrire (et sans exposer le token en clair sur la console).
   cat <<EOF
@@ -337,7 +394,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   agent         : interval=10s, hostname=$NODE_TAG
   global_tags   : node=$NODE_TAG, node_source=telegraf
   outputs.influxdb_v2 : $INFLUX_URL (bucket=$INFLUX_BUCKET, org=$INFLUX_ORG, insecure_skip_verify=true)
-  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system, net, exec (dm_names, iface_mac, hw_info, quorum)
+  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system, net, exec (dm_names, iface_mac, hw_info, quorum, reboot, updates)
   (token masqué)
 EOF
 else
@@ -424,6 +481,23 @@ cat > "$CONF" <<EOF
   data_format = "influx"
   timeout = "10s"
 
+# ── Redémarrage en attente (table reboot_pending) — check d'audit ──
+# /var/run/reboot-required (dpkg) : 1 si un reboot est requis, 0 sinon.
+# Quasi statique ; prox4u lit le dernier point par nœud (fenêtre 1 h).
+[[inputs.exec]]
+  commands = ["/usr/local/lib/prox4u-telegraf-reboot.sh"]
+  data_format = "influx"
+  timeout = "10s"
+
+# ── Mises à jour sécurité en attente (table security_updates) — check d'audit ──
+# apt list --upgradable (dépôt « security ») : nombre de correctifs en attente.
+# Quasi statique ; prox4u lit le dernier point par nœud (fenêtre 1 h). Timeout
+# 30 s (apt list peut prendre quelques secondes).
+[[inputs.exec]]
+  commands = ["/usr/local/lib/prox4u-telegraf-updates.sh"]
+  data_format = "influx"
+  timeout = "30s"
+
 # ── Réseau : counters par interface (table net) — trafic par NIC ──
 # Toutes les interfaces : NICs physiques, ponts (vmbr*) ET tap des VMs
 # (vnet*/tap*/veth*) — les tap sont la source du trafic PAR INTERFACE de
@@ -485,5 +559,5 @@ echo "→ Prochaine étape (depuis le serveur prox4u) : valider que les mesures 
 echo "    cd prox4u && TOK=\$(grep '^INFLUX_TOKEN=' .env | cut -d= -f2)"
 echo "    curl -sk https://localhost:8181/api/v3/query_sql -H \"Authorization: Bearer \$TOK\" \\"
 echo "      -H 'Content-Type: application/json' \\"
-echo "      -d '{\"db\":\"raw\",\"q\":\"SELECT table_name FROM information_schema.tables WHERE table_name IN ('\''smart_device'\'','\''sensors'\'','\''zfs'\'','\''systemd_units'\'','\''disk'\'','\''diskio'\'','\''cpu'\'','\''mem'\'','\''dm_names'\'','\''net'\'','\''net_if_mac'\'')\"}'"
+echo "      -d '{\"db\":\"raw\",\"q\":\"SELECT table_name FROM information_schema.tables WHERE table_name IN ('\''smart_device'\'','\''sensors'\'','\''zfs'\'','\''systemd_units'\'','\''disk'\'','\''diskio'\'','\''cpu'\'','\''mem'\'','\''dm_names'\'','\''net'\'','\''net_if_mac'\'','\''reboot_pending'\'','\''security_updates'\'')\"}'"
 [[ $DRY_RUN -eq 1 ]] && echo "(--dry-run : service non démarré, config non écrite)"

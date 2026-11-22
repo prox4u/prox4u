@@ -32,6 +32,11 @@ export {
   checkReplicationState,
   checkBondMembers,
   checkZfsArcMax,
+  checkDiskErrors,
+  checkDiskServiceLife,
+  checkFailedUnits,
+  checkPendingReboot,
+  checkSecurityUpdates,
 } from './audit.js';
 export type {
   AuditSeverity,
@@ -44,6 +49,10 @@ export type {
   AuditBond,
   AuditReplication,
   AuditZfsArc,
+  AuditSmartDisk,
+  AuditFailedUnit,
+  AuditRebootPending,
+  AuditSecurityUpdates,
   AuditInput,
   AuditConfig,
   AuditCheckMeta,

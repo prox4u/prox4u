@@ -14,9 +14,15 @@ import {
   checkReplicationState,
   checkBondMembers,
   checkZfsArcMax,
+  checkDiskErrors,
+  checkDiskServiceLife,
+  checkFailedUnits,
+  checkPendingReboot,
+  checkSecurityUpdates,
   runAudit,
   DEFAULT_AUDIT_CONFIG,
   type AuditInput,
+  type AuditSmartDisk,
 } from './audit.js';
 import { DEFAULT_OVERCOMMIT_CONFIG } from './overcommit.js';
 import type {
@@ -98,6 +104,10 @@ const input = (over: Partial<AuditInput> = {}): AuditInput => ({
   bonds: [],
   replications: [],
   zfsArc: [],
+  smartDisks: [],
+  failedUnits: [],
+  rebootPending: [],
+  securityUpdates: [],
   overcommit: DEFAULT_OVERCOMMIT_CONFIG,
   config: DEFAULT_AUDIT_CONFIG,
   ...over,
@@ -426,6 +436,155 @@ describe('checkZfsArcMax', () => {
 
   it('pas de données ZFS (RAM 0 / ARC 0) → aucun constat', () => {
     expect(checkZfsArcMax(input({ zfsArc: [{ node: 'n1', arcMaxBytes: 0, memTotalBytes: 100 * GB }] }))).toHaveLength(0);
+  });
+});
+
+// --- checkDiskErrors -------------------------------------------------------------
+
+const disk = (over: Partial<AuditSmartDisk> = {}): AuditSmartDisk => ({
+  node: 'n1',
+  device: 'sda',
+  model: 'TOSHIBA MN10ADA800S',
+  healthOk: true,
+  reallocatedSectors: 0,
+  pendingSectors: 0,
+  uncorrectableSectors: 0,
+  udmaCrcErrors: 0,
+  percentageUsed: null,
+  ...over,
+});
+
+describe('checkDiskErrors', () => {
+  it('healthOk=false → 1 constat crit (cible nœud)', () => {
+    const f = checkDiskErrors(input({ smartDisks: [disk({ healthOk: false })] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('crit');
+    expect(f[0].check).toBe('disks.disk_errors');
+    expect(f[0].target.kind).toBe('node');
+    expect(f[0].params).toMatchObject({ node: 'n1', device: 'sda' });
+  });
+
+  it('secteurs réalloués > 0 → 1 constat crit', () => {
+    expect(checkDiskErrors(input({ smartDisks: [disk({ reallocatedSectors: 12 })] }))).toHaveLength(1);
+  });
+
+  it('erreurs CRC > 0 → 1 constat crit', () => {
+    expect(checkDiskErrors(input({ smartDisks: [disk({ udmaCrcErrors: 3 })] }))).toHaveLength(1);
+  });
+
+  it('disque sain (healthOk=true, secteurs 0) → aucun constat', () => {
+    expect(checkDiskErrors(input({ smartDisks: [disk()] }))).toHaveLength(0);
+  });
+
+  it('healthOk=null (pas de SMART) + secteurs null → aucun constat (pas de faux positif)', () => {
+    expect(
+      checkDiskErrors(
+        input({
+          smartDisks: [
+            disk({ healthOk: null, reallocatedSectors: null, pendingSectors: null, uncorrectableSectors: null, udmaCrcErrors: null }),
+          ],
+        }),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('2 disques en erreur → 2 constats', () => {
+    expect(checkDiskErrors(input({ smartDisks: [disk({ device: 'sda', healthOk: false }), disk({ device: 'sdb', pendingSectors: 5 })] }))).toHaveLength(2);
+  });
+});
+
+// --- checkDiskServiceLife --------------------------------------------------------
+
+describe('checkDiskServiceLife', () => {
+  it('usure ≥ critPct (95 % ≥ 90) → 1 constat crit', () => {
+    const f = checkDiskServiceLife(input({ smartDisks: [disk({ device: 'nvme0n1', percentageUsed: 95 })] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('crit');
+    expect(f[0].check).toBe('disks.disk_service_life');
+    expect(f[0].params).toMatchObject({ device: 'nvme0n1', pct: 95 });
+  });
+
+  it('usure ≥ warnPct (85 % ≥ 80) → 1 constat warn', () => {
+    const f = checkDiskServiceLife(input({ smartDisks: [disk({ device: 'nvme0n1', percentageUsed: 85 })] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('warn');
+  });
+
+  it('usure < warnPct (50 %) → aucun constat', () => {
+    expect(checkDiskServiceLife(input({ smartDisks: [disk({ device: 'nvme0n1', percentageUsed: 50 })] }))).toHaveLength(0);
+  });
+
+  it('percentageUsed=null (pas de NVMe) → aucun constat', () => {
+    expect(checkDiskServiceLife(input({ smartDisks: [disk({ percentageUsed: null })] }))).toHaveLength(0);
+  });
+
+  it('seuils custom (warnPct 50 / critPct 60) → 55 % = warn, 65 % = crit', () => {
+    const cfg = { ...DEFAULT_AUDIT_CONFIG, checks: { ...DEFAULT_AUDIT_CONFIG.checks, 'disks.disk_service_life': { enabled: true, warnPct: 50, critPct: 60 } } };
+    expect(checkDiskServiceLife(input({ smartDisks: [disk({ percentageUsed: 55 })], config: cfg }))[0].severity).toBe('warn');
+    expect(checkDiskServiceLife(input({ smartDisks: [disk({ percentageUsed: 65 })], config: cfg }))[0].severity).toBe('crit');
+  });
+});
+
+// --- checkFailedUnits ------------------------------------------------------------
+
+describe('checkFailedUnits', () => {
+  it('1 unité en échec → 1 constat warn (cible nœud)', () => {
+    const f = checkFailedUnits(input({ failedUnits: [{ node: 'n1', name: 'openipmi.service' }] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('warn');
+    expect(f[0].check).toBe('system.failed_units');
+    expect(f[0].target.kind).toBe('node');
+    expect(f[0].params).toMatchObject({ node: 'n1', unit: 'openipmi.service' });
+  });
+
+  it('aucune unité en échec → aucun constat', () => {
+    expect(checkFailedUnits(input({ failedUnits: [] }))).toHaveLength(0);
+  });
+
+  it('2 unités en échec (2 nœuds) → 2 constats', () => {
+    expect(checkFailedUnits(input({ failedUnits: [{ node: 'n1', name: 'a.service' }, { node: 'n2', name: 'b.service' }] }))).toHaveLength(2);
+  });
+});
+
+// --- checkPendingReboot ----------------------------------------------------------
+
+describe('checkPendingReboot', () => {
+  it('1 nœud en attente → 1 constat info (cible nœud)', () => {
+    const f = checkPendingReboot(input({ rebootPending: [{ node: 'n1' }] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('info');
+    expect(f[0].check).toBe('system.pending_reboot');
+    expect(f[0].target.kind).toBe('node');
+    expect(f[0].params).toMatchObject({ node: 'n1' });
+  });
+
+  it('aucun nœud en attente → aucun constat', () => {
+    expect(checkPendingReboot(input({ rebootPending: [] }))).toHaveLength(0);
+  });
+});
+
+// --- checkSecurityUpdates --------------------------------------------------------
+
+describe('checkSecurityUpdates', () => {
+  it('count ≥ warnCount (10 ≥ 5) → 1 constat info', () => {
+    const f = checkSecurityUpdates(input({ securityUpdates: [{ node: 'n1', count: 10 }] }));
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('info');
+    expect(f[0].check).toBe('system.security_updates');
+    expect(f[0].params).toMatchObject({ node: 'n1', count: 10, threshold: 5 });
+  });
+
+  it('count < warnCount (3 < 5) → aucun constat', () => {
+    expect(checkSecurityUpdates(input({ securityUpdates: [{ node: 'n1', count: 3 }] }))).toHaveLength(0);
+  });
+
+  it('count = 0 → aucun constat', () => {
+    expect(checkSecurityUpdates(input({ securityUpdates: [{ node: 'n1', count: 0 }] }))).toHaveLength(0);
+  });
+
+  it('seuil custom (warnCount 2) → 2 = info', () => {
+    const cfg = { ...DEFAULT_AUDIT_CONFIG, checks: { ...DEFAULT_AUDIT_CONFIG.checks, 'system.security_updates': { enabled: true, warnCount: 2 } } };
+    expect(checkSecurityUpdates(input({ securityUpdates: [{ node: 'n1', count: 2 }], config: cfg }))).toHaveLength(1);
   });
 });
 

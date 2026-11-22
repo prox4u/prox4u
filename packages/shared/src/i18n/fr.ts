@@ -1026,6 +1026,11 @@ export const fr: Record<string, string> = {
   'audit.finding.replication_state.stale': '{{name}} — réplication obsolète (dernière il y a {{hours}} h)',
   'audit.finding.bond_members': '{{node}} : bond {{bond}} avec {{members}} esclave(s) (redondance perdue)',
   'audit.finding.zfs_arc_max': '{{node}} — ARC ZFS max à {{pct}} % de la RAM (seuil {{threshold}} %)',
+  'audit.finding.disk_errors': '{{node}} : disque {{device}} en erreur SMART ({{model}})',
+  'audit.finding.disk_service_life': '{{node}} : SSD {{device}} à {{pct}} % d’usure (fin de vie proche)',
+  'audit.finding.failed_units': '{{node}} : unité systemd en échec ({{unit}})',
+  'audit.finding.pending_reboot': '{{node}} : redémarrage en attente (mises à jour non appliquées)',
+  'audit.finding.security_updates': '{{node}} : {{count}} correctifs de sécurité en attente (seuil {{threshold}})',
 
   // --- Catalogue des checks (pourquoi / comment) — page « Audit » ---
   'audit.checks.title': 'Catalogue des checks',
