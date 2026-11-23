@@ -576,3 +576,41 @@ détail endpoint (jauge 87 + badge Conforme + constats) ; constats cliquables (c
 > a sélectionné `hypervision_v4` dans « Mon profil → Modules » (le module est globalement activé,
 > mais la sélection par user contrôle la visibilité — cf. skill `general` §auth). Un user sur v2/v3
 > ne le voit pas (il voit la 1ʳᵉ version visible de la famille).
+
+### 11.13. Évolution v4 (en place) — Widget « InfluxDB 3 Core » (santé de la base de métriques)
+
+> **2026-11-23** — Widget `influxdb` sur la vue d'ensemble v4 : **santé live de la base
+> InfluxDB 3 Core** (file d'écriture, abandons, headroom fichiers) + mini-graphe 24 h.
+> Détail complet : **skill `api` § /api/influxdb** + RFC `docs/plan-module-influxdb.md`.
+> Page dédiée `/influxdb` (plugin `influxdb`) : KPIs, 4 graphiques 24h/7j/30j, bases,
+> archivage, 7 actions (réservées groupes `INFLUX_ACTION_GROUPS`).
+
+**Données** :
+- **Live** : `multi.influx: InfluxStatus | null` dans le snapshot WS (zéro API) — calculée par le
+  poller (`computeInfluxStatus()`) : compteurs d'écriture (file/enqueued/flushed/dropped) +
+  headroom fichiers (`fileEstimate`) + ping 60 s **fire-and-forget** (ne bloque jamais le tick).
+  `null` si InfluxDB désactivé/mock → widget affiche « InfluxDB désactivé ».
+- **Mini-graphe 24 h** : `GET /api/influxdb/history?range=24h` (cache serveur 5 min, refresh
+  client 5 min — `useInfluxHistory24h()`). 2 séries : `queueDepth` + `dropped` (cumul).
+  Source : self-telemetry `influxdb_self` (base raw, 1 ligne/tick poller).
+
+**Définition du widget** (`overview.tsx`) :
+- Catalogue : `id: 'influxdb'`, `default: { w: 6, h: 4 }`, `minW: 4`, `minH: 3`,
+  badge `extra` = ping (🟢 ok / 🔴 ko / `…` si `null`).
+- **Layout par défaut** : **ligne pleine largeur** `w: 12, h: 4` à `y = PRA_ROW_Y + PRA_ROW_H`
+  (constantes `INFLUX_ROW_Y` / `INFLUX_ROW_H`, après `pra-global`) — les widgets endpoints
+  (`epY`) sont décalés en conséquence.
+- Rendu : `InfluxDbBody` (`components/influxdb-card.tsx`) — 3 KPIs (File / Abandonnées
+  (cumul) en warn si > 0 / Headroom badge ok-warn-crit) + ECharts 24 h + lien → `/influxdb`.
+
+**i18n** : 60 clés `influxdb.*` (fr/en) — `influxdb.title`, `influxdb.kpi.*`, `influxdb.charts.*`,
+`influxdb.headroom.*`, etc.
+
+**E2E validé** (2026-11-23, lab, compte test-admin) : badge 🟢 + KPIs live (file 21, abandonnées 0,
+headroom OK) + mini-graphe 24 h (courbe visible) + clic → `/influxdb`. Après « Réinitialiser la
+disposition », le widget apparaît à sa position par défaut (après PRA global) — validé screenshot.
+
+> **Note visibilité** : fonctionnalité **v4** (comme §11.12). Piège rencontré : un module
+> `globallyEnabled` n'est **pas** auto-sélectionné dans les préférences d'un user existant
+> (visible = autorisés ∩ préférences, `ModuleRoute` → `visibleModuleIds`) → `/influxdb` redirige
+> vers `/profile` tant que le module n'est pas coché dans « Mon profil → Modules ».

@@ -2411,6 +2411,77 @@ Export/restore de l'administration (users + groupes + **layouts de grilles par u
  - Skill `general` §4.1 (flux PRA global dans le poller).
  - GitHub issue #11 (PRA multi-sites) : **clôturée 2026-11-22** — commentaire « PRA global livré » + commentaire de clôture (code terminé ; `sites.json` = config par déploiement, documentée via `sites.example.json` + guide `DEPLOY.md` §6 — commit `ff598c9`).
 
+## ✅ Fait — Module « InfluxDB 3 Core » : widget vue d'ensemble + page /influxdb + actions (livré, validé E2E navigateur)
+
+> **2026-11-23** — Vision + action sur la base de métriques : **widget « InfluxDB 3 Core »**
+> sur la vue d'ensemble v4 (badge live + KPIs + mini-graphe 24 h) + **page `/influxdb`**
+> (KPIs, 4 graphiques 24h/7j/30j, bases, archivage, 7 actions). Lecture ouverte à tous ;
+> **actions réservées** aux groupes `INFLUX_ACTION_GROUPS` (défaut `Administrateurs,Exploitations`,
+> rôle admin passe toujours). RFC : `docs/plan-module-influxdb.md` (tâches cochées).
+> Détail : skill `api` (§ /api/influxdb) + skill `hypervision` (§ widget influxdb).
+
+### Implémentation
+- **server** : `multi.influx: InfluxStatus | null` dans le snapshot WS (poller `computeInfluxStatus()`
+  — compteurs écriture + headroom fichiers + ping 60 s **fire-and-forget**, `null` si désactivé/mock) ;
+  `GET /api/influxdb` (canAct + archive) · `GET /api/influxdb/history?range=24h|7d|30d`
+  (buckets 5min/15min/1h, cache 5 min) · 7 `POST /api/influxdb/actions/*` (flush, archive
+  run/reset, export, database recreate/drop, table drop) + audit `influxdb.action` ;
+  guard `groupIds` + 403 `influx-actions-group` ; `INFLUX_ACTION_GROUPS` (env, doc `.env.example`
+  + `DEPLOY.md`).
+- **web** : plugin `influxdb` (page + 5 composants : kpi-row, history-charts, databases-card,
+  archive-card, actions-panel) · widget `influxdb` hypervision_v4 (`influxdb-card.tsx`,
+  **dans `overviewDefaultLayout`** — ligne w12 h4 après `pra-global`) · `plugins.ts` +
+  `FEATURES.USE_PLUGIN_INFLUXDB` + `ModuleDef influxdb` (DEFAULT_MODULES) · i18n fr/en
+  (60 clés `influxdb.*`).
+- **Types** : `InfluxHistoryRange/Point/Response` + `InfluxStatus` dans `shared/types.ts`.
+
+### Fichiers
+- `packages/server/src/modules/influxdb/` (routes.ts + routes.test.ts) · `core/influx.ts`
+  (dropDatabase/dropTable) · `core/influx-archiver.ts` (runNow/resetState/exportTable/getState)
+  · `core/poller.ts` (computeInfluxStatus) · `modules/auth/guard.ts` (groupIds) · `index.ts`
+- `packages/web/src/plugins/influxdb/` · `plugins/hypervision_v4/components/influxdb-card.tsx`
+  · `pages/overview.tsx` (widget + default layout) · `core/api/apiClient.ts` (postInfluxAction)
+- `packages/shared/src/types.ts` · `i18n/fr.ts` · `i18n/en.ts` · `docs/plan-module-influxdb.md`
+
+### Vérifications effectuées (E2E navigateur, compte test-admin — 2026-11-23)
+- **Tests** : server **305** verts (dont 32 module influxdb), web typecheck + build OK.
+- **Widget overview** : badge 🟢 (ping) + KPIs live (file 21, abandonnées 0, headroom OK)
+  + mini-graphe 24 h (courbe visible) + clic → `/influxdb`.
+- **Page /influxdb** : KPIs (État « En ligne », latence, headroom 4320/10000) + 4 graphiques
+  + sélecteur 24h/7j/30j + **tableau 4 bases** (`_internal`/`consolidated`/`proxmox`/`raw`)
+  + archivage (borne, fichiers, dossier) + 7 boutons actions (visibles — rôle admin).
+- **Actions** : `flush` ✓ · `export CSV` ✓ (1105 lignes `node_metrics` vérifiées sur disque) ·
+  `archive/run` ✓ (borne avancée, 0 fichier = aucune donnée > 90 j — correct) · dialogs
+  de confirmation destructifs ✓ — toutes loggées `influxdb.action` dans `data/admin-audit.jsonl`.
+- **Layout par défaut** : après « Réinitialiser la disposition », le widget apparaît à sa
+  position par défaut (après PRA global) — validé screenshot.
+
+### Pièges rencontrés (corrigés — ne pas réintroduire)
+- **Serveur tsx sans `--watch`** : le serveur dev (`npm exec tsx src/index.ts`) ne recharge
+  PAS le code — après un commit serveur, **redémarrer** sinon le snapshot sert l'ancien code
+  (c'est ce qui causait le widget « InfluxDB désactivé » alors qu'`INFLUX_TOKEN` était posé).
+- **Module visible = autorisés ∩ préférences** (`ModuleRoute` → `visibleModuleIds`) : un module
+  `globallyEnabled` n'est **pas** auto-sélectionné dans les préférences d'un user existant →
+  route `/influxdb` redirige vers `/profile` tant qu'on ne coche pas le module dans
+  « Mon profil → Modules » (même piège que `hypervision_v4`, § PRA global ci-dessus).
+- **Build Vite en cache** : `pnpm --filter @prox4u/web build` a servi un bundle **ancien**
+  (hash identique) malgré la modif source → `rm -rf dist node_modules/.vite` avant rebuild.
+- **2 bugs corrigés pendant la validation** (commit `94a2cdc`) :
+  1. `listDatabases()` : `GET /api/v3/configure/database` exige `?format=json` (400 sinon) et
+     renvoie la clé **`iox::database`** (pas `db`/`name`) → `databases: []` affichait « Aucune
+     base » alors qu'InfluxDB était en ligne.
+  2. `postInfluxAction()` : `Content-Type: application/json` posé même **sans body** → Fastify
+     rejetait (`FST_ERR_CTP_EMPTY_JSON_BODY`, 400) sur flush/archive → Content-Type conditionnel
+     (pattern `request()` d'`auth-api.ts`).
+
+### Backlog (issues GitHub — voir § Suivi des tâches)
+- **#14** Enterprise (stratégique) · **#15** Parquet · **#16** Version « — » + Rétention « infinie »
+  (limites API : `server-info` 404 + GET bases sans rétention) · **#17** tests restants
+  (P2 vue 1 an > 69 j + `influxAlerts()`) · **#18** sharding (stratégique) · **#19** P3
+  calculateur de dimensionnement.
+
+---
+
 ## ⏳ Suivi des tâches (GitHub)
 
 Le **backlog et le suivi des tâches** sont désormais dans les **issues GitHub**
@@ -2419,7 +2490,7 @@ Les sections « ✅ Fait » ci-dessus conservent l'historique des livraisons ; l
 de référence (ProxMenux, Telegraf) est dans les skills (`monitoring-proxmenux`, `audit`,
 `node-sensors`, `centreon-nsca`).
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)**. Labels : `validation` / `feature` / `decision`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet** · **#16 InfluxDB affichage Version + Rétention** · **#17 InfluxDB vérifs/tests restants (P2 vue 1 an + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement**. Labels : `validation` / `feature` / `decision` / `enhancement`.
 
 ---
 
