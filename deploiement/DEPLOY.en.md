@@ -366,24 +366,55 @@ script prepares the central, **idempotently**:
 4. **NSCA password** generated + written to `nsca.cfg` on the chosen poller(s) (best-effort —
    the `nsca` daemon is a centreon-engine add-on, install it if missing).
 
-### 11.1 Running it
+### 11.1 Procedure (admin, on the central)
 
-On the **Centreon central**, as **root** (the script needs the DB for the token), with the kit
-script:
+The script is **self-contained** (a single file, ~420 lines) — dependencies `curl`, `python3`,
+`openssl`, `mysql`, all present by default on a Centreon central. It must run **as root on the
+central** (DB access is required for the token).
+
+**Step 1 — Copy the script to the central.** From the dev machine (or the Prox4u server, where
+the kit lives in `deploiement/`):
 
 ```bash
-bash 70-centreon-setup.sh             # interactive: the admin enters the credentials
-bash 70-centreon-setup.sh --dry-run   # preview (nothing is executed, no prompts)
+scp deploiement/70-centreon-setup.sh root@<central-ip>:/root/
 ```
 
-The script asks for: the admin login (default `admin`) + its password (masked), the `prox4u`
-account password (entry + confirmation), then the poller(s) for the NSCA password (list from
-the DB + selection). At the end it **self-verifies** (token accepted by the new API
-`/api/latest/` via the `X-AUTH-TOKEN` header + NSCA listener over TCP) and prints a **summary**
-with the config to paste into Prox4u (Admin → Centreon (NSCA)).
+**Step 2 — Preview (nothing is executed, no prompts).** On the central, as root:
 
-Flags: `--remove` (cleans up group/account/token — services created by the module are kept),
-`--rotate-token`, `--rotate-nsca`.
+```bash
+bash /root/70-centreon-setup.sh --dry-run
+```
+
+**Step 3 — Real run (interactive).** The admin enters, as prompted:
+
+```bash
+bash /root/70-centreon-setup.sh
+```
+
+1. **Centreon admin login** (default `admin`) + **password** (masked entry);
+2. **`prox4u` account password** (entry + confirmation);
+3. **Poller(s) selection** for the NSCA password (list from the DB + selection).
+
+The script creates the group + account + token + NSCA password, then **self-verifies** (token
+accepted by the new API `/api/latest/` via the `X-AUTH-TOKEN` header + NSCA listener over TCP)
+and prints a **summary** at the end.
+
+**Step 4 — Enter the summary into Prox4u.** Copy the summary config into **Admin → Centreon
+(NSCA)** (see §11.3). The token and the NSCA password appear **once only** (§11.3).
+
+**Step 5 — Check the NSCA daemon** (best-effort): the script writes `nsca.cfg` and TCP-tests
+the listener, but installing/starting the `nsca` daemon (centreon-engine add-on) on the poller
+is the admin's job (on-screen warnings).
+
+**Re-run / maintenance** (idempotent — re-runnable with no side effects):
+
+| Flag | Effect |
+|---|---|
+| *(none)* | recreates what is missing, reuses existing token/NSCA password |
+| `--dry-run` | preview, nothing is executed |
+| `--rotate-token` | new API token (the old one is revoked) |
+| `--rotate-nsca` | new NSCA password (rewrites `nsca.cfg`) |
+| `--remove` | cleans up group/account/token (services created by the module are **kept**) |
 
 ### 11.2 Environment variables
 

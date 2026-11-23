@@ -365,24 +365,56 @@ NSCA. Le script du kit prépare le central de façon **idempotente** :
 4. **mot de passe NSCA** généré + écrit dans `nsca.cfg` sur le(s) poller(s) choisi(s)
    (best-effort — le daemon `nsca` est un add-on centreon-engine, à installer si absent).
 
-### 11.1 Exécution
+### 11.1 Marche à suivre (admin, sur le central)
 
-Sur le **central Centreon**, en **root** (le script a besoin de la DB pour le token), avec le
-script du kit :
+Le script est **autonome** (un seul fichier, ~420 lignes) — dépendances `curl`, `python3`,
+`openssl`, `mysql`, toutes présentes par défaut sur un central Centreon. Il doit tourner **en
+root sur le central** (accès DB requis pour le token).
+
+**Étape 1 — Amener le script sur le central.** Depuis la machine de dev (ou le serveur
+Prox4u, où le kit vit dans `deploiement/`) :
 
 ```bash
-bash 70-centreon-setup.sh             # interactif : l'admin saisit les identifiants
-bash 70-centreon-setup.sh --dry-run   # aperçu (rien n'est exécuté, aucun prompt)
+scp deploiement/70-centreon-setup.sh root@<ip-central>:/root/
 ```
 
-Le script demande : l'identifiant admin (défaut `admin`) + son mot de passe (masqué), le mot
-de passe du compte `prox4u` (saisie + confirmation), puis le(s) poller(s) pour le mdp NSCA
-(liste depuis la DB + choix). En fin d'exécution il **auto-vérifie** (token accepté par la
-nouvelle API `/api/latest/` via l'en-tête `X-AUTH-TOKEN` + listener NSCA en TCP) et affiche un
-**récap** avec la config à coller dans Prox4u (Admin → Centreon (NSCA)).
+**Étape 2 — Aperçu (rien n'est exécuté, aucun prompt).** Sur le central, en root :
 
-Flags : `--remove` (nettoie groupe/compte/token — les services créés par le module sont
-conservés), `--rotate-token`, `--rotate-nsca`.
+```bash
+bash /root/70-centreon-setup.sh --dry-run
+```
+
+**Étape 3 — Exécution réelle (interactive).** L'admin saisit, au fil des prompts :
+
+```bash
+bash /root/70-centreon-setup.sh
+```
+
+1. **Identifiant admin** Centreon (défaut `admin`) + **mot de passe** (saisie masquée) ;
+2. **Mot de passe du compte `prox4u`** (saisie + confirmation) ;
+3. **Choix du/des poller(s)** pour le mdp NSCA (liste depuis la DB + sélection).
+
+Le script crée groupe + compte + token + mdp NSCA, puis **auto-vérifie** (token accepté par la
+nouvelle API `/api/latest/` via l'en-tête `X-AUTH-TOKEN` + listener NSCA en TCP) et affiche un
+**récap** en fin d'exécution.
+
+**Étape 4 — Saisir le récap dans Prox4u.** Copier la config du récap dans
+**Admin → Centreon (NSCA)** (cf. §11.3). Le token et le mdp NSCA n'y figurent **qu'une fois**
+(§11.3).
+
+**Étape 5 — Vérifier le daemon NSCA** (best-effort) : le script écrit `nsca.cfg` et teste le
+listener (TCP), mais l'installation/démarrage du daemon `nsca` (add-on centreon-engine) sur le
+poller est à la charge de l'admin (avertissements à l'écran).
+
+**Relance / maintenance** (idempotent — relançable sans effet de bord) :
+
+| Flag | Effet |
+|---|---|
+| *(aucun)* | recrée ce qui manque, réutilise token/mdp NSCA existants |
+| `--dry-run` | aperçu, rien n'est exécuté |
+| `--rotate-token` | nouveau token API (l'ancien est révoqué) |
+| `--rotate-nsca` | nouveau mdp NSCA (réécrit `nsca.cfg`) |
+| `--remove` | nettoie groupe/compte/token (les services créés par le module sont **conservés**) |
 
 ### 11.2 Variables d'environnement
 
