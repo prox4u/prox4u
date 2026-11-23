@@ -83,7 +83,9 @@ function overviewDefaultLayout(eps: EndpointSnapshot[]): WidgetItem[] {
   const TEMP_ROW_H = 4;
   const PRA_ROW_Y = TEMP_ROW_Y + TEMP_ROW_H;
   const PRA_ROW_H = 4;
-  const epY = PRA_ROW_Y + PRA_ROW_H;
+  const INFLUX_ROW_Y = PRA_ROW_Y + PRA_ROW_H;
+  const INFLUX_ROW_H = 4;
+  const epY = INFLUX_ROW_Y + INFLUX_ROW_H;
   const epItems = eps.map((ep, i) => ({
     widgetId: `ep-${ep.id}`,
     x: (i % 3) * 4,
@@ -104,6 +106,9 @@ function overviewDefaultLayout(eps: EndpointSnapshot[]): WidgetItem[] {
     { widgetId: 'sys-nodes', x: 0, y: SYS_ROW_Y, w: 12, h: SYS_ROW_H },
     { widgetId: 'temp-nodes', x: 0, y: TEMP_ROW_Y, w: 12, h: TEMP_ROW_H },
     { widgetId: 'pra-global', x: 0, y: PRA_ROW_Y, w: 12, h: PRA_ROW_H },
+    // InfluxDB 3 Core (santé de la base de métriques) — ligne pleine largeur
+    // (pattern pra-global) ; visible par défaut, redimensionnable par l'user.
+    { widgetId: 'influxdb', x: 0, y: INFLUX_ROW_Y, w: 12, h: INFLUX_ROW_H },
     ...epItems,
     { widgetId: 'alerts', x: 0, y: bottomY, w: 5, h: 3 },
     { widgetId: 'table', x: 5, y: bottomY, w: 7, h: 3 },
