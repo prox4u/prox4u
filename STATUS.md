@@ -2512,6 +2512,7 @@ packages/server/src/modules/dashboard/routes.ts   # /api/* (?endpoint=, InfluxDB
 packages/server/src/modules/supervision/routes.ts # /api/network-topology + /api/storage-inventory (cache 5 min) + /api/storage-datastore-history (séries d'occupation par datastore + prévision, datastore_metrics InfluxDB / repli RRD)
 packages/server/src/modules/vminventory/routes.ts # /api/vm-config (live + config cache 1 h + snapshots à la demande, cache 5 min) + /api/vm-metrics (historique VM InfluxDB, cache 5 min)
 packages/server/src/modules/nodesensors/routes.ts # /api/node-sensors (métriques locales Telegraf : SMART, capteurs, ZFS ARC, unités systemd — cache 1 min, base raw)
+packages/server/src/modules/influxdb/routes.ts    # /api/influxdb (+ /history?range= + 7 POST /actions/*) — module InfluxDB 3 Core (santé + actions, guard groupes INFLUX_ACTION_GROUPS, audit influxdb.action)
 packages/server/src/modules/auth/     # store (data/auth.json) + routes (login/me/logout/preferences/admin) + guard API & WS
 packages/server/src/index.ts  # entry Fastify HTTPS + SPA + WS (buildEndpoints, fallback default)
 packages/web/src/app.tsx      # router host : routes des plugins actifs + layout shell (ModuleDisabled si flag OFF)
@@ -2523,6 +2524,7 @@ packages/web/src/plugins/storage/             # storage.tsx + storage-inventory 
 packages/web/src/plugins/vm-inventory/        # vm-inventory.tsx + vm-tree (Datacenter→cluster→nœud), vm-table (filtres/tri), vm-detail (onglets Config/Réseau/Snapshots) (menu order 40)
 packages/web/src/plugins/vm-inventory_v2/     # approche vCenter : arbre avec feuilles VM + détail plein écran (onglets, grille Résumé style vSphere) + bouton « Console web (UI PVE) » + colonne « Agent PVE » (version canonique = la plus récente)
 packages/web/src/plugins/proxmox-inventory/   # inventaire consolidé multi-endpoints (une machine par ligne QEMU+LXC) : OS réel (agent), disques par fs, interfaces/IPs, tags, état agent PVE, filtres par colonne + export TXT/CSV/JSON (menu order 50)
+packages/web/src/plugins/influxdb/            # page /influxdb (module InfluxDB 3 Core, menu order 80) : kpi-row, history-charts (24h/7j/30j), databases-card, archive-card, actions-panel (7 actions, visibles si canAct) — + widget `influxdb` dans hypervision_v4 (overview)
 packages/web/src/components/auth/             # login-form, protected-route (ProtectedRoute+ModuleRoute), change-password-form, module-selector (une case par version)
 packages/web/src/components/admin/            # module-catalog (une carte par version, sans activation), group-manager, user-manager
 packages/web/src/pages/{login,profile,admin}/ # auth + admin (3 onglets : catalogue / groupes / utilisateurs)
