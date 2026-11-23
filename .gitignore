@@ -23,3 +23,10 @@ releases/
 
 # TypeScript incremental build
 *.tsbuildinfo
+
+# Infra Gitea privée (usage « entre nous ») — hors git (Gitea + GitHub),
+# gardée en local + dans le tar de backup quotidien.
+skills/git/
+scripts/backup-gitea.sh
+skills/README.md
+skills/general/SKILL.md
