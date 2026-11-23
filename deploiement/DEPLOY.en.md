@@ -350,3 +350,62 @@ curl -sk https://localhost:8181/api/v3/query_sql -H "Authorization: Bearer $TOK"
 **16 tables** expected (10 native plugins + 6 exec scripts). The agent-based audit checks
 activate on the next poller tick (5-min caches). Troubleshooting on the node:
 `journalctl -u telegraf -n 30 --no-pager`.
+
+## 11. Centreon — account, API token & NSCA (« Alarmes & Centreon » module)
+
+Optional: the « Alarmes & Centreon » module (`centreon-nsca` family) provisions passive
+services on a **Centreon central** (versions **22 → 26**) and sends NSCA frames to it. The kit
+script prepares the central, **idempotently**:
+
+1. permission group `groupeprox4u` (CLAPI `ACLGROUP`);
+2. account `prox4u` (CLAPI `CONTACT`, `contact_admin=1` → **global admin**: full API/CLAPI
+   rights, robust across 22→26) + membership in the group;
+3. **API token** generated + inserted in the DB (`security_token` +
+   `security_authentication_tokens`, 21.10+ schema; fallback `token` table ≤ 20.x) — shown
+   **once only**;
+4. **NSCA password** generated + written to `nsca.cfg` on the chosen poller(s) (best-effort —
+   the `nsca` daemon is a centreon-engine add-on, install it if missing).
+
+### 11.1 Running it
+
+On the **Centreon central**, as **root** (the script needs the DB for the token), with the kit
+script:
+
+```bash
+bash 70-centreon-setup.sh             # interactive: the admin enters the credentials
+bash 70-centreon-setup.sh --dry-run   # preview (nothing is executed, no prompts)
+```
+
+The script asks for: the admin login (default `admin`) + its password (masked), the `prox4u`
+account password (entry + confirmation), then the poller(s) for the NSCA password (list from
+the DB + selection). At the end it **self-verifies** (token accepted by the new API
+`/api/latest/` via the `X-AUTH-TOKEN` header + NSCA listener over TCP) and prints a **summary**
+with the config to paste into Prox4u (Admin → Centreon (NSCA)).
+
+Flags: `--remove` (cleans up group/account/token — services created by the module are kept),
+`--rotate-token`, `--rotate-nsca`.
+
+### 11.2 Environment variables
+
+| Variable | Default | Note |
+|---|---|---|
+| `CENTRON_URL` | `http://localhost/centreon` | central base URL (the script runs on the central) |
+| `GROUP_NAME` | `groupeprox4u` | permission group name |
+| `USER_LOGIN` | `prox4u` | account login |
+| `USER_EMAIL` | `prox4u@localhost` | account email |
+| `NSCA_PORT` | `5668` | NSCA listener port |
+| `NSCA_CFG_PATH` | `/etc/centreon/nsca.cfg` | `nsca.cfg` path on the poller |
+| `NSCA_CHECK_COMMAND` | `/usr/bin/centengine -c /etc/centengine/centengine.cfg --external-command` | check submission to centengine — **verify** per environment |
+
+### 11.3 Prox4u config (Page 3)
+
+After the run, enter the printed summary into Prox4u (Admin → Centreon (NSCA)): **Transport**
+REST (URL = `CENTRON_URL`, user = `prox4u`, token = printed) + **NSCA** (server = poller IP,
+port, password = printed).
+
+> ⚠ The token and the NSCA password are shown **once only** (and stored in the DB). If lost,
+> re-run with `--rotate-token` / `--rotate-nsca`.
+>
+> ⚠ **NSCA**: the `nsca` daemon (centreon-engine add-on) must be installed + running on the
+> poller. The script writes `nsca.cfg` and TCP-tests the listener, but installing the daemon is
+> the admin's job (best-effort, on-screen warnings).

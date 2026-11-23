@@ -64,7 +64,9 @@ packages/web/src/components/admin/nsca-config.tsx  # Page 3 (onglet admin)
 ### 4.2 Provisioning — CLAPI **ou** REST v1 (choix Page 3)
 Paramètres du service passif (les deux transports) : `passive_checks_enabled=1`, `active_checks_enabled=0`, `is_volatile=1`, `max_check_attempts=1`, `check_command=check_dummy!0` (factice, jamais exécutée).
 - **CLAPI** : `centreon -u <u> -p <pass> -o SERVICE -a add -v "<host>;<svc>"` + `setparam` ×5, puis `POLLERGENERATE -v "<poller>"` + `CFGMOVE -v "<poller>"`. Séquence testée dans shared (`clapiProvisionCommands`). **Mode SSH** (Prox4u hors central — nominal) : `ssh <u>@<host> "centreon …"` ; **mode local** si Prox4u est sur le central. Le mot de passe est injecté **sur stdin** (`-p "$(cat)"`) → jamais dans l'argv (ps) ni loggué.
-- **REST v1** : Basic auth (user + token d'API) sur `/api/restapi` : `GET /host`, `GET /command?search=check_dummy`, `POST /service`, `PUT /service/{id}` (params), `GET /instance/poller`, `POST /instance/poller/{id}/config/generate` + `…/config/move`.
+- **REST v1** : token d'API Centreon sur la **nouvelle API** `/api/latest/`, en-tête **`X-AUTH-TOKEN`** (pas Basic auth) : ressources `/configuration/hosts`, `/configuration/services`, `/configuration/pollers`, `/configuration/commands`. ⚠ **À refondre** : le code actuel (`provision.ts`) cible encore `/api/restapi/` + Basic auth (user:token) — chemin + auth + formats d'input à aligner sur la nouvelle API (cf. §7).
+
+**Compte + token + NSCA** : le script du kit `deploiement/70-centreon-setup.sh` (DEPLOY.md §11) prépare le central — groupe `groupeprox4u` + compte `prox4u` (**admin global**, CLAPI `CONTACT` `contact_admin=1`) + **token API** (SQL `security_token` + `security_authentication_tokens`) + mdp **NSCA** (`nsca.cfg`). Idempotent, `--dry-run`/`--remove`/`--rotate-token`/`--rotate-nsca`, 100 % interactif (l'admin saisit les crédos), auto-vérif + récap Page 3.
 
 **Enchaînement imposé** : création du service → génération de config → déploiement (`POLLERGENERATE`/`CFGMOVE` ou `config/generate`+`config/move`). Un service passif ne reçoit des trames NSCA qu'après déploiement.
 
@@ -85,6 +87,7 @@ Tick 15 s, pour chaque règle active (module actif) : échantillonner la métriq
 - **Page 3 = onglet admin** « Centreon (NSCA) » (à côté de Catalogue/Groupes/Users), pas une route publique.
 
 ## 7. Pièges
+- **Transport REST = nouvelle API** : la nouvelle API Centreon est servie sur `/api/latest/` (pas `/api/restapi/`, qui renvoie le fallback SPA 404) et s'authentifie par l'en-tête **`X-AUTH-TOKEN`** (pas Basic auth user:token). Les ressources sont `/configuration/hosts`, `/configuration/services`, `/configuration/pollers`, `/configuration/commands` (pas `/host`, `/service`, `/instance/poller`). Le token est stocké dans `security_token` + `security_authentication_tokens` (schéma 21.10+), pas dans l'ancienne table `token`. ⚠ Le `provision.ts` actuel cible encore l'ancien contrat → **à refondre** avant d'activer le transport REST en réel.
 - **send_nsca absent** → le binaire doit être installé sur le serveur Prox4u (`apt install nsca-client` / `nsca`), sinon `send_nsca indisponible`. Le fichier `send_nsca.cfg` est généré automatiquement par l'app.
 - **Service non déployé** → les trames sont rejetées par le daemon NSCA si le service n'a pas été `CFGMOVE`'d. Toujours enchaîner génération+déploiement.
 - **`check_dummy!0`** est une commande factice (jamais exécutée, passive pur) — ne pas la remplacer par un vrai check.

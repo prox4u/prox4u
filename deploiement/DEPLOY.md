@@ -350,3 +350,61 @@ curl -sk https://localhost:8181/api/v3/query_sql -H "Authorization: Bearer $TOK"
 **16 tables** attendues (10 plugins natifs + 6 scripts exec). Les checks d'audit fondés sur
 l'agent s'activent au tick suivant du poller (caches 5 min). Dépannage sur le nœud :
 `journalctl -u telegraf -n 30 --no-pager`.
+
+## 11. Centreon — compte, token API & NSCA (module « Alarmes & Centreon »)
+
+Optionnel : le module « Alarmes & Centreon » (famille `centreon-nsca`) provisionne des
+services passifs sur un **central Centreon** (versions **22 → 26**) et y envoie des trames
+NSCA. Le script du kit prépare le central de façon **idempotente** :
+
+1. groupe de permission `groupeprox4u` (CLAPI `ACLGROUP`) ;
+2. compte `prox4u` (CLAPI `CONTACT`, `contact_admin=1` → **admin global** : tous les droits
+   API/CLAPI, robuste 22→26) + rattachement au groupe ;
+3. **token API** généré + inséré en base (`security_token` + `security_authentication_tokens`,
+   schéma 21.10+ ; fallback table `token` ≤ 20.x) — affiché **une seule fois** ;
+4. **mot de passe NSCA** généré + écrit dans `nsca.cfg` sur le(s) poller(s) choisi(s)
+   (best-effort — le daemon `nsca` est un add-on centreon-engine, à installer si absent).
+
+### 11.1 Exécution
+
+Sur le **central Centreon**, en **root** (le script a besoin de la DB pour le token), avec le
+script du kit :
+
+```bash
+bash 70-centreon-setup.sh             # interactif : l'admin saisit les identifiants
+bash 70-centreon-setup.sh --dry-run   # aperçu (rien n'est exécuté, aucun prompt)
+```
+
+Le script demande : l'identifiant admin (défaut `admin`) + son mot de passe (masqué), le mot
+de passe du compte `prox4u` (saisie + confirmation), puis le(s) poller(s) pour le mdp NSCA
+(liste depuis la DB + choix). En fin d'exécution il **auto-vérifie** (token accepté par la
+nouvelle API `/api/latest/` via l'en-tête `X-AUTH-TOKEN` + listener NSCA en TCP) et affiche un
+**récap** avec la config à coller dans Prox4u (Admin → Centreon (NSCA)).
+
+Flags : `--remove` (nettoie groupe/compte/token — les services créés par le module sont
+conservés), `--rotate-token`, `--rotate-nsca`.
+
+### 11.2 Variables d'environnement
+
+| Variable | Défaut | Note |
+|---|---|---|
+| `CENTRON_URL` | `http://localhost/centreon` | base URL du central (le script tourne sur le central) |
+| `GROUP_NAME` | `groupeprox4u` | nom du groupe de permission |
+| `USER_LOGIN` | `prox4u` | login du compte |
+| `USER_EMAIL` | `prox4u@localhost` | email du compte |
+| `NSCA_PORT` | `5668` | port du listener NSCA |
+| `NSCA_CFG_PATH` | `/etc/centreon/nsca.cfg` | chemin de `nsca.cfg` sur le poller |
+| `NSCA_CHECK_COMMAND` | `/usr/bin/centengine -c /etc/centengine/centengine.cfg --external-command` | soumission du check à centengine — **à vérifier** selon l'env |
+
+### 11.3 Config Prox4u (Page 3)
+
+Après exécution, saisir dans Prox4u (Admin → Centreon (NSCA)) le récap affiché :
+**Transport** REST (URL = `CENTRON_URL`, user = `prox4u`, token = affiché) + **NSCA**
+(serveur = IP du poller, port, mdp = affiché).
+
+> ⚠ Le token et le mdp NSCA ne sont affichés **qu'une fois** (et stockés en base). En cas de
+> perte, relancer avec `--rotate-token` / `--rotate-nsca`.
+>
+> ⚠ **NSCA** : le daemon `nsca` (add-on centreon-engine) doit être installé + démarré sur le
+> poller. Le script écrit `nsca.cfg` et teste le listener (TCP), mais l'installation du daemon
+> est à la charge de l'admin (best-effort, avertissements à l'écran).

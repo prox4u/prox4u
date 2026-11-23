@@ -1,6 +1,6 @@
 ---
 name: operations
-description: Runbook production de Prox4u — kit de déploiement autonome (deploiement/), pointage INFLUX_URL vers un InfluxDB externe, agent Telegraf sur les nœuds PVE (60-telegraf-nodes.sh, 16 tables, DEPLOY.md §10), systemd/server.sh, logs, dépannage (WS, repli InfluxDB→RRD, TLS SAN, tokens PVE). Use when deploying, updating, or troubleshooting the app in production.
+description: Runbook production de Prox4u — kit de déploiement autonome (deploiement/), pointage INFLUX_URL vers un InfluxDB externe, agent Telegraf sur les nœuds PVE (60-telegraf-nodes.sh, 16 tables, DEPLOY.md §10), setup Centreon pour le module Alarmes & Centreon (70-centreon-setup.sh : groupe + compte admin global + token API + mdp NSCA, DEPLOY.md §11), systemd/server.sh, logs, dépannage (WS, repli InfluxDB→RRD, TLS SAN, tokens PVE). Use when deploying, updating, or troubleshooting the app in production.
 ---
 
 # Prox4u — Runbook production
@@ -24,9 +24,10 @@ On déplace **tout le dossier** sur la cible et on déploie depuis lui :
 | `40-tls-init.sh <dir>` | serveur applicatif | Certificats auto-signés (app + InfluxDB) ; `TLS_SAN_EXTRA="IP:<ip>"` pour l'accès distant |
 | `50-influxdb-init.sh <dir>` | serveur applicatif | Token admin InfluxDB (met à jour `.env`) — seulement si l'app gère son propre InfluxDB |
 | `60-telegraf-nodes.sh` | chaque nœud PVE (root) | Agent Telegraf : 16 tables (SMART, capteurs, ZFS, systemd, I/O, réseau, quorum, reboot, updates) — idempotent, `--dry-run`, self-test. Env : `TELEGRAF_INFLUX_TOKEN` (requis), `INFLUX_URL`/`INFLUX_BUCKET`/`INFLUX_ORG` (défauts labo). Détail : `deploiement/DEPLOY.md` §10 |
+| `70-centreon-setup.sh` | central Centreon (root) | Module « Alarmes & Centreon » : groupe `groupeprox4u` + compte `prox4u` (admin global, CLAPI `CONTACT`) + **token API** (SQL `security_token`) + mdp **NSCA** (`nsca.cfg`) — idempotent, `--dry-run`/`--remove`/`--rotate-token`/`--rotate-nsca`, 100 % interactif (crédos admin saisies par l'admin), auto-vérif + récap Page 3. Env : `CENTRON_URL`, `NSCA_PORT`, `NSCA_CFG_PATH`. Détail : `deploiement/DEPLOY.md` §11 |
 | `prox4u.service` | systemd | Unit (`Restart=always`, user `proxmox`) |
 
-Ordre : tokens PVE → tarball → install `/opt/prox4u` + `pnpm install --prod` → 30 → 40 → (50 si besoin) → `clusters.json` + `sites.json` + `overcommit.json` → `./up.sh` → **60 sur chaque nœud PVE** (indépendant, peut être fait après).
+Ordre : tokens PVE → tarball → install `/opt/prox4u` + `pnpm install --prod` → 30 → 40 → (50 si besoin) → `clusters.json` + `sites.json` + `overcommit.json` → `./up.sh` → **60 sur chaque nœud PVE** (indépendant, peut être fait après) → **70 sur le central Centreon** (seulement si le module Alarmes & Centreon est utilisé, indépendant).
 
 - **`sites.json`** (mapping nœuds → bâtiments, requis PRA) : template `sites.example.json` (JSON strict, multi-endpoints/multi-bâtiments) + guide de remplissage champ par champ dans `deploiement/DEPLOY.md` §6. Mapper **tous** les nœuds (sinon « nœuds non mappés » hors PRA) ; PRA seulement si nœuds répartis sur ≥ 2 sites.
 
