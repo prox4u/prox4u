@@ -201,7 +201,8 @@ manuellement).
 - [x] Poller : self-telemetry `influxdb_self` (1 ligne/tick)
 - [x] Alertes `influxdb-write-drops` / `influxdb-file-headroom` / `influxdb-down` (+ i18n fr/en)
 - [x] Enregistrement du module dans le loader
-- [ ] Tests : route (enabled/désactivé), alertes (optionnel)
+- [x] Tests : route (enabled/désactivé, headroom) — `influxdb/routes.test.ts`
+- [ ] Tests : alertes `influxAlerts()` (optionnel — fonction pure, non couverte)
 
 ### P5 — Archivage
 - [x] `influx-archiver.ts` : timer + état `data/archive-state.json` + reprise
@@ -209,7 +210,7 @@ manuellement).
 - [x] `config.ts` : `INFLUX_ARCHIVE_INTERVAL`, `INFLUX_ARCHIVE_AGE`, `INFLUX_ARCHIVE_DIR`
 - [x] Démarrage/arrêt dans `index.ts` (comme le consolidateur)
 - [x] `DEPLOY.md` : stratégie de rétention + `data/influx-archive/` dans la sauvegarde
-- [ ] Tests : export idempotent, reprise après arrêt, état (optionnel)
+- [x] Tests : export CSV 1/table/jour, table absente ignorée, erreur → état figé, reprise — `influx-archiver.test.ts`
 
 ## Fichiers à créer/modifier
 | Fichier | Action |
