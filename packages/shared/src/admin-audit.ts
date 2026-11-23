@@ -45,6 +45,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   'catalog.sync',
   'backup.import',
   'backup.export',
+  'influxdb.action',
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];

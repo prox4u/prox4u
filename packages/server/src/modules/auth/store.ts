@@ -245,6 +245,11 @@ export class AuthStore {
     return this.data.groups.find((g) => g.id === id);
   }
 
+  /** Ids des groupes auxquels appartient un user (table userGroups). */
+  groupIdsForUser(userId: string): string[] {
+    return this.data.userGroups.filter((ug) => ug.userId === userId).map((ug) => ug.groupId);
+  }
+
   /** Crée un groupe. Lève une erreur si le nom existe déjà. */
   createGroup(name: string, description: string): Group {
     if (this.data.groups.some((g) => g.name === name)) throw new Error('group-name-exists');

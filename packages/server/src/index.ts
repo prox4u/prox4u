@@ -126,7 +126,10 @@ async function main(): Promise<void> {
   };
   const poller = new Poller(ctx, hub);
   const consolidator = new InfluxConsolidator(ctx);
+  // L'archiver a besoin de ctx (config/logger/influx) et ctx doit le contenir
+  // (routes d'actions) → on le crée après ctx puis on le pose dessus.
   const archiver = new InfluxArchiver(ctx);
+  ctx.archiver = archiver;
 
   // https.Server hérite de http.Server : le cast est structurellement sûr
   const app = (config.tls

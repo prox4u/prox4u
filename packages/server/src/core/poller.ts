@@ -20,6 +20,7 @@ import {
   type AuditZfsArc,
   type DashboardSnapshot,
   type EndpointSnapshot,
+  type InfluxStatus,
   type KpiSummary,
   type MultiDashboardSnapshot,
   type NodeHealth,
@@ -39,6 +40,7 @@ import { reloadOvercommitConfig, reloadTunableConfigs, type AppConfig } from './
 import type { DataSource } from './data-source.js';
 import { AGENT_CONCURRENCY, mapLimit } from './prox4u-client.js';
 import { buildLine, type InfluxClient } from './influx.js';
+import type { InfluxArchiver } from './influx-archiver.js';
 import type { WsHub } from './ws-hub.js';
 import type { AuthContext } from '../modules/auth/runtime.js';
 import type { UserConfigStore } from '../modules/userconfig/store.js';
@@ -59,6 +61,12 @@ export interface AppContext {
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
   /** client InfluxDB (désactivé si INFLUX_TOKEN vide) */
   influx: InfluxClient;
+  /**
+   * archiver InfluxDB (consolidated → CSV) — accessible aux routes d'actions
+   * (POST /api/influxdb/actions/archive/*). Optionnel : absent des mocks de tests
+   * qui ne testent pas les actions ; toujours posé en production (index.ts).
+   */
+  archiver?: InfluxArchiver;
   /** runtime d'authentification (store data/auth.json, sessions, provider, journal d'audit) */
   auth: AuthContext;
   /** personnalisation d'interface par user (data/user-configs/<userId>.json) */
@@ -68,6 +76,11 @@ export interface AppContext {
 }
 
 const DAY_MS = 86_400_000;
+/**
+ * TTL du ping InfluxDB dans le snapshot multi : le ping (timeout 3 s) est
+ * relancé au plus toutes les 60 s, en fire-and-forget — le tick n'attend jamais.
+ */
+const INFLUX_PING_TTL_MS = 60_000;
 
 /** TTL du cache réseau (ponts + bonds) pour l'audit — topologie quasi statique. */
 const AUDIT_NETWORK_TTL_MS = 5 * 60 * 1000;
@@ -201,6 +214,12 @@ export class Poller {
    * cache 5 min par endpoint (table Telegraf `security_updates`). `[]` mis en cache.
    */
   private updatesCache = new Map<string, { at: number; securityUpdates: AuditSecurityUpdates[] }>();
+  /**
+   * Ping InfluxDB mis en cache (INFLUX_PING_TTL_MS) : `at` = timestamp de la
+   * dernière relance (s sert aussi de « génération » pour rejeter les résultats
+   * de pings obsolètes), `ok` = dernier résultat connu (null = 1ʳᵉ mesure en cours).
+   */
+  private influxPing = { at: 0, ok: null as boolean | null };
 
   constructor(
     private ctx: AppContext,
@@ -276,6 +295,7 @@ export class Poller {
         overcommit: this.ctx.config.overcommit,
         endpoints,
         globalPra: this.computeGlobalPra(),
+        influx: this.computeInfluxStatus(),
       };
       this.hub.broadcast(this.multi);
       this.writeSelfTelemetry();
@@ -309,6 +329,47 @@ export class Poller {
         Math.floor(Date.now() / 1000),
       ),
     );
+  }
+
+  /**
+   * Santé InfluxDB 3 Core (globale — ressource unique, non par endpoint) :
+   * compteurs d'écriture en mémoire (getStats) + headroom fichiers (fileEstimate)
+   * + ping mis en cache (INFLUX_PING_TTL_MS).
+   *
+   * Le ping est FIRE-AND-FORGET : s'il est périmé, on le relance sans attendre —
+   * le tick ne bloque jamais sur InfluxDB. Entre deux pings, la dernière valeur
+   * connue est servie. `null` si InfluxDB est désactivé (repli RRD) ou en mock.
+   */
+  private computeInfluxStatus(): InfluxStatus | null {
+    const influx = this.ctx.influx;
+    if (!influx.enabled || this.ctx.config.mock) return null;
+    const s = influx.getStats();
+    const fe = influx.fileEstimate();
+    const now = Date.now();
+    if (now - this.influxPing.at >= INFLUX_PING_TTL_MS) {
+      const gen = now;
+      this.influxPing.at = gen;
+      void influx
+        .ping()
+        .then((ok) => {
+          if (this.influxPing.at === gen) this.influxPing.ok = ok;
+        })
+        .catch(() => {
+          if (this.influxPing.at === gen) this.influxPing.ok = false;
+        });
+    }
+    return {
+      enabled: true,
+      ping: this.influxPing.ok,
+      queueDepth: s.queueDepth,
+      enqueued: s.enqueued,
+      flushed: s.flushed,
+      dropped: s.dropped,
+      failedBatches: s.failedBatches,
+      headroom: fe.headroom,
+      chunkFiles: fe.chunkFiles,
+      fileLimit: fe.fileLimit,
+    };
   }
 
   /**

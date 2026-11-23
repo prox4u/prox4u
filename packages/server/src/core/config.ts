@@ -70,6 +70,10 @@ const envSchema = z.object({
   INFLUX_ARCHIVE_INTERVAL_HOURS: z.coerce.number().int().min(1).max(168).default(6),
   INFLUX_ARCHIVE_AGE_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
   INFLUX_ARCHIVE_DIR: z.string().default('data/influx-archive'),
+  // Groupes autorisés à lancer les ACTIONS InfluxDB (POST /api/influxdb/actions/*) :
+  // noms de groupes séparés par des virgules. Le rôle admin passe toujours.
+  // Vide = seules les actions du rôle admin (aucun groupe).
+  INFLUX_ACTION_GROUPS: z.string().default('Administrateurs,Exploitations'),
   // Durée de vie des sessions d'authentification (heures, max 30 jours)
   AUTH_SESSION_TTL_HOURS: z.coerce.number().positive().max(720).default(12),
 });
@@ -153,6 +157,12 @@ export interface AppConfig {
   auditFile: string;
   /** durée de vie des sessions (ms) */
   sessionTtlMs: number;
+  /**
+   * Noms des groupes autorisés à lancer les ACTIONS InfluxDB
+   * (POST /api/influxdb/actions/*). Le rôle admin passe toujours.
+   * Vide = seules les actions du rôle admin.
+   */
+  influxActionGroups: string[];
 }
 
 /** Chemin relatif au repo (data/tls/…) ou absolu. */
@@ -490,6 +500,9 @@ export function loadConfig(): AppConfig {
     authFile: resolvePath('data/auth.json'),
     auditFile: resolvePath('data/admin-audit.jsonl'),
     sessionTtlMs: env.AUTH_SESSION_TTL_HOURS * 3_600_000,
+    influxActionGroups: env.INFLUX_ACTION_GROUPS.split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
   };
   if (env.TLS_KEY && env.TLS_CERT) {
     cfg.tls = { key: resolvePath(env.TLS_KEY), cert: resolvePath(env.TLS_CERT) };

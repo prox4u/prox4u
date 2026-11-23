@@ -13,6 +13,7 @@ function snap(generatedAt: number): MultiDashboardSnapshot {
     overcommit: DEFAULT_OVERCOMMIT_CONFIG,
     endpoints: [],
     globalPra: null,
+    influx: null,
   };
 }
 

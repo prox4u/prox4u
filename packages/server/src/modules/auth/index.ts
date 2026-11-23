@@ -14,6 +14,6 @@ import { registerAuthRoutes } from './routes.js';
  */
 export async function registerAuth(app: FastifyInstance, ctx: AppContext, _poller: Poller): Promise<void> {
   await app.register(fastifyCookie); // reply.setCookie / clearCookie (cookie httpOnly de session)
-  registerAuthGuard(app, ctx.auth);
+  registerAuthGuard(app, ctx.auth, ctx.config.influxActionGroups);
   registerAuthRoutes(app, ctx, Boolean(ctx.config.tls));
 }

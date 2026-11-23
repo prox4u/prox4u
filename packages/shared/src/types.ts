@@ -264,6 +264,34 @@ export interface EndpointSnapshot {
   snapshot: DashboardSnapshot | null;
 }
 
+/**
+ * Santé InfluxDB 3 Core (globale — ressource unique, non par endpoint).
+ * Posée par le poller dans le snapshot multi (WS, zéro API pour le front) :
+ * compteurs d'écriture en mémoire (getStats) + headroom fichiers (fileEstimate)
+ * + ping mis en cache 60 s (null = 1ʳᵉ mesure en cours).
+ */
+export interface InfluxStatus {
+  enabled: boolean;
+  /** dernier ping (cache 60 s) — null si la 1ʳᵉ mesure est encore en cours */
+  ping: boolean | null;
+  /** lignes en file d'attente (instantané) */
+  queueDepth: number;
+  /** total des lignes enfileées (monotone) */
+  enqueued: number;
+  /** total des lignes écrites (monotone) */
+  flushed: number;
+  /** total des lignes abandonnées (monotone) */
+  dropped: number;
+  /** lots d'écriture en échec (monotone) */
+  failedBatches: number;
+  /** headroom fichiers (estimation vs --query-file-limit) */
+  headroom: 'ok' | 'warn' | 'crit';
+  /** fichiers estimés pour la plus longue requête simple (chunk) */
+  chunkFiles: number;
+  /** --query-file-limit du service */
+  fileLimit: number;
+}
+
 /** Snapshot multi-endpoints poussé en WS + GET /api/dashboard. */
 export interface MultiDashboardSnapshot {
   generatedAt: number;
@@ -282,6 +310,11 @@ export interface MultiDashboardSnapshot {
    * les sites du même endpoint.
    */
   globalPra: PraReport | null;
+  /**
+   * Santé InfluxDB 3 Core (globale) : compteurs d'écriture + headroom fichiers
+   * + ping 60 s. null si InfluxDB est désactivé (repli RRD).
+   */
+  influx: InfluxStatus | null;
 }
 
 // --- Surallocation (overcommit.json) ------------------------------------------

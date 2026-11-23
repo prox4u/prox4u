@@ -746,6 +746,7 @@ export const en: Record<string, string> = {
   'admin.audit.action.catalog.sync': 'Catalog reconciliation',
   'admin.audit.action.backup.import': 'Backup import',
   'admin.audit.action.backup.export': 'Backup export',
+  'admin.audit.action.influxdb.action': 'InfluxDB action',
   'admin.tab.backup': 'Backup',
   'admin.backup.hint': 'Export/restore of administration: users (passwords included — sensitive file), groups, catalog state and per-user graph layouts. Import is a merge: local accounts/groups absent from the bundle are kept.',
   'admin.backup.export': 'Export',

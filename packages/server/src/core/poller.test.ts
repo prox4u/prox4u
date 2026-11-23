@@ -110,3 +110,59 @@ describe('Poller.computeGlobalPra (PRA cross-endpoints)', () => {
     expect(globalPra(poller)).toBeNull();
   });
 });
+
+describe('Poller.computeInfluxStatus (santé InfluxDB globale)', () => {
+  const influxStatus = (poller: Poller) =>
+    (poller as unknown as { computeInfluxStatus(): import('@prox4u/shared').InfluxStatus | null }).computeInfluxStatus();
+
+  function makePollerWithInflux(influx: unknown, mock = false): Poller {
+    const ctx = {
+      endpoints: [],
+      config: { mock, health: DEFAULT_HEALTH_CONFIG, audit: DEFAULT_AUDIT_CONFIG },
+      influx,
+    } as unknown as AppContext;
+    return new Poller(ctx, {} as AppContext['hub']);
+  }
+
+  const influxMock = {
+    enabled: true,
+    getStats: () => ({ enabled: true, queueDepth: 5, enqueued: 100, flushed: 95, dropped: 2, failedBatches: 0, lastDropAt: null, lastErrorAt: null }),
+    fileEstimate: () => ({ chunkDays: 30, chunkFiles: 4320, yearFiles: 52560, fileLimit: 10000, headroom: 'ok' }),
+    ping: async () => true,
+  };
+
+  it('désactivé → null', () => {
+    const poller = makePollerWithInflux({ ...influxMock, enabled: false });
+    expect(influxStatus(poller)).toBeNull();
+  });
+
+  it('mock → null', () => {
+    const poller = makePollerWithInflux(influxMock, true);
+    expect(influxStatus(poller)).toBeNull();
+  });
+
+  it('activé : compteurs + headroom + ping null (1ʳᵉ mesure en cours)', () => {
+    const poller = makePollerWithInflux(influxMock);
+    const s = influxStatus(poller);
+    expect(s).not.toBeNull();
+    expect(s!.enabled).toBe(true);
+    expect(s!.queueDepth).toBe(5);
+    expect(s!.enqueued).toBe(100);
+    expect(s!.flushed).toBe(95);
+    expect(s!.dropped).toBe(2);
+    expect(s!.failedBatches).toBe(0);
+    expect(s!.headroom).toBe('ok');
+    expect(s!.chunkFiles).toBe(4320);
+    expect(s!.fileLimit).toBe(10000);
+    // 1ʳᵉ mesure : ping en cours (fire-and-forget) → null.
+    expect(s!.ping).toBeNull();
+  });
+
+  it('2ᵉ mesure après résolution du ping : ping=true (cache 60 s)', async () => {
+    const poller = makePollerWithInflux(influxMock);
+    influxStatus(poller); // déclenche le ping (fire-and-forget)
+    await new Promise((r) => setTimeout(r, 0)); // laisse le ping se résoudre
+    const s = influxStatus(poller);
+    expect(s!.ping).toBe(true);
+  });
+});

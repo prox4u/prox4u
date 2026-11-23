@@ -375,6 +375,43 @@ export class InfluxClient {
     }
   }
 
+  /**
+   * Supprime une base (destructif) via DELETE /api/v3/configure/database.
+   * Lève une erreur si la base n'existe pas (404) — le caller valide avant.
+   */
+  async dropDatabase(db: string): Promise<void> {
+    const res = await fetch(`${this.cfg.url}/api/v3/configure/database?db=${encodeURIComponent(db)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${this.cfg.token}` },
+      signal: AbortSignal.timeout(10_000),
+      dispatcher: this.dispatcher,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`InfluxDB drop_database ${db} → HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+  }
+
+  /**
+   * Supprime une table (destructif) via DELETE /api/v3/configure/table.
+   * Lève une erreur si la base/table n'existe pas (404) — le caller valide avant.
+   */
+  async dropTable(db: string, table: string): Promise<void> {
+    const res = await fetch(
+      `${this.cfg.url}/api/v3/configure/table?db=${encodeURIComponent(db)}&table=${encodeURIComponent(table)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${this.cfg.token}` },
+        signal: AbortSignal.timeout(10_000),
+        dispatcher: this.dispatcher,
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`InfluxDB drop_table ${db}.${table} → HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+  }
+
   /** GET /health (3 s max). L'endpoint exige le token quand l'auth est active. */
   async ping(): Promise<boolean> {
     try {

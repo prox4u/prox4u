@@ -112,24 +112,84 @@ export class InfluxArchiver {
     }
   }
 
+  /**
+   * Noyau d'un cycle d'archivage : archive [lastArchivedTs, cutoff) et avance
+   * l'état. Renvoie la plage archivée (null si rien de nouveau à archiver).
+   * Ne gère PAS le guard `running` ni le logging — c'est au caller (run/runNow).
+   */
+  private async doRun(): Promise<{ from: number; to: number } | null> {
+    const now = Math.floor(Date.now() / 1000);
+    const to = now - Math.floor(this.ctx.config.influx.archiveAgeMs / 1000); // cutoff : on n'archive que l'ancien
+    const from = this.lastArchivedTs;
+    if (from >= to) return null; // rien de nouveau à archiver
+    await this.archiveRange(from, to);
+    this.lastArchivedTs = to;
+    this.writeState();
+    return { from, to };
+  }
+
   private async run(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
-      const now = Math.floor(Date.now() / 1000);
-      const to = now - Math.floor(this.ctx.config.influx.archiveAgeMs / 1000); // cutoff : on n'archive que l'ancien
-      const from = this.lastArchivedTs;
-      if (from >= to) return; // rien de nouveau à archiver
-      await this.archiveRange(from, to);
-      this.lastArchivedTs = to;
-      this.writeState();
-      this.ctx.logger.info(`archiver : ${from} → ${to} archivé (CSV dans ${this.ctx.config.influx.archiveDir})`);
+      const r = await this.doRun();
+      if (r) this.ctx.logger.info(`archiver : ${r.from} → ${r.to} archivé (CSV dans ${this.ctx.config.influx.archiveDir})`);
     } catch (err) {
       // lastArchivedTs n'avance pas → reprise au cycle suivant
       this.ctx.logger.warn(`archiver : cycle en échec (${(err as Error).message}) — reprise au prochain cycle`);
     } finally {
       this.running = false;
     }
+  }
+
+  /**
+   * Action manuelle : cycle d'archivage IMMÉDIAT (POST /api/influxdb/actions/archive/run).
+   * Renvoie la plage archivée, ou null si un cycle est déjà en cours / rien à archiver.
+   * Lève si l'archivage échoue (le caller renvoie 500).
+   */
+  async runNow(): Promise<{ from: number; to: number } | null> {
+    if (this.running) return null;
+    this.running = true;
+    try {
+      return await this.doRun();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /**
+   * Action manuelle : réinitialise l'état d'archivage (POST /api/influxdb/actions/archive/reset)
+   * → re-archivage depuis 1 an (FIRST_RUN_LOOKBACK_SEC). Renvoie la nouvelle borne.
+   */
+  resetState(): number {
+    this.lastArchivedTs = Math.floor(Date.now() / 1000) - FIRST_RUN_LOOKBACK_SEC;
+    this.writeState();
+    return this.lastArchivedTs;
+  }
+
+  /**
+   * Export ad-hoc d'une table de `consolidated` sur [from, to) vers un CSV
+   * (POST /api/influxdb/actions/export). Renvoie le chemin du fichier + nb de lignes
+   * (file='' si aucune ligne). `table` est validée par le caller.
+   */
+  async exportTable(table: string, from: number, to: number): Promise<{ file: string; rows: number }> {
+    const influx = this.ctx.influx;
+    mkdirSync(this.ctx.config.influx.archiveDir, { recursive: true });
+    const rows = await influx.querySqlChunked<SqlRow>(
+      influx.aggDb,
+      (_f, _t) => `SELECT * FROM ${table} WHERE time >= '${_f}' AND time < '${_t}' ORDER BY time`,
+      from,
+      to,
+      { chunkDays: ARCHIVE_CHUNK_DAYS },
+    );
+    if (rows.length === 0) return { file: '', rows: 0 };
+    const columns = Object.keys(rows[0]);
+    const lines = [columns.join(',')];
+    for (const r of rows) lines.push(columns.map((c) => csvEscape(r[c])).join(','));
+    const day = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
+    const file = path.join(this.ctx.config.influx.archiveDir, `export-${table}-${day(from)}_${day(to)}.csv`);
+    writeFileSync(file, lines.join('\n') + '\n');
+    return { file, rows: rows.length };
   }
 
   /** Archive [from, to) de `consolidated` vers CSV (1 fichier / table / jour). */

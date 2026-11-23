@@ -37,12 +37,16 @@ describe('registerAuthGuard', () => {
     audit.init();
     auth = { store, sessions: new SessionStore(3_600_000), provider: new LocalProvider(store), audit };
     app = Fastify();
-    registerAuthGuard(app, auth);
+    // Groupes autorisés aux actions InfluxDB (défaut production).
+    registerAuthGuard(app, auth, ['Administrateurs', 'Exploitations']);
     // routes dummy pour tester le filtrage du guard
     app.get('/api/admin/state', async () => ({ ok: 'admin' }));
     app.get('/api/alarms/config', async () => ({ ok: 'config-read' }));
     app.put('/api/alarms/config', async () => ({ ok: 'config-write' }));
     app.get('/api/dashboard', async () => ({ ok: 'dash' }));
+    app.post('/api/influxdb/actions/flush', async () => ({ ok: 'flush' }));
+    app.post('/api/influxdb/actions/database/drop', async () => ({ ok: 'drop' }));
+    app.get('/api/influxdb', async () => ({ ok: 'influx-read' }));
     app.post('/api/auth/login', async () => ({ ok: 'login' }));
     app.get('/api/health', async () => ({ ok: 'health' }));
     app.get('/sample', async () => 'sample-page');
@@ -97,5 +101,56 @@ describe('registerAuthGuard', () => {
     const tok = auth.sessions.create(user.id);
     auth.store.updateUser(user.id, { active: false });
     expect((await app.inject({ method: 'GET', url: '/api/dashboard', headers: { cookie: `${SESSION_COOKIE}=${tok}` } })).statusCode).toBe(401);
+  });
+
+  describe('actions InfluxDB (groupes Administrateurs/Exploitations)', () => {
+    let adminGroup: { id: string };
+    let expGroup: { id: string };
+    let otherGroup: { id: string };
+    let userAdmin: User;
+    let userExp: User;
+    let userOther: User;
+
+    beforeEach(() => {
+      adminGroup = auth.store.createGroup('Administrateurs', 'groupe admin');
+      expGroup = auth.store.createGroup('Exploitations', 'groupe exploitation');
+      otherGroup = auth.store.createGroup('Autres', 'groupe hors périmètre');
+      userAdmin = auth.store.createUser({
+        username: 'dave', displayName: 'Dave', passwordHash: 'h', role: 'user', groupIds: [adminGroup.id],
+      });
+      userExp = auth.store.createUser({
+        username: 'erin', displayName: 'Erin', passwordHash: 'h', role: 'user', groupIds: [expGroup.id],
+      });
+      userOther = auth.store.createUser({
+        username: 'frank', displayName: 'Frank', passwordHash: 'h', role: 'user', groupIds: [otherGroup.id],
+      });
+    });
+
+    it('rôle admin → 200 sur les actions', async () => {
+      expect((await app.inject({ method: 'POST', url: '/api/influxdb/actions/flush', headers: { cookie: cookie(admin) } })).statusCode).toBe(200);
+    });
+
+    it('membre d’un groupe autorisé (Administrateurs) → 200', async () => {
+      expect((await app.inject({ method: 'POST', url: '/api/influxdb/actions/flush', headers: { cookie: cookie(userAdmin) } })).statusCode).toBe(200);
+    });
+
+    it('membre d’un groupe autorisé (Exploitations) → 200', async () => {
+      expect((await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/drop', headers: { cookie: cookie(userExp) } })).statusCode).toBe(200);
+    });
+
+    it('hors groupes autorisés → 403 influx-actions-group', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/flush', headers: { cookie: cookie(userOther) } });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe('influx-actions-group');
+    });
+
+    it('aucun groupe → 403', async () => {
+      expect((await app.inject({ method: 'POST', url: '/api/influxdb/actions/flush', headers: { cookie: cookie(user) } })).statusCode).toBe(403);
+    });
+
+    it('la LECTURE (/api/influxdb) reste ouverte à toute session', async () => {
+      expect((await app.inject({ method: 'GET', url: '/api/influxdb', headers: { cookie: cookie(user) } })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'GET', url: '/api/influxdb', headers: { cookie: cookie(userOther) } })).statusCode).toBe(200);
+    });
   });
 });
