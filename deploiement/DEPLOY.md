@@ -148,6 +148,40 @@ Seule vérification manuelle restante dans `.env` : confirmer `TLS_KEY` / `TLS_C
 
 **InfluxDB : deux bases, créées et consolidées automatiquement** — `raw` (toutes les métriques brutes, rétention 31 j) et `consolidated` (métriques consolidées 5 min, rétention **infinie**, pour l'historique long terme). Les deux sont créées au démarrage de l'app ; le consolidateur tourne toutes les 5 min (reprise après arrêt via `data/consolidation-state.json`, backfill par tranches d'un jour après un long arrêt) ; la lecture bascule automatiquement sur `consolidated` pour les longues périodes. Repli RRD Proxmox si InfluxDB est indisponible.
 
+### InfluxDB 3 Core — limites et gestion (cible 500 VMs 24/7)
+
+InfluxDB 3 Core a des limites dures (5 bases / 2000 tables / 500 colonnes — sans impact ici)
+et des limites de **temps** qui comptent : `--query-file-limit` (défaut 432 fichiers = 72 h ;
+1 fichier Parquet / table / bloc de 10 min), **pas de compaction**, **pas de DELETE**,
+rétention **immuable**. L'app gère ces manques sans dépendance (détail :
+`docs/plan-limites-influxdb3.md`) :
+
+- **Backpressure d'écriture** : file dimensionnée (`INFLUX_QUEUE_MAX`, défaut 20 000) +
+  lots plus gros (`INFLUX_FLUSH_MAX_LINES`, défaut 1 000) + dead-letter après
+  `INFLUX_FLUSH_MAX_RETRIES` (défaut 3) échecs consécutifs. Compteurs d'abandon exposés
+  dans `/api/health` (section `influx`) + alertes.
+- **Requêtes long terme chunkées** : les fenêtres > ~69 j sont découpées en tranches de
+  `INFLUX_QUERY_CHUNK_DAYS` (défaut 30 j = 4 320 fichiers < `INFLUX_QUERY_FILE_LIMIT`) —
+  la vue « 1 an » des historiques capteurs/SMART fonctionne.
+- **Auto-monitoring** : `GET /api/influxdb` (état, compteurs d'écriture, stats lecture,
+  headroom fichiers) + self-telemetry `influxdb_self` (1 ligne/tick) + alertes
+  `influxdb-down` / `influxdb-write-drops` / `influxdb-file-limit`.
+- **Archivage** : un archiver exporte `consolidated` au-delà de `INFLUX_ARCHIVE_AGE_DAYS`
+  (défaut 90 j) vers des CSV (1 fichier / table / jour) dans `INFLUX_ARCHIVE_DIR`
+  (défaut `data/influx-archive/`), toutes les `INFLUX_ARCHIVE_INTERVAL_HOURS` (défaut 6 h),
+  avec reprise d'état (`data/archive-state.json`).
+
+**Stratégie de rétention** :
+
+| Niveau | Rétention | Mécanisme |
+|---|---|---|
+| `raw` | 31 j | purge native InfluxDB (rétention immuable à la création) |
+| `consolidated` | ∞ (surveillée) | buckets 5/15 min ; headroom fichiers suivi via `/api/influxdb` |
+| `data/influx-archive/` | au-delà de 90 j | export CSV interrogeable hors InfluxDB (DuckDB/Excel) |
+
+> Si la croissance de `consolidated` (∞) devient critique : la recréer à rétention finie
+> (ex. 2 ans) — opération manuelle — et s'appuyer sur l'archive CSV pour l'au-delà.
+
 ## 6. Endpoints surveillés
 
 ```bash
@@ -250,7 +284,7 @@ InfluxDB et Explorer sont des conteneurs Docker avec `restart: unless-stopped` �
 | **Rotation d'un token PVE** | sur le PVE : `pveum user token del manager@pve manager && pveum user token add manager@pve manager --privsep 0` → mettre à jour `clusters.json` → `sudo systemctl restart prox4u` |
 | **Supprimer un endpoint** | retirer le bloc de `clusters.json` (+ son site dans `sites.json`) → restart |
 | **Logs** | `logs/server.log` (app) · `docker compose logs influxdb` |
-| **Sauvegarde** | tout l'état est dans `data/` (InfluxDB, état du consolidateur, certificats TLS, token admin) — copier `data/` + `.env` + `clusters.json` + `sites.json` |
+| **Sauvegarde** | tout l'état est dans `data/` (InfluxDB, état du consolidateur, **archive CSV `data/influx-archive/`**, certificats TLS, token admin) — copier `data/` + `.env` + `clusters.json` + `sites.json` |
 
 > **PBS (phase 1B)** : le token Proxmox Backup Server se créera de la même façon par commandes (`pbs config add-user` + token via API) — procédure à compléter quand PBS sera déployé.
 

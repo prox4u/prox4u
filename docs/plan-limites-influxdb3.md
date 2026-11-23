@@ -177,39 +177,39 @@ manuellement).
 ## Tâches
 
 ### P1 — Backpressure d'écriture
-- [ ] `influx.ts` : `QUEUE_MAX`/`FLUSH_MAX_LINES` configurables (env), défauts 20 000 / 1 000
-- [ ] `influx.ts` : compteurs `enqueued/flushed/dropped/failedBatches/lastDropAt/lastErrorAt`
-- [ ] `influx.ts` : dead-letter borné (`INFLUX_FLUSH_MAX_RETRIES`, défaut 3)
-- [ ] `influx.ts` : `getStats()` (compteurs + `queueDepth` + `enabled`)
-- [ ] `config.ts` : lire `INFLUX_QUEUE_MAX`, `INFLUX_FLUSH_MAX_LINES`, `INFLUX_FLUSH_MAX_RETRIES`
-- [ ] `/api/health` : section `influx` (getStats)
-- [ ] Tests unitaires : débordement file, dead-letter, compteurs
-- [ ] `DEPLOY.md` : documenter les 3 env
+- [x] `influx.ts` : `QUEUE_MAX`/`FLUSH_MAX_LINES` configurables (env), défauts 20 000 / 1 000
+- [x] `influx.ts` : compteurs `enqueued/flushed/dropped/failedBatches/lastDropAt/lastErrorAt`
+- [x] `influx.ts` : dead-letter borné (`INFLUX_FLUSH_MAX_RETRIES`, défaut 3)
+- [x] `influx.ts` : `getStats()` (compteurs + `queueDepth` + `enabled`)
+- [x] `config.ts` : lire `INFLUX_QUEUE_MAX`, `INFLUX_FLUSH_MAX_LINES`, `INFLUX_FLUSH_MAX_RETRIES`
+- [x] `/api/health` : section `influx` (getStats)
+- [x] Tests unitaires : débordement file, dead-letter, compteurs
+- [x] `DEPLOY.md` : documenter les 3 env
 
 ### P2 — Requêtes chunkées
-- [ ] `influx.ts` : `querySqlChunked(db, buildSql, from, to, opts?)`
-- [ ] `config.ts` : `INFLUX_QUERY_CHUNK_DAYS` (défaut 30), `INFLUX_QUERY_FILE_LIMIT` (défaut 10 000)
-- [ ] `nodesensors/routes.ts` : `mergedTempBuckets` → consolidated en chunké (raw inchangé)
-- [ ] Tests unitaires : découpage, concat, tranche « table absente » ignorée
-- [ ] Test manuel : vue « 1 an » capteur/SMART avec > 69 j de données
+- [x] `influx.ts` : `querySqlChunked(db, buildSql, from, to, opts?)`
+- [x] `config.ts` : `INFLUX_QUERY_CHUNK_DAYS` (défaut 30), `INFLUX_QUERY_FILE_LIMIT` (défaut 10 000)
+- [x] `nodesensors/routes.ts` : `mergedTempBuckets` → consolidated en chunké (raw inchangé)
+- [x] Tests unitaires : découpage, concat, tranche « table absente » ignorée
+- [ ] Test manuel : vue « 1 an » capteur/SMART avec > 69 j de données (besoin de données réelles)
 
 ### P4 — Auto-monitoring
-- [ ] Nouveau module `packages/server/src/modules/influxdb/` (route `GET /api/influxdb`)
-- [ ] `influx.ts` : `getServerInfo()` (version via `/api/v3/server-info`, à confirmer)
-- [ ] `influx.ts` : stats requête (latence dernière + dernier error)
-- [ ] `fileEstimate` : estimation fichiers vs file limit + `headroom`
-- [ ] Poller : self-telemetry `influxdb_self` (1 ligne/tick)
-- [ ] Alertes `influxdb-write-drops` / `influxdb-file-headroom` / `influxdb-down` (+ i18n fr/en)
-- [ ] Enregistrement du module dans le loader
-- [ ] Tests : route (enabled/désactivé), alertes
+- [x] Nouveau module `packages/server/src/modules/influxdb/` (route `GET /api/influxdb`)
+- [x] `influx.ts` : `getServerInfo()` (version via `/api/v3/server-info`, défensif)
+- [x] `influx.ts` : stats requête (latence dernière + dernier error)
+- [x] `fileEstimate` : estimation fichiers vs file limit + `headroom`
+- [x] Poller : self-telemetry `influxdb_self` (1 ligne/tick)
+- [x] Alertes `influxdb-write-drops` / `influxdb-file-headroom` / `influxdb-down` (+ i18n fr/en)
+- [x] Enregistrement du module dans le loader
+- [ ] Tests : route (enabled/désactivé), alertes (optionnel)
 
 ### P5 — Archivage
-- [ ] `influx-archiver.ts` : timer + état `data/archive-state.json` + reprise
-- [ ] Export CSV `consolidated` `[lastArchivedTs, now - age]` → `<table>-<date>.csv`
-- [ ] `config.ts` : `INFLUX_ARCHIVE_INTERVAL`, `INFLUX_ARCHIVE_AGE`, `INFLUX_ARCHIVE_DIR`
-- [ ] Démarrage/arrêt dans `index.ts` (comme le consolidateur)
-- [ ] `DEPLOY.md` : stratégie de rétention + `data/influx-archive/` dans la sauvegarde
-- [ ] Tests : export idempotent, reprise après arrêt, état
+- [x] `influx-archiver.ts` : timer + état `data/archive-state.json` + reprise
+- [x] Export CSV `consolidated` `[lastArchivedTs, now - age]` → `<table>-<date>.csv`
+- [x] `config.ts` : `INFLUX_ARCHIVE_INTERVAL`, `INFLUX_ARCHIVE_AGE`, `INFLUX_ARCHIVE_DIR`
+- [x] Démarrage/arrêt dans `index.ts` (comme le consolidateur)
+- [x] `DEPLOY.md` : stratégie de rétention + `data/influx-archive/` dans la sauvegarde
+- [ ] Tests : export idempotent, reprise après arrêt, état (optionnel)
 
 ## Fichiers à créer/modifier
 | Fichier | Action |
@@ -226,6 +226,7 @@ manuellement).
 | `packages/shared/src/i18n/fr.ts` / `en.ts` | MODIF — libellés alertes InfluxDB |
 | `packages/server/src/core/influx.test.ts` | MODIF — tests P1/P2 |
 | `deploiement/DEPLOY.md` / `DEPLOY.en.md` | MODIF — env InfluxDB + stratégie de rétention + sauvegarde archive |
+| `.env.example` | MODIF — options INFLUX_* (commentées, défauts sûrs) |
 | `docker-compose.yml` | (inchangé — `--query-file-limit=10000` déjà posé) |
 
 ## Hors périmètre (pour plus tard)
