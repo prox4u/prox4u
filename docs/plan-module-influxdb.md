@@ -171,7 +171,9 @@ packages/web/src/plugins/influxdb/
 | `packages/server/src/modules/influxdb/routes.test.ts` | MODIF — history + actions |
 | `packages/server/src/core/poller.test.ts` | MODIF — `multi.influx` |
 
-## Hors périmètre
+## Hors périmètre — tracé en issues Gitea
 - Gestion UI des groupes (déjà dans Administration).
-- Features Enterprise (compaction, HA) · export Parquet · sharding multi-InfluxDB.
+- Features Enterprise (compaction, HA) → **issue #6** · export Parquet → **issue #3** ·
+  sharding multi-InfluxDB → **issue #5**.
 - Actions sur Telegraf (agents nœuds) — autre périmètre.
+- Affichage Version « — » + Rétention « infinie » (limites API InfluxDB 3 Core) → **issue #1**.
