@@ -450,12 +450,15 @@ export class InfluxClient {
   }
 
   /**
-   * Liste les bases + rétention (P4) via GET /api/v3/configure/database.
-   * Défensif : le format peut varier selon la version → [] en cas de surprise.
+   * Liste les bases (P4) via GET /api/v3/configure/database?format=json.
+   * InfluxDB 3 Core exige le paramètre `format` (400 sinon) et renvoie un
+   * tableau d'objets `{ "iox::database": "<nom>" }` — sans rétention (l'API
+   * GET ne l'expose pas). Défensif : repli sur `db`/`name` + [] en cas de
+   * surprise (le format peut varier selon la version).
    */
   async listDatabases(): Promise<Array<{ name: string; retention: string | null }>> {
     try {
-      const res = await fetch(`${this.cfg.url}/api/v3/configure/database`, {
+      const res = await fetch(`${this.cfg.url}/api/v3/configure/database?format=json`, {
         method: 'GET',
         headers: { Authorization: `Bearer ${this.cfg.token}` },
         signal: AbortSignal.timeout(5_000),
@@ -468,7 +471,14 @@ export class InfluxClient {
       return arr
         .map((d) => {
           const o = d as Record<string, unknown>;
-          const name = typeof o.db === 'string' ? o.db : typeof o.name === 'string' ? o.name : '';
+          const name =
+            typeof o['iox::database'] === 'string'
+              ? o['iox::database']
+              : typeof o.db === 'string'
+                ? o.db
+                : typeof o.name === 'string'
+                  ? o.name
+                  : '';
           const retention =
             typeof o.retention_period === 'string'
               ? o.retention_period

@@ -198,6 +198,48 @@ describe('InfluxClient.createDatabase', () => {
   });
 });
 
+describe('InfluxClient.listDatabases', () => {
+  it('GET /api/v3/configure/database?format=json — clé iox::database (format réel InfluxDB 3 Core)', async () => {
+    const fetchFn = mockFetch((url) => {
+      expect(String(url)).toBe('http://localhost:8181/api/v3/configure/database?format=json');
+      return Response.json([
+        { 'iox::database': '_internal' },
+        { 'iox::database': 'consolidated' },
+        { 'iox::database': 'raw' },
+      ]);
+    });
+    const client = new InfluxClient(cfg);
+    const dbs = await client.listDatabases();
+    expect(dbs).toEqual([
+      { name: '_internal', retention: null },
+      { name: 'consolidated', retention: null },
+      { name: 'raw', retention: null },
+    ]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('repli sur les clés db/name (autres versions)', async () => {
+    mockFetch(() => Response.json([{ db: 'a' }, { name: 'b' }, { other: 'c' }]));
+    const client = new InfluxClient(cfg);
+    await expect(client.listDatabases()).resolves.toEqual([
+      { name: 'a', retention: null },
+      { name: 'b', retention: null },
+    ]);
+  });
+
+  it('renvoie [] sur HTTP non 2xx (ex. 400 « missing field format »)', async () => {
+    mockFetch(() => new Response('missing field `format`', { status: 400 }));
+    const client = new InfluxClient(cfg);
+    await expect(client.listDatabases()).resolves.toEqual([]);
+  });
+
+  it('renvoie [] sur réponse inattendue', async () => {
+    mockFetch(() => Response.json({ surprise: true }));
+    const client = new InfluxClient(cfg);
+    await expect(client.listDatabases()).resolves.toEqual([]);
+  });
+});
+
 describe('InfluxClient.enqueue/flush', () => {
   // laisse s'achever le flush coalescé (délai 25 ms)
   const settle = () => new Promise((r) => setTimeout(r, 60));

@@ -204,7 +204,12 @@ export function fetchInfluxHistory(range: '24h' | '7d' | '30d' = '24h'): Promise
 export async function postInfluxAction(action: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/influxdb/actions/${action}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    // Content-Type JSON seulement s'il y a un body : Fastify rejette un body
+    // vide avec Content-Type application/json (FST_ERR_CTP_EMPTY_JSON_BODY).
+    headers: {
+      Accept: 'application/json',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
