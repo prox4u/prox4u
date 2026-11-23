@@ -55,6 +55,21 @@ const envSchema = z.object({
   INFLUX_RRD_DB: z.string().min(1).default('proxmox'),
   // Certificat auto-signé InfluxDB à faire confiance (fetch app → InfluxDB)
   INFLUX_CA_CERT: z.string().default(''),
+  // --- Limites InfluxDB 3 Core (plan-limites-influxdb3.md) ---
+  // File d'écriture bornée (lignes) : doit tenir un pic de tick (500 VMs ≈ 1 450 lignes)
+  INFLUX_QUEUE_MAX: z.coerce.number().int().min(100).max(1_000_000).default(20_000),
+  // Taille de lot par requête write_lp (lignes) : plus gros = moins de requêtes HTTP
+  INFLUX_FLUSH_MAX_LINES: z.coerce.number().int().min(10).max(10_000).default(1_000),
+  // Lots consécutifs en échec avant dead-letter (évite la file qui gonfle si InfluxDB est tombé)
+  INFLUX_FLUSH_MAX_RETRIES: z.coerce.number().int().min(1).max(50).default(3),
+  // Requêtes long terme : taille de tranche (jours) pour querySqlChunked (< file limit)
+  INFLUX_QUERY_CHUNK_DAYS: z.coerce.number().int().min(1).max(90).default(30),
+  // --query-file-limit du service InfluxDB (défaut 10 000 = docker-compose) — sert l'estimation
+  INFLUX_QUERY_FILE_LIMIT: z.coerce.number().int().min(100).max(1_000_000).default(10_000),
+  // Archivage consolidated → CSV (P5) : intervalle (h), âge minimal archivé (j), dossier
+  INFLUX_ARCHIVE_INTERVAL_HOURS: z.coerce.number().int().min(1).max(168).default(6),
+  INFLUX_ARCHIVE_AGE_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+  INFLUX_ARCHIVE_DIR: z.string().default('data/influx-archive'),
   // Durée de vie des sessions d'authentification (heures, max 30 jours)
   AUTH_SESSION_TTL_HOURS: z.coerce.number().positive().max(720).default(12),
 });
@@ -72,6 +87,22 @@ export interface InfluxConfig {
   rrdDb: string;
   /** certificat auto-signé InfluxDB à faire confiance (chemin absolu, '' = absent) */
   caCert: string;
+  /** file d'écriture bornée (lignes) — P1 backpressure */
+  queueMax: number;
+  /** taille de lot par requête write_lp (lignes) — P1 */
+  flushMaxLines: number;
+  /** lots consécutifs en échec avant dead-letter — P1 */
+  flushMaxRetries: number;
+  /** taille de tranche (jours) pour les requêtes long terme chunkées — P2 */
+  queryChunkDays: number;
+  /** --query-file-limit du service (sert l'estimation de headroom) — P4 */
+  queryFileLimit: number;
+  /** archivage consolidated → CSV : intervalle (ms) — P5 */
+  archiveIntervalMs: number;
+  /** archivage : âge minimal archivé (ms) — P5 */
+  archiveAgeMs: number;
+  /** archivage : dossier de sortie (chemin absolu) — P5 */
+  archiveDir: string;
 }
 
 /** Un endpoint Proxmox surveillé (cluster ou nœud autonome). */
@@ -447,6 +478,14 @@ export function loadConfig(): AppConfig {
       aggDb: env.INFLUX_AGG_DB,
       rrdDb: env.INFLUX_RRD_DB,
       caCert: env.INFLUX_CA_CERT ? resolvePath(env.INFLUX_CA_CERT) : '',
+      queueMax: env.INFLUX_QUEUE_MAX,
+      flushMaxLines: env.INFLUX_FLUSH_MAX_LINES,
+      flushMaxRetries: env.INFLUX_FLUSH_MAX_RETRIES,
+      queryChunkDays: env.INFLUX_QUERY_CHUNK_DAYS,
+      queryFileLimit: env.INFLUX_QUERY_FILE_LIMIT,
+      archiveIntervalMs: env.INFLUX_ARCHIVE_INTERVAL_HOURS * 3_600_000,
+      archiveAgeMs: env.INFLUX_ARCHIVE_AGE_DAYS * 86_400_000,
+      archiveDir: resolvePath(env.INFLUX_ARCHIVE_DIR),
     },
     authFile: resolvePath('data/auth.json'),
     auditFile: resolvePath('data/admin-audit.jsonl'),

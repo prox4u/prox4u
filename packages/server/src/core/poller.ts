@@ -278,9 +278,37 @@ export class Poller {
         globalPra: this.computeGlobalPra(),
       };
       this.hub.broadcast(this.multi);
+      this.writeSelfTelemetry();
     } finally {
       this.ticking = false;
     }
+  }
+
+  /**
+   * Self-telemetry InfluxDB (P4) : 1 ligne/tick dans `influxdb_self` (base raw) —
+   * on surveille InfluxDB avec InfluxDB (file d'écriture, abandons, latence lecture).
+   * Non bloquant (enqueue), négligeable au volume (~1 ligne / ~1 450 à 500 VMs).
+   */
+  private writeSelfTelemetry(): void {
+    const influx = this.ctx.influx;
+    if (!influx.enabled || this.ctx.config.mock) return;
+    const s = influx.getStats();
+    const q = influx.getQueryStats();
+    influx.enqueue(
+      buildLine(
+        'influxdb_self',
+        {},
+        {
+          queue_depth: s.queueDepth,
+          enqueued_total: s.enqueued,
+          flushed_total: s.flushed,
+          dropped_total: s.dropped,
+          failed_batches_total: s.failedBatches,
+          last_query_ms: q.lastQueryMs ?? 0,
+        },
+        Math.floor(Date.now() / 1000),
+      ),
+    );
   }
 
   /**
@@ -726,7 +754,7 @@ export class Poller {
           : deriveQdeviceState(nodes.length, online.length, cluster.quorumState),
         quorumDetail,
       };
-      const alerts = buildAlerts(nodeHealth, kpis, pra, clusterInfo);
+      const alerts = [...buildAlerts(nodeHealth, kpis, pra, clusterInfo), ...influxAlerts(this.ctx.influx)];
       const health = computeHealthScore(nodeHealth, kpis, pra, clusterInfo, this.ctx.config.health);
 
       const storageInfos = storWithCap.map((s) => ({
@@ -1226,6 +1254,42 @@ function buildAlerts(
         params: { site: s.siteName, pct: Math.min(Math.round(s.absorptionPct ?? 0), 999) },
       });
     }
+  }
+  return alerts;
+}
+
+/**
+ * Alertes InfluxDB (P4, plan-limites-influxdb3.md) — globales (ressource unique),
+ * ajoutées au snapshot de chaque endpoint. Calculées depuis les compteurs du client
+ * (lecture seule, pas de fetch) :
+ *  - influxdb-down        (crit) : erreurs d'écriture récentes (< 60 s) → repli RRD actif
+ *  - influxdb-write-drops (warn) : abandons de lignes récents (file saturée / dead-letter)
+ *  - influxdb-file-limit  (warn/crit) : headroom fichiers < 80 % / < 100 %
+ */
+function influxAlerts(influx: InfluxClient): Alert[] {
+  const alerts: Alert[] = [];
+  if (!influx.enabled) return alerts;
+  const s = influx.getStats();
+  const now = Date.now();
+  if (s.lastErrorAt !== null && now - s.lastErrorAt < 60_000) {
+    alerts.push({ id: 'influxdb-down', severity: 'crit', messageKey: 'alerts.influxdbDown' });
+  }
+  if (s.dropped > 0 && s.lastDropAt !== null && now - s.lastDropAt < 60_000) {
+    alerts.push({
+      id: 'influxdb-write-drops',
+      severity: 'warn',
+      messageKey: 'alerts.influxdbDrops',
+      params: { dropped: s.dropped },
+    });
+  }
+  const fe = influx.fileEstimate();
+  if (fe.headroom !== 'ok') {
+    alerts.push({
+      id: 'influxdb-file-limit',
+      severity: fe.headroom,
+      messageKey: 'alerts.influxdbFileLimit',
+      params: { files: fe.chunkFiles, limit: fe.fileLimit },
+    });
   }
   return alerts;
 }

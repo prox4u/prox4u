@@ -9,6 +9,7 @@ import type { Site } from '@prox4u/shared';
 import { loadConfig } from './core/config.js';
 import { ensureInfluxDatabases, InfluxClient } from './core/influx.js';
 import { InfluxConsolidator } from './core/influx-consolidator.js';
+import { InfluxArchiver } from './core/influx-archiver.js';
 import { MockSource, MOCK_SITES } from './core/mock-source.js';
 import { Prox4uClient } from './core/prox4u-client.js';
 import { Poller, type AppContext, type EndpointRuntime } from './core/poller.js';
@@ -125,6 +126,7 @@ async function main(): Promise<void> {
   };
   const poller = new Poller(ctx, hub);
   const consolidator = new InfluxConsolidator(ctx);
+  const archiver = new InfluxArchiver(ctx);
 
   // https.Server hérite de http.Server : le cast est structurellement sûr
   const app = (config.tls
@@ -162,6 +164,7 @@ async function main(): Promise<void> {
 
   poller.start();
   consolidator.start();
+  archiver.start();
 
   // Avertissements de posture (non bloquants — le défaut TLS_REJECT_UNAUTHORIZED=false
   // est conservé : les déploiements reposent sur les certificats auto-signés Proxmox).
@@ -184,6 +187,7 @@ async function main(): Promise<void> {
     logger.info('arrêt en cours…');
     poller.stop();
     consolidator.stop();
+    archiver.stop();
     influx.stop();
     await influx.flush().catch(() => undefined);
     hub.close();

@@ -248,6 +248,9 @@ export const fr: Record<string, string> = {
   'alerts.praWarn': 'Si {{site}} tombe : bascule possible mais sans marge (les autres sites seraient utilisés à {{pct}} %)',
   'alerts.quorumLost': 'Quorum cluster perdu — cluster en lecture seule ({{online}}/{{total}} nœuds en ligne)',
   'alerts.qdeviceDown': 'Qdevice hors ligne — le quorum n’est plus protégé si un nœud tombe',
+  'alerts.influxdbDown': 'InfluxDB indisponible — écritures en échec (repli RRD actif)',
+  'alerts.influxdbDrops': 'InfluxDB : {{dropped}} ligne(s) de métriques abandonnée(s) (file d’écriture saturée)',
+  'alerts.influxdbFileLimit': 'InfluxDB : les requêtes long terme approchent la limite de fichiers ({{files}}/{{limit}})',
 
   'nav.topology': 'Topologie réseau',
   'nav.storage': 'Stockage',

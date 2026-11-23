@@ -248,6 +248,9 @@ export const en: Record<string, string> = {
   'alerts.praWarn': 'If {{site}} goes down: failover possible but with no headroom (other sites would run at {{pct}} % of free capacity)',
   'alerts.quorumLost': 'Cluster quorum lost — cluster in read-only mode ({{online}}/{{total}} nodes online)',
   'alerts.qdeviceDown': 'Qdevice offline — quorum is no longer protected if a node goes down',
+  'alerts.influxdbDown': 'InfluxDB unavailable — writes failing (RRD fallback active)',
+  'alerts.influxdbDrops': 'InfluxDB: {{dropped}} metric line(s) dropped (write queue saturated)',
+  'alerts.influxdbFileLimit': 'InfluxDB: long-term queries approaching the file limit ({{files}}/{{limit}})',
 
   'nav.topology': 'Network topology',
   'nav.storage': 'Storage',

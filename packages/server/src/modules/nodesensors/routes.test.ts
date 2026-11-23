@@ -278,6 +278,13 @@ describe('registerSensorHistoryRoute — historique des valeurs capteur', () => 
           if (sql.includes("INTERVAL '15 minutes'")) return agg;
           return [];
         },
+        // P2 : le consolidated passe par querySqlChunked — on simule le total des
+        // tranches en appelant buildSql une fois et en routant sur le contenu du SQL.
+        querySqlChunked: async (_db: string, buildSql: (f: string, t: string) => string) => {
+          const sql = buildSql('2026-01-01T00:00:00Z', '2026-12-31T00:00:00Z');
+          if (sql.includes("INTERVAL '15 minutes'")) return agg;
+          return [];
+        },
       } as unknown as AppContext['influx'],
       auth: {} as AppContext['auth'],
       userConfig: {} as AppContext['userConfig'],
@@ -381,6 +388,12 @@ describe('registerSmartHistoryRoute — historique des valeurs disque SMART', ()
         aggDb: 'consolidated',
         querySql: async (_db: string, sql: string) => {
           if (sql.includes("INTERVAL '10 minutes'")) return raw;
+          if (sql.includes("INTERVAL '15 minutes'")) return agg;
+          return [];
+        },
+        // P2 : le consolidated passe par querySqlChunked (même simulation que ci-dessus).
+        querySqlChunked: async (_db: string, buildSql: (f: string, t: string) => string) => {
+          const sql = buildSql('2026-01-01T00:00:00Z', '2026-12-31T00:00:00Z');
           if (sql.includes("INTERVAL '15 minutes'")) return agg;
           return [];
         },

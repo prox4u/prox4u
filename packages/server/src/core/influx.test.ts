@@ -16,6 +16,14 @@ const cfg: InfluxConfig = {
   aggDb: 'consolidated',
   rrdDb: 'proxmox',
   caCert: '',
+  queueMax: 20_000,
+  flushMaxLines: 1_000,
+  flushMaxRetries: 3,
+  queryChunkDays: 30,
+  queryFileLimit: 10_000,
+  archiveIntervalMs: 6 * 3_600_000,
+  archiveAgeMs: 90 * 86_400_000,
+  archiveDir: 'data/influx-archive',
 };
 
 function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): MockedFetch {
@@ -238,5 +246,114 @@ describe('InfluxClient.ping', () => {
       throw new Error('ECONNREFUSED');
     });
     await expect(new InfluxClient(cfg).ping()).resolves.toBe(false);
+  });
+});
+
+describe('InfluxClient P1 — backpressure', () => {
+  const settle = () => new Promise((r) => setTimeout(r, 60));
+
+  it('compte enqueued/flushed via getStats()', async () => {
+    mockFetch(() => new Response(null, { status: 204 }));
+    const client = new InfluxClient(cfg);
+    client.enqueue('m f=1 5');
+    client.enqueue('m f=2 6');
+    await settle();
+    const s = client.getStats();
+    expect(s.enqueued).toBe(2);
+    expect(s.flushed).toBe(2);
+    expect(s.dropped).toBe(0);
+    expect(s.queueDepth).toBe(0);
+    expect(s.enabled).toBe(true);
+  });
+
+  it('abandonne les plus anciennes quand la file déborde (queueMax)', async () => {
+    mockFetch(() => new Response(null, { status: 204 }));
+    const client = new InfluxClient({ ...cfg, queueMax: 2 });
+    client.enqueue('m f=1 5');
+    client.enqueue('m f=2 6');
+    client.enqueue('m f=3 7'); // file pleine → abandonne la 1ʳᵉ
+    await settle();
+    const s = client.getStats();
+    expect(s.enqueued).toBe(3);
+    expect(s.dropped).toBe(1);
+    expect(s.flushed).toBe(2);
+    expect(s.lastDropAt).not.toBeNull();
+  });
+
+  it('dead-letter après N échecs consécutifs (plus de ré-enfilement infini)', async () => {
+    mockFetch(() => new Response('down', { status: 503 }));
+    const client = new InfluxClient({ ...cfg, flushMaxRetries: 2 });
+    client.enqueue('m f=1 5');
+    await client.flush(); // échec 1 → ré-enfile
+    expect(client.pending).toBe(1);
+    await client.flush(); // échec 2 = max → dead-letter
+    expect(client.pending).toBe(0);
+    const s = client.getStats();
+    expect(s.dropped).toBe(1);
+    expect(s.failedBatches).toBe(2);
+    expect(s.lastErrorAt).not.toBeNull();
+  });
+});
+
+describe('InfluxClient P2 — querySqlChunked', () => {
+  it('découpe [from,to) en tranches et concatène les résultats', async () => {
+    const bounds: Array<[string, string]> = [];
+    mockFetch((_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { q: string };
+      const m = body.q.match(/time >= '([^']+)' AND time < '([^']+)'/);
+      if (m) bounds.push([m[1], m[2]]);
+      return Response.json([{ t: m?.[1] ?? '?', n: 1 }]);
+    });
+    const client = new InfluxClient(cfg);
+    const from = 1_700_000_000;
+    const to = from + 90 * 86_400;
+    const rows = await client.querySqlChunked(
+      'raw',
+      (f, t) => `SELECT * FROM m WHERE time >= '${f}' AND time < '${t}'`,
+      from,
+      to,
+      { chunkDays: 30 },
+    );
+    expect(bounds.length).toBe(3); // 90 j / 30 j = 3 tranches
+    expect(rows.length).toBe(3);
+    // bornes contiguës : la fin d'une tranche = le début de la suivante
+    expect(bounds[1][0]).toBe(bounds[0][1]);
+    expect(bounds[2][0]).toBe(bounds[1][1]);
+  });
+
+  it('ignore une tranche « table absente » et garde les autres', async () => {
+    let call = 0;
+    mockFetch(() => {
+      call++;
+      if (call === 2) return new Response('cannot find table m', { status: 400 });
+      return Response.json([{ t: `c${call}`, n: 1 }]);
+    });
+    const client = new InfluxClient(cfg);
+    const from = 1_700_000_000;
+    const to = from + 90 * 86_400; // 3 tranches de 30 j ; la 2ᵉ échoue
+    const rows = await client.querySqlChunked(
+      'raw',
+      (f, t) => `SELECT * FROM m WHERE time >= '${f}' AND time < '${t}'`,
+      from,
+      to,
+      { chunkDays: 30 },
+    );
+    expect(rows.length).toBe(2); // tranches 1 et 3, la 2 ignorée
+  });
+});
+
+describe('InfluxClient P4 — getServerInfo', () => {
+  it('renvoie la version si présente', async () => {
+    mockFetch(() => Response.json({ version: '3.11.5' }));
+    const info = await new InfluxClient(cfg).getServerInfo();
+    expect(info.version).toBe('3.11.5');
+  });
+
+  it('renvoie null en cas d’erreur réseau', async () => {
+    mockFetch(() => {
+      throw new Error('ECONNREFUSED');
+    });
+    const info = await new InfluxClient(cfg).getServerInfo();
+    expect(info.version).toBeNull();
   });
 });

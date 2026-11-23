@@ -280,26 +280,34 @@ async function mergedTempBuckets(
   ctx: AppContext,
   table: string,
   where: string,
-  window: string,
+  fromSec: number,
+  toSec: number,
   tempField: string,
   keep: (temp: number) => boolean,
 ): Promise<SensorHistoryPoint[]> {
+  // Bornes ISO UTC explicites (DataFusion ne coerce pas timestamp >= entier).
+  const iso = (ts: number) => new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
   const [rawRows, aggRows] = await Promise.all([
-    // raw : buckets 10 min (les points 10 s seraient ~270k sur 31 j).
+    // raw : buckets 10 min (les points 10 s seraient ~270k sur 31 j). Fenêtre ≤ 31 j
+    // = 4 464 fichiers < --query-file-limit → requête simple.
     ctx.influx!.querySql<Record<string, string | number | null>>(
       ctx.influx.rawDb,
       `SELECT date_bin(INTERVAL '10 minutes', time) AS t, max(${tempField}) AS temp
-       FROM ${table} WHERE ${where} AND time >= now() - INTERVAL '${window}'
+       FROM ${table} WHERE ${where} AND time >= '${iso(fromSec)}' AND time < '${iso(toSec)}'
          AND ${tempField} IS NOT NULL
        GROUP BY t ORDER BY t`,
     ),
-    // consolidated : buckets 15 min (rétention illimitée) — l'année.
-    ctx.influx!.querySql<Record<string, string | number | null>>(
+    // consolidated : buckets 15 min (rétention illimitée) — l'année. Fenêtre long terme
+    // (> ~69 j = --query-file-limit) → requête CHUNKÉE (P2, plan-limites-influxdb3.md).
+    ctx.influx!.querySqlChunked<Record<string, string | number | null>>(
       ctx.influx.aggDb,
-      `SELECT date_bin(INTERVAL '15 minutes', time) AS t, max(${tempField}) AS temp
-       FROM ${table} WHERE ${where} AND time >= now() - INTERVAL '${window}'
+      (f, t) =>
+        `SELECT date_bin(INTERVAL '15 minutes', time) AS t, max(${tempField}) AS temp
+       FROM ${table} WHERE ${where} AND time >= '${f}' AND time < '${t}'
          AND ${tempField} IS NOT NULL
        GROUP BY t ORDER BY t`,
+      fromSec,
+      toSec,
     ),
   ]);
   const byTime = new Map<number, number>();
@@ -332,10 +340,12 @@ async function computeSensorHistory(
   thresholds: SensorThresholds,
 ): Promise<SensorHistoryResponse> {
   const empty: SensorHistoryResponse = { node, chip, feature, range, points: [], threshold: null, thresholdCustom: false, thresholdFirmware: null, source: 'empty' };
-  const window = range === 'month' ? '31 days' : '365 days';
+  const windowDays = range === 'month' ? 31 : 365;
+  const toSec = Math.floor(Date.now() / 1000);
+  const fromSec = toSec - windowDays * 86_400;
   const where = `node = ${sqlStr(node)} AND chip = ${sqlStr(chip)} AND feature = ${sqlStr(feature)}`;
 
-  const points = await mergedTempBuckets(ctx, 'sensors', where, window, 'temp_input', () => true);
+  const points = await mergedTempBuckets(ctx, 'sensors', where, fromSec, toSec, 'temp_input', () => true);
   if (points.length === 0) return empty;
 
   // Seuil effectif (ligne de référence du graphe) : perso si défini, sinon
@@ -414,9 +424,11 @@ async function computeSmartHistory(
   range: SensorHistoryRange,
 ): Promise<SmartHistoryResponse> {
   const empty: SmartHistoryResponse = { node, device, range, points: [], source: 'empty' };
-  const window = range === 'month' ? '31 days' : '365 days';
+  const windowDays = range === 'month' ? 31 : 365;
+  const toSec = Math.floor(Date.now() / 1000);
+  const fromSec = toSec - windowDays * 86_400;
   const where = `node = ${sqlStr(node)} AND device = ${sqlStr(device)}`;
-  const points = await mergedTempBuckets(ctx, 'smart_device', where, window, 'temp_c', (t) => t > 0);
+  const points = await mergedTempBuckets(ctx, 'smart_device', where, fromSec, toSec, 'temp_c', (t) => t > 0);
   if (points.length === 0) return empty;
   return { ...empty, points, source: 'influx' };
 }

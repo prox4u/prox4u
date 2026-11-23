@@ -9,6 +9,7 @@ import { registerVmInventory } from './vmview/routes.js';
 import { registerNodeSensorsModule } from './nodesensors/index.js';
 import { registerAuditModule } from './audit/index.js';
 import { registerUserConfig } from './userconfig/index.js';
+import { registerInfluxDbModule } from './influxdb/index.js';
 
 /**
  * Manifeste des modules : chaque module enregistre ses routes REST.
@@ -24,6 +25,8 @@ import { registerUserConfig } from './userconfig/index.js';
  *   checks purs shared/audit.ts, cache 5 min)
  * - userconfig : GET/PUT/DELETE /api/user-config (personnalisation d'interface
  *   par utilisateur — data/user-configs/<userId>.json, session obligatoire)
+ * - influxdb : GET /api/influxdb (auto-monitoring InfluxDB 3 Core — état,
+ *   compteurs d'écriture, stats lecture, headroom fichiers — P4)
  * `register` peut être asynchrone (initialisation de dépendances).
  */
 export interface Module {
@@ -41,4 +44,5 @@ export const modules: Module[] = [
   { name: 'nodesensors', register: registerNodeSensorsModule },
   { name: 'audit', register: registerAuditModule },
   { name: 'userconfig', register: registerUserConfig },
+  { name: 'influxdb', register: registerInfluxDbModule },
 ];

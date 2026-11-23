@@ -677,6 +677,9 @@ export function registerDashboard(app: FastifyInstance, ctx: AppContext, poller:
     status: 'ok',
     mock: ctx.config.mock,
     uptimeSec: Math.round(process.uptime()),
+    // P1/P4 : état de la file d'écriture InfluxDB (abandons, profondeur) — liveness
+    // + signal de backpressure sans ouvrir de session (route publique).
+    influx: ctx.influx.getStats(),
   }));
 
   /** Snapshot multi-endpoints (même payload que le push WS). */
