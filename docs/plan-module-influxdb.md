@@ -120,36 +120,36 @@ packages/web/src/plugins/influxdb/
 ## Tâches
 
 ### 1. Vision serveur
-- [ ] `shared/types.ts` : `InfluxStatus` + `MultiDashboardSnapshot.influx`
-- [ ] `poller.ts` : `multi.influx` (stats + headroom + ping cache 60 s)
-- [ ] `influxdb/routes.ts` : `GET /api/influxdb/history?range=` (cache 5 min, buckets adaptatifs)
+- [x] `shared/types.ts` : `InfluxStatus` + `MultiDashboardSnapshot.influx`
+- [x] `poller.ts` : `multi.influx` (stats + headroom + ping cache 60 s)
+- [x] `influxdb/routes.ts` : `GET /api/influxdb/history?range=` (cache 5 min, buckets adaptatifs)
 
 ### 2. Permission
-- [ ] `config.ts` : `INFLUX_ACTION_GROUPS` (défaut `Administrateurs,Exploitations`)
-- [ ] `guard.ts` : `authUser.groupIds` + règle `/api/influxdb/actions/*` (403 sinon)
-- [ ] `influxdb/routes.ts` : `canAct` dans `GET /api/influxdb`
+- [x] `config.ts` : `INFLUX_ACTION_GROUPS` (défaut `Administrateurs,Exploitations`)
+- [x] `guard.ts` : `authUser.groupIds` + règle `/api/influxdb/actions/*` (403 sinon)
+- [x] `influxdb/routes.ts` : `canAct` dans `GET /api/influxdb`
 
 ### 3. Actions
-- [ ] `influx.ts` : `dropDatabase(db)`, `dropTable(db, table)`
-- [ ] `influx-archiver.ts` : `runNow()`, `resetState()`
-- [ ] `index.ts` : archiver dans `AppContext`
-- [ ] `influxdb/routes.ts` : 7 `POST /api/influxdb/actions/*` + audit admin
-- [ ] Tests : routes actions (mock fetch + archiver), validation noms, 404
+- [x] `influx.ts` : `dropDatabase(db)`, `dropTable(db, table)`
+- [x] `influx-archiver.ts` : `runNow()`, `resetState()` (+ `exportTable`, `getState`)
+- [x] `index.ts` : archiver dans `AppContext`
+- [x] `influxdb/routes.ts` : 7 `POST /api/influxdb/actions/*` + audit admin
+- [x] Tests : routes actions (mock fetch + archiver), validation noms, 404
 
 ### 4. Widget overview
-- [ ] `hypervision_v4` : widget « InfluxDB » (badge + KPIs + mini-graphe 24 h)
-- [ ] i18n fr/en du widget
+- [x] `hypervision_v4` : widget « InfluxDB » (badge + KPIs + mini-graphe 24 h)
+- [x] i18n fr/en du widget
 
 ### 5. Module web
-- [ ] `plugins/influxdb/` : page + 5 composants (KPIs, graphiques, bases, archive, actions)
-- [ ] `plugins.ts` + `FEATURES.USE_PLUGIN_INFLUXDB`
-- [ ] `shared/auth.ts` : `ModuleDef influxdb` dans `DEFAULT_MODULES`
-- [ ] i18n fr/en du module (nav, KPIs, graphiques, actions, confirmations)
+- [x] `plugins/influxdb/` : page + 5 composants (KPIs, graphiques, bases, archive, actions)
+- [x] `plugins.ts` + `FEATURES.USE_PLUGIN_INFLUXDB`
+- [x] `shared/auth.ts` : `ModuleDef influxdb` dans `DEFAULT_MODULES`
+- [x] i18n fr/en du module (nav, KPIs, graphiques, actions, confirmations)
 
 ### 6. Tests
-- [ ] `guard.test.ts` : actions — admin OK, membre groupe OK, hors groupe 403
-- [ ] `influxdb/routes.test.ts` : history (format, table absente, désactivé) + 7 actions
-- [ ] `poller.test.ts` : `multi.influx` présent dans le snapshot
+- [x] `guard.test.ts` : actions — admin OK, membre groupe OK, hors groupe 403
+- [x] `influxdb/routes.test.ts` : history (format, table absente, désactivé) + 7 actions
+- [x] `poller.test.ts` : `multi.influx` présent dans le snapshot
 
 ## Fichiers à créer/modifier
 | Fichier | Action |
