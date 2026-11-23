@@ -22,6 +22,7 @@ import { NodeMatrixBody } from '../components/node-matrix-card';
 import { SystemNodesBody } from '../components/system-nodes-card';
 import { TempNodesBody } from '../components/temp-nodes-card';
 import { PraPanelBody } from '../components/pra-panel';
+import { InfluxDbBody } from '../components/influxdb-card';
 import { Badge } from '../../../components/ui/badge';
 import { Select } from '../../../components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader } from '../../../components/ui/table';
@@ -517,6 +518,24 @@ export function OverviewPage() {
           if (!g) return <p className="p-3 text-sm text-muted-foreground">—</p>;
           return <PraPanelBody pra={g} />;
         },
+      },
+      // InfluxDB 3 Core (santé de la base de métriques) : live multi.influx (WS)
+      // + mini-graphe 24 h (file + abandons). Clic → page /influxdb.
+      {
+        id: 'influxdb',
+        title: t('influxdb.title'),
+        subtitle: t('influxdb.charts.title'),
+        default: { w: 6, h: 4 },
+        minW: 4,
+        minH: 3,
+        extra: () => {
+          const s = multi?.influx;
+          if (!s) return null;
+          const tone = s.ping === null ? 'default' : s.ping ? 'ok' : 'crit';
+          const label = s.ping === null ? '…' : s.ping ? '🟢' : '🔴';
+          return <Badge tone={tone}>{label}</Badge>;
+        },
+        render: () => <InfluxDbBody status={multi?.influx ?? null} />,
       },
     );
     for (const ep of eps) {

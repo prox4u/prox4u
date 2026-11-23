@@ -170,6 +170,12 @@ rétention **immuable**. L'app gère ces manques sans dépendance (détail :
   (défaut 90 j) vers des CSV (1 fichier / table / jour) dans `INFLUX_ARCHIVE_DIR`
   (défaut `data/influx-archive/`), toutes les `INFLUX_ARCHIVE_INTERVAL_HOURS` (défaut 6 h),
   avec reprise d'état (`data/archive-state.json`).
+- **Module « InfluxDB » (vision + action)** : page `/influxdb` (KPIs, graphiques 24 h/7 j/30 j,
+  bases, archivage) + widget de la vue d'ensemble. Les **actions** (flush, archivage,
+  recréation/suppression de bases et tables — `POST /api/influxdb/actions/*`) sont réservées
+  au rôle admin **ou** aux membres des groupes `INFLUX_ACTION_GROUPS` (défaut
+  `Administrateurs,Exploitations`, noms séparés par `,` ; vide = admin seul). Chaque action
+  est tracée dans l'audit admin (`influxdb.action`). Détail : `docs/plan-module-influxdb.md`.
 
 **Stratégie de rétention** :
 
@@ -180,7 +186,8 @@ rétention **immuable**. L'app gère ces manques sans dépendance (détail :
 | `data/influx-archive/` | au-delà de 90 j | export CSV interrogeable hors InfluxDB (DuckDB/Excel) |
 
 > Si la croissance de `consolidated` (∞) devient critique : la recréer à rétention finie
-> (ex. 2 ans) — opération manuelle — et s'appuyer sur l'archive CSV pour l'au-delà.
+> (ex. 2 ans) — bouton « Recréer une base » du module InfluxDB (réservé aux groupes
+> `INFLUX_ACTION_GROUPS`) — et s'appuyer sur l'archive CSV pour l'au-delà.
 
 ## 6. Endpoints surveillés
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { influxTsToUnix, type SqlRow } from './influx.js';
@@ -165,6 +165,25 @@ export class InfluxArchiver {
     this.lastArchivedTs = Math.floor(Date.now() / 1000) - FIRST_RUN_LOOKBACK_SEC;
     this.writeState();
     return this.lastArchivedTs;
+  }
+
+  /**
+   * État de l'archivage (GET /api/influxdb) : borne archivée, dossier, nb de
+   * fichiers CSV + taille totale. Défensif : dossier absent → 0 fichier.
+   */
+  getState(): { lastArchivedTs: number; archiveDir: string; fileCount: number; totalBytes: number } {
+    let fileCount = 0;
+    let totalBytes = 0;
+    try {
+      for (const f of readdirSync(this.ctx.config.influx.archiveDir)) {
+        if (!f.endsWith('.csv')) continue;
+        fileCount++;
+        totalBytes += statSync(path.join(this.ctx.config.influx.archiveDir, f)).size;
+      }
+    } catch {
+      // dossier absent (jamais archivé) → 0
+    }
+    return { lastArchivedTs: this.lastArchivedTs, archiveDir: this.ctx.config.influx.archiveDir, fileCount, totalBytes };
   }
 
   /**

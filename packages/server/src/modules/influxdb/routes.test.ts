@@ -61,8 +61,9 @@ function makeCtx(over: MockOpts = {}): AppContext {
     archiver: {
       runNow: async () => ({ from: 1, to: 2 }),
       resetState: () => 123,
-      exportTable: async (table: string, from: number, to: number) => ({ file: `/tmp/${table}.csv`, rows: 5 }),
-    },
+      exportTable: async (table: string) => ({ file: `/tmp/${table}.csv`, rows: 5 }),
+      getState: () => ({ lastArchivedTs: 1000, archiveDir: '/tmp/arch', fileCount: 3, totalBytes: 1234 }),
+    } as unknown as AppContext['archiver'],
     auth: {
       store: {
         groupById: (id: string) => (id === 'g-admin' ? { id, name: 'Administrateurs' } : id === 'g-exp' ? { id, name: 'Exploitations' } : { id, name: 'Autres' }),

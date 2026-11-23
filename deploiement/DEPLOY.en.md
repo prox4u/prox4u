@@ -170,6 +170,12 @@ and **time** limits that matter: `--query-file-limit` (default 432 files = 72 h;
   (default 90 days) to CSV (1 file / table / day) in `INFLUX_ARCHIVE_DIR`
   (default `data/influx-archive/`), every `INFLUX_ARCHIVE_INTERVAL_HOURS` (default 6 h),
   with state resume (`data/archive-state.json`).
+- **"InfluxDB" module (vision + action)**: `/influxdb` page (KPIs, 24 h/7 d/30 d graphs,
+  databases, archive) + overview widget. **Actions** (flush, archiving, database/table
+  recreate/drop — `POST /api/influxdb/actions/*`) are restricted to the admin role
+  **or** members of the `INFLUX_ACTION_GROUPS` groups (default
+  `Administrateurs,Exploitations`, comma-separated names; empty = admin only). Each action
+  is logged in the admin audit (`influxdb.action`). Details: `docs/plan-module-influxdb.md`.
 
 **Retention strategy**:
 
@@ -180,7 +186,8 @@ and **time** limits that matter: `--query-file-limit` (default 432 files = 72 h;
 | `data/influx-archive/` | beyond 90 days | CSV export queryable outside InfluxDB (DuckDB/Excel) |
 
 > If `consolidated` (∞) growth becomes critical: recreate it with finite retention
-> (e.g. 2 years) — manual operation — and rely on the CSV archive for anything older.
+> (e.g. 2 years) — "Recreate database" button in the InfluxDB module (restricted to the
+> `INFLUX_ACTION_GROUPS` groups) — and rely on the CSV archive for anything older.
 
 ## 6. Monitored endpoints
 

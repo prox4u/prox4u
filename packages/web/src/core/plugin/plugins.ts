@@ -12,6 +12,7 @@ import { proxmoxInventoryPlugin } from '../../plugins/proxmox-inventory';
 import { centreonNscaPlugin } from '../../plugins/centreon-nsca';
 import { nodeSensorsPlugin } from '../../plugins/node-sensors';
 import { auditPlugin } from '../../plugins/audit';
+import { influxdbPlugin } from '../../plugins/influxdb';
 import { FEATURES } from '../config/features';
 import type { Plugin } from './types';
 
@@ -43,4 +44,7 @@ export const PLUGINS: Plugin[] = [
   // Famille audit : 2ᵉ score de configuration (best-practices, P3) — checks purs,
   // audit dans le snapshot WS, constats cliquables vers la VM/nœud/stockage.
   ...(FEATURES.USE_PLUGIN_AUDIT ? [auditPlugin] : []),
+  // Famille influxdb : vision + action sur InfluxDB 3 Core (KPIs, graphiques,
+  // bases, archivage, actions restreintes aux groupes INFLUX_ACTION_GROUPS).
+  ...(FEATURES.USE_PLUGIN_INFLUXDB ? [influxdbPlugin] : []),
 ];

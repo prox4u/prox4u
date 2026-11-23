@@ -292,6 +292,31 @@ export interface InfluxStatus {
   fileLimit: number;
 }
 
+/** Fenêtres d'historique InfluxDB (GET /api/influxdb/history). */
+export type InfluxHistoryRange = '24h' | '7d' | '30d';
+
+/** Point d'historique InfluxDB (agrégation par bucket depuis influxdb_self). */
+export interface InfluxHistoryPoint {
+  /** unix seconds (début du bucket) */
+  t: number;
+  /** profondeur de file (instantané max du bucket) */
+  queueDepth: number;
+  /** total des lignes abandonnées (monotone) */
+  dropped: number;
+  /** latence moyenne de la dernière requête (ms) */
+  queryMs: number;
+  /** total des lignes enfileées (monotone) */
+  enqueued: number;
+}
+
+/** Réponse GET /api/influxdb/history. */
+export interface InfluxHistoryResponse {
+  range: InfluxHistoryRange;
+  points: InfluxHistoryPoint[];
+  /** 'influx' = données · 'empty' = table absente/vide · 'disabled' = InfluxDB off */
+  source: 'influx' | 'empty' | 'disabled';
+}
+
 /** Snapshot multi-endpoints poussé en WS + GET /api/dashboard. */
 export interface MultiDashboardSnapshot {
   generatedAt: number;

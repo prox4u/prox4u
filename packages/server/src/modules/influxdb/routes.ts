@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { InfluxHistoryRange, InfluxHistoryResponse } from '@prox4u/shared';
 import type { AppContext } from '../../core/poller.js';
 import { influxTsToUnix, type InfluxQueryStats, type InfluxWriteStats } from '../../core/influx.js';
 
@@ -75,30 +76,10 @@ export interface InfluxDbResponse {
     fileLimit: number;
     headroom: 'ok' | 'warn' | 'crit';
   };
+  /** état d'archivage (consolidated → CSV) — null si l'archiver n'est pas monté. */
+  archive: { lastArchivedTs: number; archiveDir: string; fileCount: number; totalBytes: number } | null;
   /** true si la session peut lancer les actions (admin ou groupe configuré). */
   canAct: boolean;
-}
-
-export type InfluxHistoryRange = '24h' | '7d' | '30d';
-
-export interface InfluxHistoryPoint {
-  /** unix seconds (début du bucket) */
-  t: number;
-  /** profondeur de file (instantané max du bucket) */
-  queueDepth: number;
-  /** total des lignes abandonnées (monotone) */
-  dropped: number;
-  /** latence moyenne de la dernière requête (ms) */
-  queryMs: number;
-  /** total des lignes enfileées (monotone) */
-  enqueued: number;
-}
-
-export interface InfluxHistoryResponse {
-  range: InfluxHistoryRange;
-  points: InfluxHistoryPoint[];
-  /** 'influx' = données · 'empty' = table absente/vide · 'disabled' = InfluxDB off */
-  source: 'influx' | 'empty' | 'disabled';
 }
 
 /** Buckets adaptatifs : 24 h → 5 min · 7 j → 15 min · 30 j → 1 h. */
@@ -123,6 +104,7 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
   app.get('/api/influxdb', async (req, _reply): Promise<InfluxDbResponse> => {
     const influx = ctx.influx;
     const can = canAct(ctx, req);
+    const archive = ctx.archiver ? ctx.archiver.getState() : null;
     if (!influx.enabled) {
       return {
         enabled: false,
@@ -132,6 +114,7 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
         write: influx.getStats(),
         query: influx.getQueryStats(),
         fileEstimate: influx.fileEstimate(),
+        archive,
         canAct: can,
       };
     }
@@ -145,6 +128,7 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
       write: influx.getStats(),
       query: influx.getQueryStats(),
       fileEstimate: influx.fileEstimate(),
+      archive,
       canAct: can,
     };
   });

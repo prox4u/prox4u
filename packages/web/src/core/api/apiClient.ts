@@ -17,8 +17,10 @@ import type {
   VmNetResponse,
   ZfsArcResponse,
 } from '@prox4u/shared';
+import type { InfluxHistoryResponse } from '@prox4u/shared';
 import type {
   CapacityResponse,
+  InfluxDbResponse,
   MetricsResponse,
   NetworkTopologyResponse,
   OvercommitRiskResponse,
@@ -180,4 +182,37 @@ export function fetchVmNet(endpoint: string, vmid: number, timeframe: MetricsTim
   return getJson<VmNetResponse>(
     `/api/vm-net?endpoint=${encodeURIComponent(endpoint)}&vmid=${vmid}&timeframe=${timeframe}`,
   );
+}
+
+// ---------- Module InfluxDB 3 Core (vision + action) ----------
+
+/** État InfluxDB (ping/version/bases/compteurs/headroom/canAct) — page /influxdb. */
+export function fetchInfluxDb(): Promise<InfluxDbResponse> {
+  return getJson<InfluxDbResponse>('/api/influxdb');
+}
+
+/** Historique InfluxDB (file/abandons/latence/enfilement) — graphiques, cache serveur 5 min. */
+export function fetchInfluxHistory(range: '24h' | '7d' | '30d' = '24h'): Promise<InfluxHistoryResponse> {
+  return getJson<InfluxHistoryResponse>(`/api/influxdb/history?range=${range}`);
+}
+
+/**
+ * Lance une action InfluxDB (POST /api/influxdb/actions/<action>).
+ * `action` ∈ flush | archive/run | archive/reset | export | database/recreate |
+ * database/drop | table/drop. Le guard (admin ou groupe) renvoie 403 sinon.
+ */
+export async function postInfluxAction(action: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const res = await fetch(`/api/influxdb/actions/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    const err = new Error(`${action} → HTTP ${res.status}`) as Error & { code?: string; status: number };
+    err.code = typeof json.code === 'string' ? json.code : undefined;
+    err.status = res.status;
+    throw err;
+  }
+  return json;
 }

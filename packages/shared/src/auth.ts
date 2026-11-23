@@ -265,4 +265,10 @@ export const DEFAULT_MODULES: ModuleDef[] = [
     description: '2ᵉ score de configuration : écarts aux bonnes pratiques (agent, conteneurs, surallocation, réseau, versions)',
     globallyEnabled: true,
   },
+  {
+    id: 'influxdb',
+    name: 'InfluxDB',
+    description: 'Vision + action sur la base de métriques InfluxDB 3 Core (KPIs, graphiques, bases, archivage, actions)',
+    globallyEnabled: true,
+  },
 ];
