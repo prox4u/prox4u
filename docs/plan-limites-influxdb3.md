@@ -191,7 +191,7 @@ manuellement).
 - [x] `config.ts` : `INFLUX_QUERY_CHUNK_DAYS` (défaut 30), `INFLUX_QUERY_FILE_LIMIT` (défaut 10 000)
 - [x] `nodesensors/routes.ts` : `mergedTempBuckets` → consolidated en chunké (raw inchangé)
 - [x] Tests unitaires : découpage, concat, tranche « table absente » ignorée
-- [ ] Test manuel : vue « 1 an » capteur/SMART avec > 69 j de données (besoin de données réelles) → **issue #4**
+- [ ] Test manuel : vue « 1 an » capteur/SMART avec > 69 j de données (besoin de données réelles) → **GitHub #17**
 
 ### P4 — Auto-monitoring
 - [x] Nouveau module `packages/server/src/modules/influxdb/` (route `GET /api/influxdb`)
@@ -202,7 +202,7 @@ manuellement).
 - [x] Alertes `influxdb-write-drops` / `influxdb-file-headroom` / `influxdb-down` (+ i18n fr/en)
 - [x] Enregistrement du module dans le loader
 - [x] Tests : route (enabled/désactivé, headroom) — `influxdb/routes.test.ts`
-- [ ] Tests : alertes `influxAlerts()` (optionnel — fonction pure, non couverte) → **issue #4**
+- [ ] Tests : alertes `influxAlerts()` (optionnel — fonction pure, non couverte) → **GitHub #17**
 
 ### P5 — Archivage
 - [x] `influx-archiver.ts` : timer + état `data/archive-state.json` + reprise
@@ -230,13 +230,13 @@ manuellement).
 | `.env.example` | MODIF — options INFLUX_* (commentées, défauts sûrs) |
 | `docker-compose.yml` | (inchangé — `--query-file-limit=10000` déjà posé) |
 
-## Hors périmètre (pour plus tard) — tracé en issues Gitea
+## Hors périmètre (pour plus tard) — tracé en issues GitHub (prox4u/prox4u)
 - **P3 — Calculateur de dimensionnement** (script VMs/nœuds/tick → config recommandée) :
-  utile avant déploiement prod, mais non retenu dans cette itération. → **issue #2**
+  utile avant déploiement prod, mais non retenu dans cette itération. → **GitHub #19**
 - **UI « carte InfluxDB »** dans Administration (P4 est d'abord route + alertes).
   → **FAIT** (module `/influxdb` — itération `plan-module-influxdb.md`, 2026-11-23).
 - **Migration vers InfluxDB 3 Enterprise** (compaction, HA, rétention mutable) : décision
-  stratégique si le single-node / la croissance de `consolidated` deviennent critiques. → **issue #6**
+  stratégique si le single-node / la croissance de `consolidated` deviennent critiques. → **GitHub #14**
 - **Export Parquet** (au lieu de CSV) : nécessite un writer binaire (dépendance) — CSV
-  choisi pour rester zéro-dépendance. → **issue #3**
-- **Sharding multi-InfluxDB** par endpoint (si un seul nœud ne suffit plus). → **issue #5**
+  choisi pour rester zéro-dépendance. → **GitHub #15**
+- **Sharding multi-InfluxDB** par endpoint (si un seul nœud ne suffit plus). → **GitHub #18**
