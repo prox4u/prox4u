@@ -26,6 +26,9 @@
 #   ./deploiement/70-centreon-setup.sh --remove        # nettoie groupe/compte/token
 #   ./deploiement/70-centreon-setup.sh --rotate-token  # régénère le token API
 #   ./deploiement/70-centreon-setup.sh --rotate-nsca   # régénère le mdp NSCA
+#   ./deploiement/70-centreon-setup.sh --token-only    # TOKEN SEUL, non-interactif
+#                                                       # (pas de groupe/compte/NSCA ;
+#                                                       #  le compte prox4u doit exister)
 #
 # Variables :
 #   CENTRON_URL         base URL du central (défaut http://localhost/centreon)
@@ -36,6 +39,9 @@
 #   NSCA_CFG_PATH       chemin de nsca.cfg sur le poller (défaut /etc/centreon/nsca.cfg)
 #   NSCA_CHECK_COMMAND  commande de soumission du résultat NSCA vers centengine
 #                       (défaut : voir ci-dessous — à ajuster si l'env diffère)
+#   DB_USER/DB_NAME/DB_PASS  identifiants DB (défaut : lus dans
+#                       /etc/centreon/centreon ; repli root via socket unix,
+#                       sinon prompt interactif — utile si le fichier est absent)
 #
 # Idempotent : relançable sans effet de bord. Les secrets (mdp/token/NSCA) ne sont
 # JAMAIS loggués (seuls des messages génériques + les erreurs brutes le sont).
@@ -50,19 +56,40 @@ NSCA_PORT="${NSCA_PORT:-5668}"
 NSCA_CFG_PATH="${NSCA_CFG_PATH:-/etc/centreon/nsca.cfg}"
 # Soumission du résultat de check passif vers centengine (à ajuster si l'env diffère).
 NSCA_CHECK_COMMAND="${NSCA_CHECK_COMMAND:-/usr/bin/centengine -c /etc/centengine/centengine.cfg --external-command}"
+# URL REST à SAISIR dans Prox4u : joignable depuis le serveur Prox4u (autre
+# machine) → pas localhost. Défaut : calculée (même scheme+chemin que CENTRON_URL,
+# hôte = IP réelle du central). Surcharge : REST_URL_PROX4U (ex. hostname/proxy).
+REST_URL_PROX4U="${REST_URL_PROX4U:-}"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 ok()   { echo "✓ $*"; }
 warn() { echo "⚠ $*" >&2; }
 die()  { echo "✗ $*" >&2; exit 1; }
 
-DRY_RUN=0; REMOVE=0; ROTATE_TOKEN=0; ROTATE_NSCA=0
+# URL REST à saisir dans Prox4u : le serveur Prox4u est sur une AUTRE machine que
+# le central → l'URL doit être joignable par le réseau, pas localhost. Défaut :
+# même scheme + chemin que CENTRON_URL, hôte = IP réelle du central (hostname -I).
+# Surcharge : REST_URL_PROX4U (ex. si le central est joint via un hostname/proxy).
+external_rest_url() {
+  [[ -n "$REST_URL_PROX4U" ]] && { printf '%s' "$REST_URL_PROX4U"; return; }
+  local url="$1" ip scheme path
+  ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  [[ -n "$ip" ]] || ip="<ip-du-central>"
+  scheme=$(sed -E 's#^(https?)://.*#\1#' <<< "$url")
+  path=$(sed -E 's#^https?://[^/]+##' <<< "$url")
+  [[ -n "$path" ]] || path="/centreon"
+  [[ "$path" == /* ]] || path="/$path"
+  printf '%s://%s%s' "$scheme" "$ip" "$path"
+}
+
+DRY_RUN=0; REMOVE=0; ROTATE_TOKEN=0; ROTATE_NSCA=0; TOKEN_ONLY=0
 for a in "$@"; do
   case "$a" in
     --dry-run)      DRY_RUN=1 ;;
     --remove)       REMOVE=1 ;;
     --rotate-token) ROTATE_TOKEN=1 ;;
     --rotate-nsca)  ROTATE_NSCA=1 ;;
+    --token-only)   TOKEN_ONLY=1 ;;
     -h|--help)      grep '^# ' "$0" | sed 's/^# //'; exit 0 ;;
     *) die "option inconnue : $a (voir --help)" ;;
   esac
@@ -84,22 +111,88 @@ jget() { python3 -c "import json,sys; print(json.load(sys.stdin).get('$1',''))" 
 [[ $EUID -eq 0 || $DRY_RUN -eq 1 ]] || die "à exécuter en root (sudo)"
 for b in curl python3 openssl; do command -v "$b" >/dev/null 2>&1 || die "binaire requis absent : $b"; done
 
-# Identifiants DB (fichier de config Centreon) — pour le token + la liste des pollers.
-DB_USER="centreon"; DB_NAME="centreon"; DB_PASS=""
-if [[ -f /etc/centreon/centreon ]]; then
-  DB_USER=$(grep -E '^DB_USER' /etc/centreon/centreon | head -1 | cut -d= -f2 || true); DB_USER="${DB_USER:-centreon}"
-  DB_NAME=$(grep -E '^DB_NAME' /etc/centreon/centreon | head -1 | cut -d= -f2 || true); DB_NAME="${DB_NAME:-centreon}"
-  DB_PASS=$(grep -E '^DB_PASS' /etc/centreon/centreon | head -1 | cut -d= -f2 || true)
-fi
+# Lire une clé DB dans un fichier de config Centreon, quel que soit le format :
+#   - simple  : DB_PASS=value                          (/etc/centreon/centreon)
+#   - PHP     : define('DB_PASS', 'value')
+#   - PHP arr : $conf_centreon['password'] = 'value';   (ancien format — clés
+#               user/name/password/host/port, mappées depuis DB_USER/DB_NAME/DB_PASS)
+read_db_conf() {
+  local key="$1" file="$2" v
+  [[ -f "$file" ]] || return 1
+  v=$(grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2- | tr -d " \t'\"")
+  [[ -n "$v" ]] && { printf '%s' "$v"; return 0; }
+  v=$(grep -oE "define[[:space:]]*\([[:space:]]*['\"]${key}['\"][[:space:]]*,[[:space:]]*['\"][^'\"]*['\"]" "$file" 2>/dev/null \
+       | head -1 | sed -E "s/.*['\"]([^'\"]*)['\"]\$/\1/")
+  [[ -n "$v" ]] && { printf '%s' "$v"; return 0; }
+  local mapped
+  case "$key" in
+    DB_USER)  mapped="user" ;;
+    DB_NAME)  mapped="name" ;;
+    DB_PASS)  mapped="password" ;;
+    DB_HOST)  mapped="host" ;;
+    DB_PORT)  mapped="port" ;;
+    *) return 1 ;;
+  esac
+  v=$(grep -oE "\\\$conf_centreon\[['\"]${mapped}['\"]\][[:space:]]*=[[:space:]]*['\"][^'\"]*['\"]" "$file" 2>/dev/null \
+       | head -1 | sed -E "s/.*['\"]([^'\"]*)['\"]\$/\1/")
+  [[ -n "$v" ]] && { printf '%s' "$v"; return 0; }
+  return 1
+}
+
+# Identifiants DB — priorité : variables d'env > fichiers de config > repli.
+# (Les fichiers peuvent être absents selon l'installation → ensure_db_access
+#  gère le repli : root via socket unix, puis prompt interactif.)
+DB_USER="${DB_USER:-}"; DB_NAME="${DB_NAME:-}"; DB_PASS="${DB_PASS:-}"
+for conf in /etc/centreon/centreon /etc/centreon/centreon.conf.php; do
+  [[ -n "$DB_USER" ]] || DB_USER=$(read_db_conf DB_USER "$conf" || true)
+  [[ -n "$DB_NAME" ]] || DB_NAME=$(read_db_conf DB_NAME "$conf" || true)
+  [[ -n "$DB_PASS" ]] || DB_PASS=$(read_db_conf DB_PASS "$conf" || true)
+  if [[ -n "$DB_USER" && -n "$DB_NAME" && -n "$DB_PASS" ]]; then break; fi
+done
+DB_USER="${DB_USER:-centreon}"; DB_NAME="${DB_NAME:-centreon}"
+
+# Binaire client DB : `mysql` ou `mariadb` (Debian n'a parfois que `mariadb`).
+MYSQL_BIN=""
+for b in mysql mariadb; do command -v "$b" >/dev/null 2>&1 && { MYSQL_BIN="$b"; break; }; done
+
+# Connexion DB avec les identifiants résolus par ensure_db_access (DB_USER/DB_PASS).
 db() {
-  if [[ $DRY_RUN -eq 1 ]]; then echo "  \$ mysql -N -B -u $DB_USER $DB_NAME -e \"$1\""; return; fi
-  mysql -N -B -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "$1"
+  if [[ $DRY_RUN -eq 1 ]]; then echo "  \$ ${MYSQL_BIN:-mysql} -N -B -u $DB_USER $DB_NAME -e \"$1\""; return; fi
+  if [[ -n "$DB_PASS" ]]; then
+    "$MYSQL_BIN" -N -B -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "$1"
+  else
+    "$MYSQL_BIN" -N -B -u "$DB_USER" "$DB_NAME" -e "$1"
+  fi
+}
+
+# Garantit un accès DB fonctionnel avant la 1ʳᵉ requête. Chaîne de repli :
+#   1) identifiants configurés (env ou /etc/centreon/centreon) ;
+#   2) root via socket (auth unix_socket — courant sur Debian, sans mdp) ;
+#   3) prompt interactif du mdp DB (masqué) ;
+#   4) sinon → die avec un message clair.
+ensure_db_access() {
+  [[ $DRY_RUN -eq 1 ]] && return
+  [[ -n "$MYSQL_BIN" ]] || die "client mysql/mariadb absent — le script doit tourner sur le central"
+  if [[ -n "$DB_PASS" ]] && "$MYSQL_BIN" -N -B -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "SELECT 1" >/dev/null 2>&1; then
+    ok "accès DB OK (${DB_USER})"
+    return
+  fi
+  if "$MYSQL_BIN" -N -B -u root "$DB_NAME" -e "SELECT 1" >/dev/null 2>&1; then
+    DB_USER="root"; DB_PASS=""
+    ok "accès DB OK (root via socket unix — /etc/centreon/centreon absent ou mdp invalide)"
+    return
+  fi
+  read -r -s -p "Mot de passe DB ${DB_USER} : " DB_PASS; echo
+  if "$MYSQL_BIN" -N -B -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "SELECT 1" >/dev/null 2>&1; then
+    ok "accès DB OK (${DB_USER})"
+    return
+  fi
+  die "accès DB Centreon impossible — vérifier les identifiants (env DB_USER/DB_PASS, /etc/centreon/centreon, ou root DB)"
 }
 
 # ── État global ──────────────────────────────────────────────────────────────
 ADMIN_USER=""; ADMIN_PASSWORD=""; PROX4U_PASS=""
 SELECTED_POLLERS=(); SELECTED_POLLER_NAMES=()
-POLLER_IDS=(); POLLER_NAMES=(); POLLER_IPS=()
 AUTH_TOKEN=""; GROUP_ID=""; API_TOKEN=""; NSCA_PASSWORD=""
 
 # ── 1. Prompts interactifs ───────────────────────────────────────────────────
@@ -118,32 +211,18 @@ prompt_prox4u_pass() {
   [[ ${#PROX4U_PASS} -ge 8 ]] || warn "mot de passe < 8 caractères (recommandé ≥ 8)"
 }
 
-# Liste les pollers (DB) et fait choisir (numéros séparés par des espaces).
+# Cible NSCA : le CENTRAL lui-même. Le listener NSCA (port 5668) tourne sur cette
+# machine (cf. netstat) — pas de liste DB des pollers (pas d'équivalent CLAPI, et
+# dans le cas mono-central la cible est la machine). L'IP est l'IP réelle de la
+# machine : le serveur Prox4u (autre machine) doit joindre le central par son IP
+# réelle, pas 127.0.0.1. (Pollers distants : à étendre si besoin.)
 prompt_pollers() {
-  if [[ $DRY_RUN -eq 1 ]]; then
-    SELECTED_POLLERS=("127.0.0.1"); SELECTED_POLLER_NAMES=("poller-dryrun")
-    ok "poller (dry-run) : 127.0.0.1"
-    return
-  fi
-  local rows; rows=$(db "SELECT instance_id, instance_name, ns_ip_address FROM instances WHERE ns_activate=1 ORDER BY instance_id" 2>/dev/null || \
-               db "SELECT instance_id, instance_name, instance_ip FROM instance WHERE ns_activate=1 ORDER BY instance_id" 2>/dev/null || true)
-  [[ -n "$rows" ]] || die "aucun poller actif trouvé en base (table instances/instance)"
-  echo ""
-  echo "Pollers disponibles :"
-  local n=0 id name ip
-  while IFS=$'\t' read -r id name ip; do
-    [[ -z "${id:-}" ]] && continue
-    n=$((n+1)); POLLER_IDS+=("$id"); POLLER_NAMES+=("$name"); POLLER_IPS+=("$ip")
-    printf "  [%d] %s  (%s)\n" "$n" "$name" "$ip"
-  done <<< "$rows"
-  echo ""
-  local sel s; read -r -p "Numéro(s) de poller(s) pour le mdp NSCA (ex. 1 ou 1 2) : " sel
-  for s in $sel; do
-    [[ "$s" =~ ^[0-9]+$ ]] && (( s >= 1 && s <= n )) || { warn "numéro ignoré : $s"; continue; }
-    SELECTED_POLLERS+=("${POLLER_IPS[$((s-1))]}")
-    SELECTED_POLLER_NAMES+=("${POLLER_NAMES[$((s-1))]}")
-  done
-  [[ ${#SELECTED_POLLERS[@]} -gt 0 ]] || die "aucun poller sélectionné"
+  local local_ip
+  local_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  [[ -n "$local_ip" ]] || local_ip="127.0.0.1"
+  SELECTED_POLLERS=("$local_ip")
+  SELECTED_POLLER_NAMES=("Central")
+  ok "cible NSCA : central ${local_ip} (listener ${NSCA_PORT})"
 }
 
 # ── 2. Auth admin (REST legacy) → authToken ──────────────────────────────────
@@ -203,29 +282,38 @@ except Exception: pass" 2>/dev/null || true)
 
 # ── 4. Compte + rattachement ─────────────────────────────────────────────────
 # L'objet CLAPI pour un user Centreon (login+mdp) est CONTACT (pas USER) :
-#   CONTACT -a add -v "name;login;email;mdp;admin;oreon;lang;authtype"
-# admin=1 → contact_admin=1 → ADMIN GLOBAL (is_admin=1, bypass des ACL — c'est ce
-# qui garantit que le module a tous les droits REST/CLAPI, robuste 22→26).
-# authtype=local est requis pour que le mot de passe soit posé.
+#   CONTACT -a add -v "name;alias;email;mdp;admin;gui_access;lang;authtype"
+# admin=1 → contact_admin=1 → ADMIN GLOBAL (bypass des ACL — sans ça, la nouvelle
+# API /api/latest/ refuse TOUT en 403 « pas la permission », même avec un token
+# valide). Le flag est garanti par `setparam <alias>;admin;1` (le paramètre CLAPI
+# s'appelle `admin`, PAS `contact_admin` qui est la colonne DB). authtype=local
+# requis pour que le mot de passe soit posé.
 setup_user() {
   if [[ $DRY_RUN -eq 1 ]]; then ok "compte ${USER_LOGIN} (dry-run)"; return; fi
   local show; show=$(clapi CONTACT show) || die "CLAPI « CONTACT show » échoué (central joignable ? auth ?)"
+  # Check d'existence robuste : les noms de champs du JSON varient selon la version
+  # (contact_alias/alias, contact_name/name) → on teste les deux, insensible à la casse.
   local exists; exists=$(echo "$show" | python3 -c "
 import json,sys
 try:
     for u in json.load(sys.stdin).get('result',[]):
-        if u.get('contact_alias')=='$USER_LOGIN' or u.get('contact_name')=='$USER_LOGIN': print('1'); break
+        a=(u.get('contact_alias') or u.get('alias') or '').lower()
+        n=(u.get('contact_name') or u.get('name') or '').lower()
+        if a=='$USER_LOGIN' or n=='$USER_LOGIN': print('1'); break
 except Exception: pass" 2>/dev/null || true)
   if [[ "$exists" == "1" ]]; then
     ok "compte ${USER_LOGIN} existe"
-    # S'assurer qu'il est admin global (idempotent, best-effort).
-    clapi CONTACT setparam "${USER_LOGIN};contact_admin;1" >/dev/null 2>&1 \
-      || warn "setparam contact_admin=1 : ${USER_LOGIN} (déjà admin ?)"
   else
-    clapi CONTACT add "Prox4u;${USER_LOGIN};${USER_EMAIL};${PROX4U_PASS};1;0;en;local" >/dev/null \
+    # ADD: name;alias;email;password;admin;gui_access;lang;authtype (doc CLAPI 26.10).
+    clapi CONTACT add "Prox4u;${USER_LOGIN};${USER_EMAIL};${PROX4U_PASS};1;1;en;local" >/dev/null \
       || die "création du compte ${USER_LOGIN} échouée (mot de passe conforme à la politique Centreon ?)"
-    ok "compte ${USER_LOGIN} créé (admin global) (${USER_EMAIL})"
+    ok "compte ${USER_LOGIN} créé (${USER_EMAIL})"
   fi
+  # ADMIN GLOBAL garanti (idempotent, les 2 branches) : le paramètre CLAPI s'appelle
+  # `admin` (PAS `contact_admin` — c'est le nom de la colonne DB). Sans ça, la
+  # nouvelle API /api/latest/ refuse tout en 403 « pas la permission ».
+  clapi CONTACT setparam "${USER_LOGIN};admin;1" >/dev/null 2>&1 \
+    || warn "setparam admin=1 : ${USER_LOGIN} (déjà admin ?)"
   # Rattachement au groupe (idempotent).
   local rc; rc=$(clapi ACLGROUP addcontact "${GROUP_NAME};${USER_LOGIN}" 2>&1 || true)
   if echo "$rc" | grep -qiE "error|fail|exception"; then
@@ -245,7 +333,7 @@ except Exception: pass" 2>/dev/null || true)
 # Fallback : ancienne table `token` (≤ 20.x).
 setup_token() {
   if [[ $DRY_RUN -eq 1 ]]; then API_TOKEN="DRYRUN-TOKEN"; ok "token API (dry-run)"; return; fi
-  command -v mysql >/dev/null 2>&1 || die "mysql absent — le script doit tourner sur le central (accès DB requis pour le token)"
+  [[ -n "$MYSQL_BIN" ]] || die "client mysql/mariadb absent — le script doit tourner sur le central (accès DB requis pour le token)"
   local user_id; user_id=$(db "SELECT contact_id FROM contact WHERE contact_alias='${USER_LOGIN}' LIMIT 1" || true)
   [[ -n "$user_id" ]] || die "compte ${USER_LOGIN} introuvable en base (contact) — création du compte échouée ?"
 
@@ -288,6 +376,39 @@ is_local_ip() {
   local_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
   [[ "$ip" == "127.0.0.1" || "$ip" == "localhost" || "$ip" == "$local_ip" ]]
 }
+# Redémarrer le daemon NSCA (best-effort) — nécessaire si un daemon tourne déjà :
+# il ne recharge PAS nsca.cfg à la volée, donc l'ancien mdp resterait actif.
+# Ne s'applique qu'au daemon local (un poller distant se redémarre à la main).
+maybe_restart_nsca() {
+  local ip="$1" name="$2"
+  [[ $DRY_RUN -eq 1 ]] && return
+  is_local_ip "$ip" || return
+  # Le daemon NSCA écoute-t-il déjà (port en écoute = ancien mdp chargé) ?
+  (exec 3<>"/dev/tcp/127.0.0.1/${NSCA_PORT}") 2>/dev/null || return
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "daemon NSCA en écoute sur ${name} — le redémarrer à la main pour charger le nouveau mdp"
+    return
+  fi
+  local svc
+  for svc in nsca-ng-server nsca-ng nsca centreon-nsca; do
+    if systemctl restart "$svc" 2>/dev/null; then
+      ok "daemon ${svc} redémarré sur ${name} (nouveau mdp NSCA chargé)"
+      return
+    fi
+  done
+  # Repli : l'unité peut avoir un nom non standard (socket activation, fork
+  # custom…) → la déduire du PID qui écoute sur le port.
+  local pid unit
+  pid=$(ss -ltnp 2>/dev/null | awk -v p=":${NSCA_PORT}$" '$4 ~ p' | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+  if [[ -n "$pid" ]]; then
+    unit=$(systemctl status "$pid" --no-pager 2>/dev/null | head -1 | awk '{print $2}')
+    if [[ "$unit" == *.service ]] && systemctl restart "$unit" 2>/dev/null; then
+      ok "daemon ${unit} redémarré sur ${name} (nouveau mdp NSCA chargé)"
+      return
+    fi
+  fi
+  warn "daemon NSCA en écoute sur ${name} mais redémarrage auto échoué — identifier l'unité (ss -ltnp | grep ${NSCA_PORT} → systemctl status <PID>) puis systemctl restart <unité>"
+}
 write_nsca_cfg_on() {
   local ip="$1" name="$2"
   local cfg_block
@@ -306,22 +427,45 @@ write_nsca_cfg_on() {
       warn "poller ${name} (${ip}) : SSH root inaccessible — écrire manuellement nsca.cfg (mdp NSCA généré ci-dessous)"
     fi
   fi
-  # Daemon nsca : vérifier la présence.
+  # Daemon NSCA : présence. Signal le plus fiable = le PORT en écoute (daemon
+  # tournant, quel que soit le nom du binaire nsca-ng/nsca). Sinon, binaire
+  # installé mais non démarré. (nsca-ng = NSCA moderne, nsca = legacy.)
   local check
   if is_local_ip "$ip"; then
-    check=$( { command -v nsca >/dev/null 2>&1 && echo present || echo absent; } )
+    if (exec 3<>"/dev/tcp/127.0.0.1/${NSCA_PORT}") 2>/dev/null; then
+      check="present"
+    elif command -v nsca-ng >/dev/null 2>&1 || command -v nsca >/dev/null 2>&1; then
+      check="installed"
+    else
+      check="absent"
+    fi
   else
-    check=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "root@${ip}" "command -v nsca >/dev/null 2>&1 && echo present || echo absent" 2>/dev/null || echo unknown)
+    check=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "root@${ip}" "if (exec 3<>/dev/tcp/127.0.0.1/${NSCA_PORT}) 2>/dev/null; then echo present; elif command -v nsca-ng >/dev/null 2>&1 || command -v nsca >/dev/null 2>&1; then echo installed; else echo absent; fi" 2>/dev/null || echo unknown)
   fi
   if [[ "$check" == "present" ]]; then
-    ok "daemon nsca présent sur ${name}"
+    ok "daemon NSCA en écoute sur ${name} (port ${NSCA_PORT})"
+  elif [[ "$check" == "installed" ]]; then
+    warn "binaire NSCA installé mais daemon non démarré sur ${name} — le démarrer (systemctl start nsca-ng-server)"
   else
-    warn "daemon nsca ABSENT/INCONNU sur ${name} — installer l'add-on NSCA de centreon-engine, puis relancer ce script"
+    warn "daemon NSCA ABSENT/INCONNU sur ${name} — installer l'add-on NSCA (nsca-ng), puis relancer ce script"
   fi
+  # nsca.cfg vient d'être (ré)écrit : si un daemon tourne déjà, le redémarrer
+  # pour qu'il charge le nouveau mdp (best-effort, local uniquement).
+  maybe_restart_nsca "$ip" "$name"
 }
 setup_nsca() {
   if [[ $DRY_RUN -eq 1 ]]; then NSCA_PASSWORD="DRYRUN-NSCA"; ok "mdp NSCA (dry-run)"; return; fi
-  if [[ $ROTATE_NSCA -eq 1 || -z "$NSCA_PASSWORD" ]]; then
+  # Idempotence : si nsca.cfg existe déjà avec un mdp, le RÉUTILISER (sauf
+  # --rotate-nsca) — sinon chaque relance changerait le mdp.
+  if [[ $ROTATE_NSCA -eq 0 && -f "$NSCA_CFG_PATH" ]]; then
+    local existing
+    existing=$(sed -n 's/^password=//p' "$NSCA_CFG_PATH" 2>/dev/null | head -1)
+    if [[ -n "$existing" ]]; then
+      NSCA_PASSWORD="$existing"
+      ok "mdp NSCA existant réutilisé (${NSCA_CFG_PATH})"
+    fi
+  fi
+  if [[ -z "$NSCA_PASSWORD" ]]; then
     NSCA_PASSWORD=$(openssl rand -hex 12)
     ok "mdp NSCA généré"
   fi
@@ -334,18 +478,21 @@ setup_nsca() {
 # ── 7. Auto-vérification ─────────────────────────────────────────────────────
 verify() {
   if [[ $DRY_RUN -eq 1 ]]; then ok "vérif token + NSCA (dry-run)"; return; fi
-  # 7a. Token via la nouvelle API (X-AUTH-TOKEN) — 401 = invalide, sinon = valide.
-  #     NB : la nouvelle API est /api/latest/ (pas /api/restapi/) et s'authentifie
-  #     par l'en-tête X-AUTH-TOKEN (pas Basic auth). Le module Prox4u doit l'utiliser
-  #     ainsi (cf. skill centreon-nsca).
+  # 7a. Token via la nouvelle API (X-AUTH-TOKEN) sur une ressource RÉELLE
+  #     (/configuration/hosts) — le racine /api/latest/ renvoie 301/404 quel que
+  #     soit le token, donc non discriminant. Codes attendus :
+  #       200 = token valide + permissions OK (admin global)
+  #       403 = token reconnu MAIS sans permission → flag admin (contact_admin) à 0
+  #       401 = token invalide · 000 = API injoignable
   local code
   code=$(curl -s -o /dev/null -w '%{http_code}' -H "X-AUTH-TOKEN: ${API_TOKEN}" \
-    "${CENTRON_URL}/api/latest/" 2>/dev/null || echo 000)
-  if [[ "$code" != "401" && "$code" != "000" ]]; then
-    ok "token API accepté par la nouvelle API (HTTP ${code})"
-  else
-    warn "vérif token : HTTP ${code} (token invalide, ou la nouvelle API /api/latest/ n'est-elle pas exposée ?)"
-  fi
+    "${CENTRON_URL}/api/latest/configuration/hosts" 2>/dev/null || echo 000)
+  case "$code" in
+    200) ok "token API valide + permissions OK (HTTP 200 sur /configuration/hosts)" ;;
+    403) warn "token reconnu mais SANS permission (403) — le compte doit être ADMIN GLOBAL : centreon -u admin -p <mdp> -o CONTACT -a setparam -v \"${USER_LOGIN};admin;1\"" ;;
+    401) warn "vérif token : HTTP 401 (token invalide)" ;;
+    *)   warn "vérif token : HTTP ${code} (API /api/latest/ injoignable ou non exposée ?)" ;;
+  esac
   # 7b. Listener NSCA (test TCP).
   local i ip
   for i in "${!SELECTED_POLLERS[@]}"; do
@@ -367,7 +514,7 @@ summary() {
   echo "══════════════════════════════════════════════════════════════════"
   echo "  Module activé :  OUI"
   echo "  Transport      :  REST v1"
-  echo "  REST URL       :  ${CENTRON_URL}"
+  echo "  REST URL       :  $(external_rest_url "$CENTRON_URL")   ← à saisir (joignable depuis Prox4u)"
   echo "  REST user      :  ${USER_LOGIN}"
   echo "  REST token     :  ${API_TOKEN}"
   echo "  Mdp NSCA       :  ${NSCA_PASSWORD}"
@@ -377,8 +524,8 @@ summary() {
   echo "──────────────────────────────────────────────────────────────────"
   echo "  ⚠ Le token et le mdp NSCA ne sont affichés QUE ICI (et en base)."
   echo "    Groupe : ${GROUP_NAME} (admin global) · Compte : ${USER_LOGIN} (${USER_EMAIL})"
-  echo "  ⚠ NSCA : vérifier que le daemon 'nsca' est installé+démarré sur le(s)"
-  echo "    poller(s) et que NSCA_CHECK_COMMAND soumet bien le check à centengine."
+  echo "  ⚠ NSCA : vérifier que le daemon 'nsca-ng' est installé+démarré sur le central"
+  echo "    et que NSCA_CHECK_COMMAND soumet bien le check à centengine."
   echo "══════════════════════════════════════════════════════════════════"
 }
 
@@ -396,15 +543,84 @@ do_remove() {
   ok "nettoyage terminé (re-vérifier manuellement dans l'UI Centreon)"
 }
 
+# ── 10. Token seul (--token-only, non-interactif) ────────────────────────────
+# Ne touche qu'au token (pas de groupe/compte/NSCA), SANS prompts (seul l'accès
+# DB est requis — pas d'auth admin/CLAPI). Le compte ${USER_LOGIN} doit exister
+# (créé par le mode complet ci-dessus, ou manuellement). Combinable avec
+# --rotate-token (régénérer) et --remove (supprimer).
+token_only_main() {
+  local user_id
+  if [[ $DRY_RUN -eq 1 ]]; then
+    user_id="DRYRUN"
+    ok "compte ${USER_LOGIN} (dry-run)"
+  else
+    user_id=$(db "SELECT contact_id FROM contact WHERE contact_alias='${USER_LOGIN}' LIMIT 1" || true)
+    if [[ -z "$user_id" ]]; then
+      die "compte ${USER_LOGIN} introuvable en base (table contact). Le créer d'abord :
+      → 70-centreon-setup.sh (mode complet, sans --token-only), ou
+      → CLAPI : centreon -u admin -p <mdp> -o CONTACT -a add -v \"Prox4u;${USER_LOGIN};${USER_LOGIN}@localhost;<mdp>;1;0;en;local\""
+    fi
+    ok "compte ${USER_LOGIN} trouvé (contact_id=${user_id})"
+  fi
+
+  if [[ $REMOVE -eq 1 ]]; then
+    warn "--remove : suppression du token ${USER_LOGIN} (les services créés par le module sont conservés)"
+    db "DELETE FROM security_authentication_tokens WHERE user_id=${user_id}" 2>/dev/null || true
+    db "DELETE FROM token WHERE user_id=${user_id}" 2>/dev/null || true
+    ok "token supprimé (re-vérifier manuellement dans l'UI Centreon si besoin)"
+    exit 0
+  fi
+
+  setup_token
+  # Vérif token seul (pas de listener NSCA) — sur une ressource réelle
+  # (/configuration/hosts) : 200 = OK, 403 = token reconnu sans permission
+  # (flag admin à 0), 401 = invalide, 000 = injoignable.
+  if [[ $DRY_RUN -eq 1 ]]; then
+    ok "vérif token (dry-run)"
+  else
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "X-AUTH-TOKEN: ${API_TOKEN}" \
+      "${CENTRON_URL}/api/latest/configuration/hosts" 2>/dev/null || echo 000)
+    case "$code" in
+      200) ok "token API valide + permissions OK (HTTP 200 sur /configuration/hosts)" ;;
+      403) warn "token reconnu mais SANS permission (403) — le compte doit être ADMIN GLOBAL : centreon -u admin -p <mdp> -o CONTACT -a setparam -v \"${USER_LOGIN};admin;1\"" ;;
+      401) warn "vérif token : HTTP 401 (token invalide)" ;;
+      *)   warn "vérif token : HTTP ${code} (API /api/latest/ injoignable ou non exposée ?)" ;;
+    esac
+  fi
+
+  echo ""
+  echo "══════════════════════════════════════════════════════════════════"
+  echo "  TOKEN API CENTREON PRÊT — à saisir dans Prox4u (Admin → Centreon (NSCA))"
+  echo "══════════════════════════════════════════════════════════════════"
+  echo "  Transport  :  REST v1"
+  echo "  REST URL   :  $(external_rest_url "$CENTRON_URL")   ← à saisir (joignable depuis Prox4u)"
+  echo "  REST user  :  ${USER_LOGIN}"
+  echo "  REST token :  ${API_TOKEN}"
+  echo "──────────────────────────────────────────────────────────────────"
+  echo "  ⚠ Le token n'est affiché QUE ICI (et en base). En cas de perte :"
+  echo "    relancer avec --token-only --rotate-token."
+  echo "══════════════════════════════════════════════════════════════════"
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 main() {
   echo "Prox4u — setup Centreon (${CENTRON_URL})"
+  if [[ $TOKEN_ONLY -eq 1 ]]; then
+    echo "  mode --token-only : token seul (pas de groupe/compte/NSCA)"
+    [[ $DRY_RUN -eq 1 ]] && echo "(mode --dry-run : rien ne sera exécuté)"
+    echo ""
+    ensure_db_access
+    token_only_main
+    exit 0
+  fi
   echo "  groupe=${GROUP_NAME} · compte=${USER_LOGIN} · port NSCA=${NSCA_PORT}"
   [[ $DRY_RUN -eq 1 ]] && echo "(mode --dry-run : rien ne sera exécuté)"
   echo ""
 
   prompt_admin
   if [[ $REMOVE -eq 1 ]]; then
+    ensure_db_access
     auth; do_remove; exit 0
   fi
   prompt_prox4u_pass
@@ -412,6 +628,7 @@ main() {
   auth
   setup_group
   setup_user
+  ensure_db_access   # DB requise uniquement pour le token (pas d'équivalent CLAPI)
   setup_token
   setup_nsca
   verify
