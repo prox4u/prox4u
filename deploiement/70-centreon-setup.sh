@@ -509,7 +509,9 @@ setup_nsca() {
       else
         existing=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "root@${SELECTED_POLLERS[$i]}" "cat ${cfg} 2>/dev/null" 2>/dev/null | extract_nsca_password -)
       fi
-      if [[ -n "$existing" ]]; then
+      # « change-me » = PSK par défaut de nsca-ng (config d'usine) → considéré
+      # comme NON configuré : on génère un vrai mdp au lieu de le réutiliser.
+      if [[ -n "$existing" && "$existing" != "change-me" ]]; then
         NSCA_PASSWORD="$existing"
         ok "mdp NSCA existant réutilisé (${cfg} — ${SELECTED_POLLER_NAMES[$i]:-${SELECTED_POLLERS[$i]}})"
         break
