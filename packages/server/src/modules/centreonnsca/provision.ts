@@ -13,7 +13,12 @@ import {
  *  - **CLAPI** (centreon CLI) : local (Prox4u sur le central) ou SSH
  *    (Prox4u hors central — cas nominal). Le mot de passe est lu sur stdin
  *    (`-p "$(cat)"`) → jamais dans la ligne de commande (ps) ni dans les logs.
- *  - **REST v1** (HTTP /api/restapi) : Basic auth (user + token d'API).
+ *    Présume que l'hôte + la commande check_dummy existent déjà.
+ *  - **REST** (HTTP `/api/latest/`, Centreon ≥ 22.10) : header `X-AUTH-TOKEN`
+ *    (token d'API). L'API legacy `/api/restapi` (Basic auth) a été supprimée en
+ *    26.10. Auto-provisionnement complet : crée l'hôte (si `hostAddress` fourni
+ *    et absent), la commande `check_dummy` (si absente), le service passif
+ *    (idempotent), puis génère + redéploie la config du poller.
  *
  * Robustesse : tout échec retourne { ok:false, message } — jamais d'exception.
  * Sécurité : le mot de passe / token n'est JAMAIS loggué (seul un message
@@ -104,16 +109,18 @@ async function provisionClapi(cfg: CentreonConfig, host: string, service: string
 }
 
 // ---------------------------------------------------------------------------
-// REST v1
+// REST — nouvelle API `/api/latest/` (Centreon ≥ 22.10), header X-AUTH-TOKEN
 // ---------------------------------------------------------------------------
 
-/** Appelle l'API REST v1 de Centreon (Basic auth user + token d'API). */
+/** Commande standard des checks passifs (créée si absente sur un central neuf). */
+const CHECK_DUMMY_COMMAND_LINE = '/usr/lib/centreon/plugin-scripts/check_dummy.pl $ARG1$ $ARG2$';
+
+/** Appelle l'API REST de Centreon (`/api/latest/`, auth par header X-AUTH-TOKEN). */
 async function rest(cfg: CentreonConfig, method: string, path: string, body?: unknown): Promise<unknown> {
-  const token = Buffer.from(`${cfg.restUser}:${cfg.restToken}`).toString('base64');
-  const res = await fetch(`${cfg.restUrl.replace(/\/$/, '')}/api/restapi${path}`, {
+  const res = await fetch(`${cfg.restUrl.replace(/\/$/, '')}/api/latest${path}`, {
     method,
     headers: {
-      Authorization: `Basic ${token}`,
+      'X-AUTH-TOKEN': cfg.restToken,
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
@@ -127,48 +134,105 @@ async function rest(cfg: CentreonConfig, method: string, path: string, body?: un
   return text ? JSON.parse(text) : null;
 }
 
-async function findHostId(cfg: CentreonConfig, host: string): Promise<number> {
-  const data = (await rest(cfg, 'GET', '/host?output=host_id,host_name')) as { objects?: Array<{ host_id: number; host_name: string }> };
-  const found = (data.objects ?? []).find((o) => o.host_name === host);
-  if (!found) throw new Error(`hôte Centreon « ${host} » introuvable dans l'API REST (à créer avant le service)`);
-  return found.host_id;
+/**
+ * Poller cible = « monitoring server » de l'API nouvelle. Matching : nom du
+ * poller de la config, sinon son IP (= address du monitoring server), sinon le
+ * serveur unique (central seul).
+ */
+async function findPollerId(cfg: CentreonConfig, poller: CentreonPoller): Promise<number> {
+  const data = (await rest(cfg, 'GET', '/configuration/monitoring-servers')) as {
+    result?: Array<{ id: number; name: string; address?: string | null }>;
+  };
+  const servers = data.result ?? [];
+  let found = servers.find((s) => s.name === poller.name);
+  if (!found && poller.ip) found = servers.find((s) => s.address === poller.ip);
+  if (!found && servers.length === 1) found = servers[0];
+  if (!found) throw new Error(`poller « ${poller.name} » introuvable dans l'API REST (monitoring-servers)`);
+  return found.id;
 }
 
+/**
+ * Hôte Centreon : recherche par nom ; si absent, création automatique sur le
+ * poller cible. Adresse = IP de la VM/nœud Proxmox si connue (`hostAddress`),
+ * sinon le nom de l'hôte (pour un check PASSIF l'adresse n'est pas
+ * fonctionnellement utilisée — l'hôte reste créable même sans IP).
+ */
+async function findHostId(cfg: CentreonConfig, host: string, pollerId: number, hostAddress?: string): Promise<number> {
+  const data = (await rest(cfg, 'GET', `/configuration/hosts?name=${encodeURIComponent(host)}`)) as {
+    result?: Array<{ id: number; name: string }>;
+  };
+  const found = (data.result ?? []).find((h) => h.name === host);
+  if (found) return found.id;
+  const created = (await rest(cfg, 'POST', '/configuration/hosts', {
+    name: host,
+    address: hostAddress ?? host,
+    monitoring_server_id: pollerId,
+  })) as { id?: number };
+  if (!created?.id) throw new Error('POST /configuration/hosts n\'a pas renvoyé d\'id');
+  return created.id;
+}
+
+/**
+ * Commande de check : recherche par nom ; `check_dummy` est créée si absente.
+ * NB : l'API renvoie un tableau JSON brut avec `Accept: application/json`
+ * (notre header) et un document Hydra `{ member: [...] }` sans — les deux
+ * formats sont gérés.
+ */
 async function findCommandId(cfg: CentreonConfig, name: string): Promise<number> {
-  const data = (await rest(cfg, 'GET', `/command?search=${encodeURIComponent(name)}`)) as { objects?: Array<{ command_id: number; command_name: string }> };
-  const found = (data.objects ?? []).find((o) => o.command_name === name);
-  if (!found) throw new Error(`commande « ${name} » introuvable dans l'API REST`);
-  return found.command_id;
+  const data = (await rest(cfg, 'GET', '/configuration/commands')) as
+    | Array<{ id: number; name: string }>
+    | { member?: Array<{ id: number; name: string }> };
+  const list = Array.isArray(data) ? data : (data.member ?? []);
+  const found = list.find((c) => c.name === name);
+  if (found) return found.id;
+  const created = (await rest(cfg, 'POST', '/configuration/commands', {
+    name,
+    command_line: CHECK_DUMMY_COMMAND_LINE,
+    type: 'Check',
+    is_shell_enabled: false,
+  })) as { id?: number };
+  if (!created?.id) throw new Error(`commande « ${name} » introuvable et création impossible`);
+  return created.id;
 }
 
-async function findPollerId(cfg: CentreonConfig, pollerName: string): Promise<number> {
-  const data = (await rest(cfg, 'GET', '/instance/poller')) as { objects?: Array<{ poller_id: number; instance_name?: string; poller_name?: string }> };
-  const found = (data.objects ?? []).find((o) => o.instance_name === pollerName || o.poller_name === pollerName);
-  if (!found) throw new Error(`poller « ${pollerName} » introuvable dans l'API REST`);
-  return found.poller_id;
-}
-
-/** Provisionne via REST v1 : service + params + génération/déploiement poller. */
-async function provisionRest(cfg: CentreonConfig, host: string, service: string, poller: CentreonPoller): Promise<ProvisionResult> {
+/**
+ * Provisionne via l'API `/api/latest/` : poller → hôte (auto-créé si IP fournie)
+ * → check_dummy (auto-créée si absente) → service passif (idempotent) →
+ * génération + redéploiement de la config du poller.
+ */
+async function provisionRest(cfg: CentreonConfig, host: string, service: string, poller: CentreonPoller, hostAddress?: string): Promise<ProvisionResult> {
   if (!cfg.restUrl) return { ok: false, message: 'REST : URL de l\'API non configurée' };
-  const hostId = await findHostId(cfg, host);
+  if (!cfg.restToken) return { ok: false, message: 'REST : token d\'API non configuré (CENTREON_REST_TOKEN ou Page 3)' };
+  const pollerId = await findPollerId(cfg, poller);
+  const hostId = await findHostId(cfg, host, pollerId, hostAddress);
   const commandId = await findCommandId(cfg, 'check_dummy');
-  const created = (await rest(cfg, 'POST', '/service', {
-    host_id: hostId,
-    name: service,
-    command_id: commandId,
-  })) as { service_id?: number };
-  if (!created.service_id) throw new Error('POST /service n\'a pas renvoyé de service_id');
-  await rest(cfg, 'PUT', `/service/${created.service_id}`, {
-    passive_checks_enabled: 1,
-    active_checks_enabled: 0,
-    is_volatile: 1,
+  // Service : idempotent — existant (même nom sur l'hôte) → on le met à jour ;
+  // absent → création. (POST en double renvoie 409.)
+  let serviceId: number | undefined;
+  const existing = (await rest(cfg, 'GET', `/configuration/services?host_id=${hostId}&name=${encodeURIComponent(service)}`)) as {
+    result?: Array<{ id: number; name: string }>;
+  };
+  const foundSvc = (existing.result ?? []).find((s) => s.name === service);
+  if (foundSvc) {
+    serviceId = foundSvc.id;
+  } else {
+    const created = (await rest(cfg, 'POST', '/configuration/services', {
+      name: service,
+      host_id: hostId,
+      check_command_id: commandId,
+    })) as { id?: number };
+    if (!created?.id) throw new Error('POST /configuration/services n\'a pas renvoyé d\'id');
+    serviceId = created.id;
+  }
+  await rest(cfg, 'PATCH', `/configuration/services/${serviceId}`, {
+    passive_check_enabled: 1,
+    active_check_enabled: 0,
     max_check_attempts: 1,
+    volatility_enabled: 1,
   });
-  const pollerId = await findPollerId(cfg, poller.name);
-  await rest(cfg, 'POST', `/instance/poller/${pollerId}/config/generate`, {});
-  await rest(cfg, 'POST', `/instance/poller/${pollerId}/config/move`, {});
-  return { ok: true, message: `service créé, config générée et déployée sur le poller « ${poller.name} » (REST v1)` };
+  await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/generate`);
+  await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/reload`);
+  return { ok: true, message: `service passif en place sur « ${host} », config générée et déployée sur le poller « ${poller.name} » (REST /api/latest)` };
 }
 
 // ---------------------------------------------------------------------------
@@ -177,17 +241,20 @@ async function provisionRest(cfg: CentreonConfig, host: string, service: string,
 
 /**
  * Provisionne le service passif de la règle selon le transport configuré.
- * Toute erreur est capturée et renvoyée (règle conservée, statut « erreur »).
+ * `hostAddress` (IP de la VM/nœud Proxmox) permet au transport REST de créer
+ * l'hôte Centreon s'il est absent. Toute erreur est capturée et renvoyée
+ * (règle conservée, statut « erreur »).
  */
 export async function provisionService(
   cfg: CentreonConfig,
   host: string,
   service: string,
   poller: CentreonPoller,
+  hostAddress?: string,
 ): Promise<ProvisionResult> {
   try {
     if (cfg.transport === 'clapi') return await provisionClapi(cfg, host, service, poller);
-    return await provisionRest(cfg, host, service, poller);
+    return await provisionRest(cfg, host, service, poller, hostAddress);
   } catch (err) {
     return { ok: false, message: (err as Error).message };
   }

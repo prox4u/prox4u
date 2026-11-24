@@ -41,6 +41,24 @@ function maskConfig(cfg: CentreonConfig): Record<string, unknown> {
   };
 }
 
+/**
+ * IP de la cible de la règle (VM ou nœud Proxmox) depuis le snapshot du poller —
+ * sert au provisioning REST à créer l'hôte Centreon s'il est absent. `undefined`
+ * si inconnue (snapshot absent, cible cluster, VM sans IP rapportée).
+ */
+function hostAddressFor(rule: AlarmRule, poller: Poller): string | undefined {
+  const multi = poller.getMulti();
+  const snap = multi?.endpoints.find((e) => e.id === rule.target.endpointId)?.snapshot;
+  if (!snap) return undefined;
+  if (rule.target.kind === 'vm' && rule.target.vmid != null) {
+    return snap.vms.find((v) => v.vmid === rule.target.vmid)?.ipAddresses?.[0];
+  }
+  if (rule.target.kind === 'node' && rule.target.node) {
+    return snap.nodes.find((n) => n.node === rule.target.node)?.ip;
+  }
+  return undefined;
+}
+
 export function registerAlarmRoutes(
   app: FastifyInstance,
   store: NscaStore,
@@ -155,9 +173,10 @@ export function registerAlarmRoutes(
       currentState: 'ok',
     });
 
-    // Provisionnement (ne bloque pas la création : échec → statut erreur)
+    // Provisionnement (ne bloque pas la création : échec → statut erreur).
+    // hostAddress = IP de la cible (snapshot) → le REST peut créer l'hôte absent.
     const cfg = store.getConfig();
-    const prov = await provisionService(cfg, rule.centreonHost, rule.centreonService, poller);
+    const prov = await provisionService(cfg, rule.centreonHost, rule.centreonService, poller, hostAddressFor(rule, _poller));
     store.updateRule(rule.id, {
       provisionStatus: prov.ok ? 'ok' : 'error',
       provisionMessage: prov.message,
@@ -214,7 +233,7 @@ export function registerAlarmRoutes(
     const poller = store.pollerById(rule.pollerId);
     if (!poller) return reply.code(400).send({ error: 'poller-inconnu' });
     store.updateRule(id, { provisionStatus: 'pending', provisionMessage: 're-provisionnement en cours…' });
-    const prov = await provisionService(store.getConfig(), rule.centreonHost, rule.centreonService, poller);
+    const prov = await provisionService(store.getConfig(), rule.centreonHost, rule.centreonService, poller, hostAddressFor(rule, _poller));
     store.updateRule(id, {
       provisionStatus: prov.ok ? 'ok' : 'error',
       provisionMessage: prov.message,
