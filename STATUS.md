@@ -883,7 +883,7 @@ Demande utilisateur : « pour la gestion des Pollers, il faut deux entrées — 
 - **Tests** : 217 shared (dont 23 centreon-nsca) + 95 server (dont 19 centreonnsca) passent · typecheck web 100 % propre · build web OK.
 - **API E2E** (session admin) : `GET /api/alarms` (règles+pollers+stats+config), `PUT /api/alarms/config` (activation+NSCA, mdp masqués à la relecture), `POST /api/alarms/rules` (création + **provisioning échoué proprement** sans central réel → `provisionStatus:error` + message SSH, règle conservée), `POST /api/alarms/rules/:id/test` (trame NSCA : le cfg passe le parsing, échec de connexion attendu sans daemon), `GET /api/alarms/targets` (VMs/nœuds réels + mappings).
 - **Playwright** : les 3 pages validées — menu « Alarmes & Checks NSCA », Page 2 (tableau + indicateurs + filtres + actions), Page 1 (formulaire peuplé + auto-suggestion hôte/service), Page 3 (onglet admin : transport CLAPI/REST, central, NSCA, pollers, mapping).
-- **Note** : le daemon NSCA n'est pas installé sur cet environnement (seul le client `send_nsca` l'est) → la réception côté Centreon est à valider avec un vrai daemon (script `scripts/nsca-test.sh` fourni). Le mot de passe admin a été réinitialisé en local pour la validation (`***`).
+- **Note** : le daemon NSCA n'est pas installé sur cet environnement (seul le client `send_nsca` l'est) → la réception côté Centreon est à valider avec un vrai daemon (script `scripts/nsca-test.sh` fourni). Le mot de passe du compte de test a été réinitialisé en local pour la validation (voir `data/auth.json` sur le serveur).
 
 ### Roadmap (hors périmètre de cette itération)
 - Backend **Zabbix** (2ᵉ transport d'alarme) sur le même namespace `/api/alarms/*`.
@@ -1780,10 +1780,12 @@ comptes de test dédiés, (3) un bouton « lock » dans la gestion des comptes.
   (bouton désactivé + refus serveur `self-modification`).
 
 ### Comptes de test dédiés (créés, documentés dans skill `general` §11)
-| Compte | Rôle | Mot de passe | Usage |
-|---|---|---|---|
-| `test-admin` | admin | `***` | tests nécessitant le rôle admin (gestion users, catalogue, …) |
-| `test-user` | user | `***` | tests utilisateur classique (+ bac à sable verrouillage) |
+| Compte | Rôle | Usage |
+|---|---|---|
+| `test-admin` | admin | tests nécessitant le rôle admin (gestion users, catalogue, …) |
+| `test-user` | user | tests utilisateur classique (+ bac à sable verrouillage) |
+
+Mots de passe dans `data/auth.json` sur le serveur (gitignoré).
 
 - `mustChangePassword=false` sur les deux (créés via `POST /api/admin/users`, puis flag
   passé à false dans `data/auth.json` + restart — `createUser` force `true` et aucun
