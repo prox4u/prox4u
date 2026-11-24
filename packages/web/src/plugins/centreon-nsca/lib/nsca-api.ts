@@ -63,18 +63,27 @@ export interface AlarmTargets {
   mappings: { key: string; host: string }[];
 }
 
+/** Quels secrets Centreon sont fournis par le .env du serveur (CENTREON_*). */
+export interface CentreonEnvSecrets {
+  restToken: boolean;
+  nscaPassword: boolean;
+  clapiPassword: boolean;
+}
+
 /** Payload GET /api/alarms. */
 export interface AlarmList {
   rules: AlarmRule[];
   pollers: CentreonPoller[];
   stats: AlarmStats;
   config: CentreonConfig;
+  envSecrets: CentreonEnvSecrets;
   metrics: { vm: MetricId[]; node: MetricId[]; cluster: MetricId[] };
 }
 
 /** Payload GET /api/alarms/config. */
 export interface AlarmConfigPayload {
   config: CentreonConfig;
+  envSecrets: CentreonEnvSecrets;
   pollers: CentreonPoller[];
   mappings: VmMapping[];
 }

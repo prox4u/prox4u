@@ -138,4 +138,36 @@ describe('NscaStore', () => {
   it('seedNscaFile est stable (version 1)', () => {
     expect(seedNscaFile().version).toBe(1);
   });
+
+  it('secrets .env : prévalent sur les valeurs du JSON (getConfig merge)', () => {
+    const s = new NscaStore(file, logger, { restToken: 'env-token', nscaPassword: 'env-nsca', clapiPassword: 'env-clapi' });
+    s.init();
+    s.setConfig({ restToken: 'json-token', clapiPassword: 'json-clapi' });
+    s.setConfig({ nsca: { password: 'json-nsca' } });
+    // getConfig applique la prévalence .env
+    const c = s.getConfig();
+    expect(c.restToken).toBe('env-token');
+    expect(c.clapiPassword).toBe('env-clapi');
+    expect(c.nsca.password).toBe('env-nsca');
+    // les autres champs du JSON sont conservés
+    expect(c.enabled).toBe(false);
+    // le JSON stocké n'est PAS modifié par l'override (pas de persistance de l'env)
+    const s2 = new NscaStore(file, logger);
+    s2.init();
+    expect(s2.getConfig().restToken).toBe('json-token');
+    expect(s2.getConfig().nsca.password).toBe('json-nsca');
+  });
+
+  it('envSecretFlags : true seulement si le secret .env est renseigné', () => {
+    const s = new NscaStore(file, logger, { restToken: 'tok', nscaPassword: '', clapiPassword: '' });
+    s.init();
+    expect(s.envSecretFlags()).toEqual({ restToken: true, nscaPassword: false, clapiPassword: false });
+  });
+
+  it('sans secrets .env : getConfig renvoie la config du JSON telle quelle', () => {
+    const s = fresh();
+    s.setConfig({ restToken: 'json-token' });
+    expect(s.getConfig().restToken).toBe('json-token');
+    expect(s.envSecretFlags()).toEqual({ restToken: false, nscaPassword: false, clapiPassword: false });
+  });
 });

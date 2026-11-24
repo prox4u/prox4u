@@ -53,6 +53,7 @@ export function registerAlarmRoutes(
       pollers: store.listPollers(),
       stats: store.stats(),
       config: maskConfig(store.getConfig()),
+      envSecrets: store.envSecretFlags(),
       metrics: { vm: VM_METRICS, node: NODE_METRICS, cluster: CLUSTER_METRICS },
     };
   });
@@ -226,6 +227,7 @@ export function registerAlarmRoutes(
   app.get('/api/alarms/config', async () => {
     return {
       config: maskConfig(store.getConfig()),
+      envSecrets: store.envSecretFlags(),
       pollers: store.listPollers(),
       mappings: store.listMappings(),
     };

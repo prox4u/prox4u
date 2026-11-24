@@ -446,11 +446,27 @@ mdp). L'installation du daemon `nsca` (add-on centreon-engine) reste à la charg
 | `NSCA_CHECK_COMMAND` | `/usr/bin/centengine -c /etc/centengine/centengine.cfg --external-command` | soumission du check à centengine — **à vérifier** selon l'env |
 | `DB_USER` / `DB_NAME` / `DB_PASS` | lus dans `/etc/centreon/centreon` puis `centreon.conf.php` | identifiants DB (token) — repli root via socket unix, sinon prompt |
 
-### 11.3 Config Prox4u (Page 3)
+### 11.3 Config Prox4u (Page 3 + `.env`)
 
-Après exécution, saisir dans Prox4u (Admin → Centreon (NSCA)) le récap affiché :
-**Transport** REST (URL = **URL externe du central**, user = `prox4u`, token = affiché) +
-**NSCA** (serveur = **IP du central**, port, mdp = affiché).
+Après exécution, renseigner dans Prox4u le récap affiché :
+**Transport** REST (URL = **URL externe du central**, user = `prox4u`) + **NSCA** (serveur =
+**IP du central**, port). Les **champs non-secrets** (URL, user, hôte, port) se saisissent dans
+l'UI (Admin → Centreon (NSCA)).
+
+**Les secrets (token / mots de passe) vont dans le `.env` du serveur Prox4u** — ils ne
+transitent plus par l'interface :
+
+```bash
+# .env du serveur Prox4u (valeurs du récap du script)
+CENTREON_REST_TOKEN="<token API du récap>"                # token API (REST)
+CENTREON_NSCA_PASSWORD="<mdp NSCA du récap>"              # mdp NSCA
+CENTREON_CLAPI_PASSWORD="<mdp admin>"                     # mdp CLAPI (si transport CLAPI)
+```
+
+> ℹ️ **Prévalence `.env`** : si une variable `CENTREON_*` est renseignée, elle **prévaut** sur
+> la valeur saisie dans l'UI (stockée dans `data/centreon-nsca.json`). L'UI affiche alors
+> « Fourni via .env ({{var}}) » sous le champ concerné. Les valeurs UI restent un repli si le
+> `.env` est vide. Redémarrer le serveur après modification du `.env`.
 
 > ⚠ **URL REST ≠ `localhost`** : le serveur Prox4u est sur une **autre machine** que le
 > central → l'URL à saisir doit être joignable par le réseau (ex. `http://192.168.1.130/centreon`),

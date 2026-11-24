@@ -41,12 +41,20 @@ export function seedNscaFile(): CentreonNscaFile {
   };
 }
 
+/** Secrets Centreon fournis par le .env (CENTREON_*) — prévalent sur le JSON. */
+export interface CentreonEnvSecrets {
+  restToken: string;
+  nscaPassword: string;
+  clapiPassword: string;
+}
+
 export class NscaStore {
   private file: CentreonNscaFile | null = null;
 
   constructor(
     private filePath: string,
     private logger: Pick<Console, 'info' | 'warn' | 'error'>,
+    private envSecrets: CentreonEnvSecrets = { restToken: '', nscaPassword: '', clapiPassword: '' },
   ) {}
 
   /** Charge (ou crée) le fichier. Fail-fast si corrompu. */
@@ -94,8 +102,30 @@ export class NscaStore {
 
   // ---------- Configuration ----------
 
+  /**
+   * Config effective : le fichier data/centreon-nsca.json, avec les secrets du
+   * .env (CENTREON_*) en PRÉVALENCE quand ils sont renseignés. Les secrets ne
+   * transitent donc plus par l'UI — ils vivent dans le .env du serveur.
+   */
   getConfig(): CentreonConfig {
-    return this.data.config;
+    const c = this.data.config;
+    const e = this.envSecrets;
+    if (!e.restToken && !e.nscaPassword && !e.clapiPassword) return c;
+    return {
+      ...c,
+      ...(e.restToken ? { restToken: e.restToken } : {}),
+      ...(e.clapiPassword ? { clapiPassword: e.clapiPassword } : {}),
+      nsca: { ...c.nsca, ...(e.nscaPassword ? { password: e.nscaPassword } : {}) },
+    };
+  }
+
+  /** Quels secrets sont fournis par le .env (pour l'UI : « via .env »). */
+  envSecretFlags(): { restToken: boolean; nscaPassword: boolean; clapiPassword: boolean } {
+    return {
+      restToken: this.envSecrets.restToken.length > 0,
+      nscaPassword: this.envSecrets.nscaPassword.length > 0,
+      clapiPassword: this.envSecrets.clapiPassword.length > 0,
+    };
   }
 
   /**

@@ -76,6 +76,13 @@ const envSchema = z.object({
   INFLUX_ACTION_GROUPS: z.string().default('Administrateurs,Exploitations'),
   // Durée de vie des sessions d'authentification (heures, max 30 jours)
   AUTH_SESSION_TTL_HOURS: z.coerce.number().positive().max(720).default(12),
+  // --- Centreon (module « Alarmes & Centreon ») : secrets via .env ---
+  // Si renseignés, ils PRÉVAUTENT sur les valeurs saisies dans l'UI admin
+  // (stockées dans data/centreon-nsca.json) : on ne « envoie » plus le token /
+  // les mots de passe via l'interface, ils vivent dans le .env du serveur.
+  CENTREON_REST_TOKEN: z.string().default(''),
+  CENTREON_NSCA_PASSWORD: z.string().default(''),
+  CENTREON_CLAPI_PASSWORD: z.string().default(''),
 });
 
 export interface InfluxConfig {
@@ -163,6 +170,12 @@ export interface AppConfig {
    * Vide = seules les actions du rôle admin.
    */
   influxActionGroups: string[];
+  /**
+   * Centreon (module « Alarmes & Centreon ») : secrets fournis par le .env.
+   * Si non vides, ils PRÉVAUTENT sur les valeurs de data/centreon-nsca.json
+   * (saisies UI) — le token / les mots de passe ne transitent plus par l'UI.
+   */
+  centreon: { restToken: string; nscaPassword: string; clapiPassword: string };
 }
 
 /** Chemin relatif au repo (data/tls/…) ou absolu. */
@@ -503,6 +516,11 @@ export function loadConfig(): AppConfig {
     influxActionGroups: env.INFLUX_ACTION_GROUPS.split(',')
       .map((s) => s.trim())
       .filter((s) => s.length > 0),
+    centreon: {
+      restToken: env.CENTREON_REST_TOKEN,
+      nscaPassword: env.CENTREON_NSCA_PASSWORD,
+      clapiPassword: env.CENTREON_CLAPI_PASSWORD,
+    },
   };
   if (env.TLS_KEY && env.TLS_CERT) {
     cfg.tls = { key: resolvePath(env.TLS_KEY), cert: resolvePath(env.TLS_CERT) };

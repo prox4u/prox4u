@@ -17,7 +17,8 @@ import { NscaStore } from './store.js';
  */
 export function registerAlarmNsca(app: FastifyInstance, ctx: AppContext, poller: Poller): void {
   const dataDir = path.dirname(ctx.config.authFile);
-  const store = new NscaStore(path.join(dataDir, 'centreon-nsca.json'), ctx.logger);
+  // Secrets du .env (CENTREON_*) : prévalent sur data/centreon-nsca.json (UI).
+  const store = new NscaStore(path.join(dataDir, 'centreon-nsca.json'), ctx.logger, ctx.config.centreon);
   store.init();
   const engine = new AlarmEngine(store, poller, dataDir, ctx.logger);
   engine.start();

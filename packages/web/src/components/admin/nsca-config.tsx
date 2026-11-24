@@ -4,7 +4,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { suggestCenteronHost, type CentreonConfig, type CentreonPoller, type VmMapping } from '@prox4u/shared';
 import { Button } from '../ui/button';
 import { Input, Select } from '../ui/input';
-import { alarmsApi } from '../../plugins/centreon-nsca/lib/nsca-api';
+import { alarmsApi, type CentreonEnvSecrets } from '../../plugins/centreon-nsca/lib/nsca-api';
 
 interface Props {
   onDone: () => void;
@@ -24,6 +24,7 @@ interface Props {
 export function NscaConfig({ onDone }: Props) {
   const { t } = useTranslation();
   const [config, setConfig] = useState<CentreonConfig | null>(null);
+  const [envSecrets, setEnvSecrets] = useState<CentreonEnvSecrets | null>(null);
   const [pollers, setPollers] = useState<CentreonPoller[]>([]);
   const [mappings, setMappings] = useState<VmMapping[]>([]);
   const [vms, setVms] = useState<import('../../plugins/centreon-nsca/lib/nsca-api').TargetVm[]>([]);
@@ -39,6 +40,7 @@ export function NscaConfig({ onDone }: Props) {
     try {
       const [data, targets] = await Promise.all([alarmsApi.config(), alarmsApi.targets()]);
       setConfig(data.config);
+      setEnvSecrets(data.envSecrets);
       setPollers(data.pollers);
       setMappings(data.mappings);
       setVms(targets.vms);
@@ -58,6 +60,11 @@ export function NscaConfig({ onDone }: Props) {
   function setNsca(patch: Partial<CentreonConfig['nsca']>) {
     setSaved(false);
     setConfig((c) => (c ? { ...c, nsca: { ...c.nsca, ...patch } } : c));
+  }
+  /** Hint : le secret est fourni par le .env du serveur (prévalence sur la saisie). */
+  function envHint(flag: boolean | undefined, envVar: string) {
+    if (!flag) return null;
+    return <span className="font-normal text-muted-foreground">{t('alarm.admin.envSecrets', { var: envVar })}</span>;
   }
   function addPoller() {
     const name = newPollerName.trim();
@@ -180,6 +187,7 @@ export function NscaConfig({ onDone }: Props) {
                 autoComplete="new-password"
               />
               <span className="font-normal text-muted-foreground">{t('alarm.admin.clapiPassword.hint')}</span>
+              {envHint(envSecrets?.clapiPassword, 'CENTREON_CLAPI_PASSWORD')}
             </label>
           </div>
         </section>
@@ -209,6 +217,7 @@ export function NscaConfig({ onDone }: Props) {
                 autoComplete="new-password"
               />
               <span className="font-normal text-muted-foreground">{t('alarm.admin.restToken.hint')}</span>
+              {envHint(envSecrets?.restToken, 'CENTREON_REST_TOKEN')}
             </label>
           </div>
         </section>
@@ -239,6 +248,7 @@ export function NscaConfig({ onDone }: Props) {
               placeholder={config.nsca.password ? '' : '••••••'}
               autoComplete="new-password"
             />
+            {envHint(envSecrets?.nscaPassword, 'CENTREON_NSCA_PASSWORD')}
           </label>
         </div>
       </section>

@@ -932,6 +932,7 @@ export const en: Record<string, string> = {
   'alarm.admin.restUser': 'API user',
   'alarm.admin.restToken': 'API token',
   'alarm.admin.restToken.hint': 'Never logged. Basic auth (user + token) on /api/restapi.',
+  'alarm.admin.envSecrets': 'Provided via the server .env ({{var}}) — takes precedence over the value entered here.',
   'alarm.admin.central': 'Centreon central',
   'alarm.admin.pollers': 'Pollers',
   'alarm.admin.pollers.hint': 'Target pollers offered in rules. Add freely (Linux, Windows, Infra…).',
