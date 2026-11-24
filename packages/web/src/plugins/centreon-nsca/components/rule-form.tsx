@@ -137,7 +137,10 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
     try {
       await onSubmit(values);
     } catch (e) {
-      setError((e as Error).message);
+      // Le serveur renvoie `fields` (champs invalides) sur une 400 — l'afficher
+      // pour un diagnostic immédiat au lieu du message générique seul.
+      const err = e as Error & { fields?: string[] };
+      setError(err.fields?.length ? `${err.message} — champs : ${err.fields.join(', ')}` : err.message);
     } finally {
       setBusy(false);
     }

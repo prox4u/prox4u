@@ -53,8 +53,15 @@ GROUP_NAME="${GROUP_NAME:-groupeprox4u}"
 USER_LOGIN="${USER_LOGIN:-prox4u}"
 USER_EMAIL="${USER_EMAIL:-prox4u@localhost}"
 NSCA_PORT="${NSCA_PORT:-5668}"
+# Fichier de config lu par le daemon nsca-ng. DÉTECTÉ depuis l'unité systemd
+# (ExecStart -c) si possible ; sinon repli sur ce chemin. Le daemon nsca-ng ne
+# recharge PAS sa config à la volée → un redémarrage est requis après écriture.
 NSCA_CFG_PATH="${NSCA_CFG_PATH:-/etc/centreon/nsca.cfg}"
-# Soumission du résultat de check passif vers centengine (à ajuster si l'env diffère).
+# FIFO de commandes externes lu par le broker Centreon — cible de `command_file`
+# de nsca-ng (le broker y lit les PROCESS_*_CHECK_RESULT). À vérifier selon l'env.
+NSCA_COMMAND_FILE="${NSCA_COMMAND_FILE:-/var/lib/centreon/broker/broker.cmd}"
+# [legacy] Commande du format NSCA traditionnel (`command=`) — non utilisée par
+# nsca-ng (qui écrit dans le FIFO `NSCA_COMMAND_FILE` au lieu d'exécuter une cmd).
 NSCA_CHECK_COMMAND="${NSCA_CHECK_COMMAND:-/usr/bin/centengine -c /etc/centengine/centengine.cfg --external-command}"
 # URL REST à SAISIR dans Prox4u : joignable depuis le serveur Prox4u (autre
 # machine) → pas localhost. Défaut : calculée (même scheme+chemin que CENTRON_URL,
@@ -171,7 +178,7 @@ db() {
 #   3) prompt interactif du mdp DB (masqué) ;
 #   4) sinon → die avec un message clair.
 ensure_db_access() {
-  [[ $DRY_RUN -eq 1 ]] && return
+  [[ $DRY_RUN -eq 1 ]] && return 0
   [[ -n "$MYSQL_BIN" ]] || die "client mysql/mariadb absent — le script doit tourner sur le central"
   if [[ -n "$DB_PASS" ]] && "$MYSQL_BIN" -N -B -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "SELECT 1" >/dev/null 2>&1; then
     ok "accès DB OK (${DB_USER})"
@@ -381,10 +388,12 @@ is_local_ip() {
 # Ne s'applique qu'au daemon local (un poller distant se redémarre à la main).
 maybe_restart_nsca() {
   local ip="$1" name="$2"
-  [[ $DRY_RUN -eq 1 ]] && return
-  is_local_ip "$ip" || return
+  # `return 0` explicite : un `return` nu renvoie le statut de la dernière
+  # commande (ici l'échec du test) → set -e tuerait le script au retour.
+  [[ $DRY_RUN -eq 1 ]] && return 0
+  is_local_ip "$ip" || return 0
   # Le daemon NSCA écoute-t-il déjà (port en écoute = ancien mdp chargé) ?
-  (exec 3<>"/dev/tcp/127.0.0.1/${NSCA_PORT}") 2>/dev/null || return
+  (exec 3<>"/dev/tcp/127.0.0.1/${NSCA_PORT}") 2>/dev/null || return 0
   if ! command -v systemctl >/dev/null 2>&1; then
     warn "daemon NSCA en écoute sur ${name} — le redémarrer à la main pour charger le nouveau mdp"
     return
@@ -409,22 +418,53 @@ maybe_restart_nsca() {
   fi
   warn "daemon NSCA en écoute sur ${name} mais redémarrage auto échoué — identifier l'unité (ss -ltnp | grep ${NSCA_PORT} → systemctl status <PID>) puis systemctl restart <unité>"
 }
+# Chemin du fichier de config lu par le daemon nsca-ng : on le DÉDUIT de l'unité
+# systemd (ExecStart -c <chemin>) — c'est LA source de vérité. Repli : NSCA_CFG_PATH.
+# (Écrire dans le mauvais fichier = mdp ignoré, le daemon garde sa PSK par défaut.)
+nsca_daemon_cfg() {
+  local ip="$1" execstart="" svc
+  if is_local_ip "$ip"; then
+    for svc in nsca-ng-server nsca-ng nsca centreon-nsca; do
+      execstart=$(systemctl cat "$svc" 2>/dev/null | grep -m1 '^ExecStart' || true)
+      [[ -n "$execstart" ]] && break
+    done
+  else
+    execstart=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "root@${ip}" \
+      "for s in nsca-ng-server nsca-ng nsca centreon-nsca; do systemctl cat \$s 2>/dev/null | grep -m1 '^ExecStart' && break; done" 2>/dev/null || true)
+  fi
+  local p
+  p=$(printf '%s' "$execstart" | grep -oE '\-c[= ]\S+' | head -1 | sed 's/^-c[= ]//')
+  if [[ -n "$p" ]]; then printf '%s' "$p"; return 0; fi
+  printf '%s' "$NSCA_CFG_PATH"
+}
+# Extrait le mdp NSCA d'une config (format nsca-ng `password = "…"` avec tab,
+# ou legacy `password=…`). Fichier en argument, ou stdin si « - ».
+extract_nsca_password() {
+  local f="${1:--}"
+  sed -nE 's/^[[:space:]]*password[[:space:]]*=[[:space:]]*//p' "$f" 2>/dev/null | head -1 \
+    | sed -E 's/^"//; s/"[[:space:]]*$//; s/[[:space:]]+$//'
+}
 write_nsca_cfg_on() {
   local ip="$1" name="$2"
-  local cfg_block
-  cfg_block=$(printf '[main]\nserver_port=%s\nencrypt=1\npassword=%s\ncommand=%s\n' \
-    "$NSCA_PORT" "$NSCA_PASSWORD" "$NSCA_CHECK_COMMAND")
+  local cfg_path cfg_block
+  cfg_path=$(nsca_daemon_cfg "$ip")
+  # Format nsca-ng (RFC 4279 TLS-PSK) : command_file (FIFO broker) + bloc
+  # authorize (PSK + autorisation hosts/services). Le format NSCA traditionnel
+  # ([main]/server_port=/password=) n'est PAS parsé par nsca-ng → le daemon
+  # garderait sa PSK par défaut (« change-me ») et refuserait les trames.
+  cfg_block=$(printf 'command_file = "%s"\n\nauthorize "*" {\n\tpassword = "%s"\n\thosts = ".*"\n\tservices = ".*"\n}\n' \
+    "$NSCA_COMMAND_FILE" "$NSCA_PASSWORD")
   if is_local_ip "$ip"; then
-    run mkdir -p "$(dirname "$NSCA_CFG_PATH")"
-    if [[ $DRY_RUN -eq 0 ]]; then printf '%s' "$cfg_block" > "$NSCA_CFG_PATH"; chmod 600 "$NSCA_CFG_PATH"; fi
-    ok "nsca.cfg écrit localement (${NSCA_CFG_PATH}) — poller ${name}"
+    run mkdir -p "$(dirname "$cfg_path")"
+    if [[ $DRY_RUN -eq 0 ]]; then printf '%s' "$cfg_block" > "$cfg_path"; chmod 600 "$cfg_path"; fi
+    ok "config nsca-ng écrite localement (${cfg_path}) — poller ${name}"
   else
     # Poller distant : via SSH (root). Si inaccessible → avertissement.
     if ssh -o BatchMode=yes -o ConnectTimeout=5 "root@${ip}" "true" 2>/dev/null; then
-      run ssh "root@${ip}" "mkdir -p \$(dirname ${NSCA_CFG_PATH}) && printf '%s' $(printf '%q' "$cfg_block") > ${NSCA_CFG_PATH} && chmod 600 ${NSCA_CFG_PATH}"
-      ok "nsca.cfg écrit sur ${name} (${ip}) via SSH"
+      run ssh "root@${ip}" "mkdir -p \$(dirname ${cfg_path}) && printf '%s' $(printf '%q' "$cfg_block") > ${cfg_path} && chmod 600 ${cfg_path}"
+      ok "config nsca-ng écrite sur ${name} (${ip}) via SSH (${cfg_path})"
     else
-      warn "poller ${name} (${ip}) : SSH root inaccessible — écrire manuellement nsca.cfg (mdp NSCA généré ci-dessous)"
+      warn "poller ${name} (${ip}) : SSH root inaccessible — écrire manuellement la config nsca-ng dans ${cfg_path} (mdp NSCA généré ci-dessous)"
     fi
   fi
   # Daemon NSCA : présence. Signal le plus fiable = le PORT en écoute (daemon
@@ -455,21 +495,31 @@ write_nsca_cfg_on() {
 }
 setup_nsca() {
   if [[ $DRY_RUN -eq 1 ]]; then NSCA_PASSWORD="DRYRUN-NSCA"; ok "mdp NSCA (dry-run)"; return; fi
-  # Idempotence : si nsca.cfg existe déjà avec un mdp, le RÉUTILISER (sauf
-  # --rotate-nsca) — sinon chaque relance changerait le mdp.
-  if [[ $ROTATE_NSCA -eq 0 && -f "$NSCA_CFG_PATH" ]]; then
-    local existing
-    existing=$(sed -n 's/^password=//p' "$NSCA_CFG_PATH" 2>/dev/null | head -1)
-    if [[ -n "$existing" ]]; then
-      NSCA_PASSWORD="$existing"
-      ok "mdp NSCA existant réutilisé (${NSCA_CFG_PATH})"
-    fi
+  # Idempotence : si un poller sélectionné a déjà une config nsca-ng avec un
+  # mdp, le RÉUTILISER (sauf --rotate-nsca) — sinon chaque relance changerait
+  # le mdp (le PSK doit rester identique entre le client et le daemon).
+  # Le chemin est DÉTECTÉ depuis l'unité systemd (nsca_daemon_cfg), pas supposé.
+  local i cfg existing
+  if [[ $ROTATE_NSCA -eq 0 ]]; then
+    for i in "${!SELECTED_POLLERS[@]}"; do
+      cfg=$(nsca_daemon_cfg "${SELECTED_POLLERS[$i]}")
+      if is_local_ip "${SELECTED_POLLERS[$i]}"; then
+        [[ -f "$cfg" ]] || continue
+        existing=$(extract_nsca_password "$cfg")
+      else
+        existing=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "root@${SELECTED_POLLERS[$i]}" "cat ${cfg} 2>/dev/null" 2>/dev/null | extract_nsca_password -)
+      fi
+      if [[ -n "$existing" ]]; then
+        NSCA_PASSWORD="$existing"
+        ok "mdp NSCA existant réutilisé (${cfg} — ${SELECTED_POLLER_NAMES[$i]:-${SELECTED_POLLERS[$i]}})"
+        break
+      fi
+    done
   fi
   if [[ -z "$NSCA_PASSWORD" ]]; then
     NSCA_PASSWORD=$(openssl rand -hex 12)
     ok "mdp NSCA généré"
   fi
-  local i
   for i in "${!SELECTED_POLLERS[@]}"; do
     write_nsca_cfg_on "${SELECTED_POLLERS[$i]}" "${SELECTED_POLLER_NAMES[$i]:-${SELECTED_POLLERS[$i]}}"
   done
