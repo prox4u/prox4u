@@ -368,21 +368,28 @@ NSCA. Le script du kit prépare le central de façon **idempotente** :
    du script (pas d'équivalent CLAPI pour générer un token) ;
 4. **mot de passe NSCA** généré + écrit dans `nsca.cfg` sur le **central** (le listener NSCA
    tourne sur la machine du central — best-effort, le daemon `nsca` est un add-on
-   centreon-engine, à installer si absent).
+   centreon-engine, à installer si absent) ;
+5. **user de monitoring NON-ADMIN** (console Centreon, vision hosts/services) : compte
+   (CLAPI `CONTACT`, `admin=0`) + rattachement au groupe ACL (défaut `ALL` = All Resources +
+   Simple User) + **topologie menu « Monitoring »** (lecture seule — les tables `acl_topology*`
+   sont vides par défaut en 26.10, sans elle le menu est vide et toutes les pages affichent
+   « Perdu(e) dans l'espace ») + recalcul des ACL (`centAcl.php`). Mdp saisi au setup
+   (**vide = pas de user créé**).
 
-> **CLAPI d'abord** : groupe + compte passent par CLAPI (`ACLGROUP`/`CONTACT`), la cible NSCA
-> est le central lui-même (IP machine) — **pas de liste DB des pollers**. La DB n'est touchée
-> que pour le token (et la rotation/suppression via `--rotate-token`/`--remove`).
+> **CLAPI d'abord** : groupe + comptes passent par CLAPI (`ACLGROUP`/`CONTACT`), la cible NSCA
+> est le central lui-même (IP machine) — **pas de liste DB des pollers**. La DB est touchée
+> pour le token **et** l'ACL du user monitoring (topologie + rattachement — pas d'API/CLAPI
+> pour ça en 26.10), plus la rotation/suppression via `--rotate-token`/`--remove`.
 >
 > ⚠ **API legacy `/api/restapi` supprimée en 26.10** (404) : le transport REST v1 de l'app
 > (`provision.ts`, Basic auth sur `/api/restapi/*`) ne fonctionne plus sur les versions récentes
-> → refonte sur `/api/latest/` + `X-AUTH-TOKEN` (issue #13). Le NSCA (TCP 5668) est indépendant.
+> → refonte sur `/api/latest/` + `X-AUTH-TOKEN` (issue #8). Le NSCA (TCP 5668) est indépendant.
 
 ### 11.1 Marche à suivre (admin, sur le central)
 
-Le script est **autonome** (un seul fichier, ~420 lignes) — dépendances `curl`, `python3`,
+Le script est **autonome** (un seul fichier, ~800 lignes) — dépendances `curl`, `python3`,
 `openssl`, `mysql`, toutes présentes par défaut sur un central Centreon. Il doit tourner **en
-root sur le central** (accès DB requis pour le token).
+root sur le central** (accès DB requis pour le token + l'ACL du user monitoring).
 
 **Étape 1 — Amener le script sur le central.** Depuis la machine de dev (ou le serveur
 Prox4u, où le kit vit dans `deploiement/`) :
@@ -405,12 +412,15 @@ bash /root/70-centreon-setup.sh
 
 1. **Identifiant admin** Centreon (défaut `admin`) + **mot de passe** (saisie masquée) ;
 2. **Mot de passe du compte `prox4u`** (saisie + confirmation) ;
-3. **Mot de passe DB** (uniquement si l'accès auto échoue — repli : identifiants
+3. **Mot de passe du user monitoring** `noc` (saisie + confirmation — **vide = pas de user
+   créé**) ;
+4. **Mot de passe DB** (uniquement si l'accès auto échoue — repli : identifiants
    `centreon.conf.php`/`centreon`, puis root via socket unix).
 
-Le script crée groupe (CLAPI) + compte (CLAPI) + token (DB) + mdp NSCA (sur le central), puis
-**auto-vérifie** (token accepté par la nouvelle API `/api/latest/` via l'en-tête `X-AUTH-TOKEN`
-+ listener NSCA en TCP) et affiche un **récap** en fin d'exécution.
+Le script crée groupe (CLAPI) + compte admin (CLAPI) + user monitoring (CLAPI + ACL SQL) +
+token (DB) + mdp NSCA (sur le central), puis **auto-vérifie** (token accepté par la nouvelle
+API `/api/latest/` via l'en-tête `X-AUTH-TOKEN` + listener NSCA en TCP) et affiche un **récap**
+en fin d'exécution.
 
 **Étape 4 — Saisir le récap dans Prox4u.** Copier la config du récap dans
 **Admin → Centreon (NSCA)** (cf. §11.3). Le token et le mdp NSCA n'y figurent **qu'une fois**
@@ -429,7 +439,7 @@ mdp). L'installation du daemon `nsca` (add-on centreon-engine) reste à la charg
 | `--dry-run` | aperçu, rien n'est exécuté |
 | `--rotate-token` | nouveau token API (l'ancien est révoqué) |
 | `--rotate-nsca` | nouveau mdp NSCA (réécrit `nsca.cfg`) |
-| `--remove` | nettoie groupe/compte/token (les services créés par le module sont **conservés**) |
+| `--remove` | nettoie groupe/compte/token/**user monitoring** (les services créés par le module sont **conservés**) |
 | `--token-only` | **token seul**, non-interactif (pas de groupe/compte/NSCA) — voir §11.4 |
 
 ### 11.2 Variables d'environnement
@@ -439,8 +449,12 @@ mdp). L'installation du daemon `nsca` (add-on centreon-engine) reste à la charg
 | `CENTRON_URL` | `http://localhost/centreon` | base URL du central **pour le script** (il tourne sur le central → `localhost` OK) |
 | `REST_URL_PROX4U` | calculée (IP central + chemin de `CENTRON_URL`) | URL REST à **saisir dans Prox4u** (joignable par le réseau, pas `localhost`) |
 | `GROUP_NAME` | `groupeprox4u` | nom du groupe de permission |
-| `USER_LOGIN` | `prox4u` | login du compte |
+| `USER_LOGIN` | `prox4u` | login du compte (admin global) |
 | `USER_EMAIL` | `prox4u@localhost` | email du compte |
+| `MON_USER_LOGIN` | `noc` | login du **user de monitoring non-admin** (console) |
+| `MON_USER_EMAIL` | `noc@localhost` | email du user monitoring |
+| `MON_GROUP` | `ALL` | groupe ACL de rattachement (défaut Centreon = All Resources + Simple User) |
+| `MON_TOPO_NAME` | `Monitoring` | nom du groupe topologie (menu) créé/rattaché |
 | `NSCA_PORT` | `5668` | port du listener NSCA |
 | `NSCA_CFG_PATH` | `/etc/centreon/nsca.cfg` | chemin de `nsca.cfg` sur le central |
 | `NSCA_CHECK_COMMAND` | `/usr/bin/centengine -c /etc/centengine/centengine.cfg --external-command` | soumission du check à centengine — **à vérifier** selon l'env |

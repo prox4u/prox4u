@@ -12,9 +12,13 @@
 #      security_authentication_tokens, schéma 21.10+ ; fallback table `token`)
 #      — affiché UNE seule fois
 #   4. Mot de passe NSCA généré + posé sur le(s) poller(s) choisi(s) (nsca.cfg)
-#   5. Auto-vérification : le token est accepté par la nouvelle API
+#   5. User de monitoring NON-ADMIN (console) : compte + rattachement au groupe
+#      ACL (défaut ALL = All Resources + Simple User) + topologie menu
+#      « Monitoring » (lecture seule) + recalcul des ACL (centAcl.php)
+#      — mdp saisi au setup (vide = pas de user monitoring créé)
+#   6. Auto-vérification : le token est accepté par la nouvelle API
 #      (/api/latest/, en-tête X-AUTH-TOKEN) + le listener NSCA répond
-#   6. Récap : identifiants + token + mdp NSCA + config prête à coller (Page 3)
+#   7. Récap : identifiants + token + mdp NSCA + config prête à coller (Page 3)
 #
 # Transport du module : API (nouvelle API Centreon, /api/latest/, en-tête
 # X-AUTH-TOKEN = token API). Le compte `prox4u` n'a BESOIN que du token API pour
@@ -52,6 +56,15 @@ CENTRON_URL="${CENTRON_URL:-http://localhost/centreon}"
 GROUP_NAME="${GROUP_NAME:-groupeprox4u}"
 USER_LOGIN="${USER_LOGIN:-prox4u}"
 USER_EMAIL="${USER_EMAIL:-prox4u@localhost}"
+# User de monitoring NON-ADMIN (console Centreon) : vision hosts/services, pas
+# d'admin. Mdp saisi au setup (vide = pas de user monitoring créé).
+MON_USER_LOGIN="${MON_USER_LOGIN:-noc}"
+MON_USER_EMAIL="${MON_USER_EMAIL:-noc@localhost}"
+# Groupe ACL de rattachement : « ALL » = groupe par défaut Centreon (All
+# Resources + Simple User = vision monitoring). La topologie menu (lecture
+# seule) est créée et rattachée à ce groupe si absente.
+MON_GROUP="${MON_GROUP:-ALL}"
+MON_TOPO_NAME="${MON_TOPO_NAME:-Monitoring}"
 NSCA_PORT="${NSCA_PORT:-5668}"
 # Fichier de config lu par le daemon nsca-ng. DÉTECTÉ depuis l'unité systemd
 # (ExecStart -c) si possible ; sinon repli sur ce chemin. Le daemon nsca-ng ne
@@ -198,7 +211,7 @@ ensure_db_access() {
 }
 
 # ── État global ──────────────────────────────────────────────────────────────
-ADMIN_USER=""; ADMIN_PASSWORD=""; PROX4U_PASS=""
+ADMIN_USER=""; ADMIN_PASSWORD=""; PROX4U_PASS=""; MON_USER_PASS=""
 SELECTED_POLLERS=(); SELECTED_POLLER_NAMES=()
 AUTH_TOKEN=""; GROUP_ID=""; API_TOKEN=""; NSCA_PASSWORD=""
 
@@ -216,6 +229,19 @@ prompt_prox4u_pass() {
   local p2; read -r -s -p "Confirmation : " p2; echo
   [[ "$PROX4U_PASS" == "$p2" ]] || die "les deux mots de passe ne correspondent pas"
   [[ ${#PROX4U_PASS} -ge 8 ]] || warn "mot de passe < 8 caractères (recommandé ≥ 8)"
+}
+
+# Mdp du user de monitoring (console, non-admin). Vide = pas de user créé.
+prompt_mon_user_pass() {
+  if [[ $DRY_RUN -eq 1 ]]; then MON_USER_PASS="DRYRUN-MON"; ok "mdp ${MON_USER_LOGIN} (dry-run)"; return; fi
+  read -r -s -p "Mot de passe du compte ${MON_USER_LOGIN} (vide = pas de user monitoring) : " MON_USER_PASS; echo
+  if [[ -z "$MON_USER_PASS" ]]; then
+    ok "user monitoring : sauté (mdp vide)"
+    return
+  fi
+  local p2; read -r -s -p "Confirmation : " p2; echo
+  [[ "$MON_USER_PASS" == "$p2" ]] || die "les deux mots de passe ne correspondent pas"
+  [[ ${#MON_USER_PASS} -ge 8 ]] || warn "mot de passe < 8 caractères (recommandé ≥ 8)"
 }
 
 # Cible NSCA : le CENTRAL lui-même. Le listener NSCA (port 5668) tourne sur cette
@@ -327,6 +353,81 @@ except Exception: pass" 2>/dev/null || true)
     warn "rattachement groupe : ${rc:0:160} (déjà membre ?)"
   else
     ok "compte ${USER_LOGIN} rattaché à ${GROUP_NAME}"
+  fi
+}
+
+# ── 4b. User de monitoring non-admin (console) ───────────────────────────────
+# Un user qui VOIT les hosts/services dans la console Centreon SANS être admin.
+# L'ACL Centreon a 3 dimensions — les 3 sont requises (validé E2E 26.10) :
+#   1. compte AVEC mot de passe (CLAPI CONTACT, authtype=local, admin=0) — sans
+#      ligne contact_password, le login renvoie 500 (pas 401) ;
+#   2. rattachement à un groupe ACL avec ressources+actions (groupe « ALL » =
+#      All Resources + Simple User = vision monitoring) ;
+#   3. topologie MENU — les tables acl_topology* sont VIDES par défaut en 26.10 :
+#      sans ça, navigationList = null et TOUTES les pages affichent « Perdu(e)
+#      dans l'espace » (les compteurs du haut, eux, marchent). On crée le groupe
+#      topologie « Monitoring » (lecture seule, access_right=2) sur les pages
+#      topology_page LIKE '2%' et on le rattache au groupe ACL.
+# Pas d'API/CLAPI pour les dimensions 2-3 en 26.10 → SQL (cf. skill
+# centreon-nsca §4.2). Idempotent.
+setup_monitoring_user() {
+  if [[ -z "$MON_USER_PASS" ]]; then ok "user monitoring : sauté (pas de mdp saisi)"; return; fi
+  if [[ $DRY_RUN -eq 1 ]]; then ok "user monitoring ${MON_USER_LOGIN} (dry-run)"; return; fi
+  # 1. Compte (CLAPI CONTACT, admin=0) — idempotent.
+  local show exists
+  show=$(clapi CONTACT show) || die "CLAPI « CONTACT show » échoué (central joignable ? auth ?)"
+  exists=$(echo "$show" | python3 -c "
+import json,sys
+try:
+    for u in json.load(sys.stdin).get('result',[]):
+        a=(u.get('contact_alias') or u.get('alias') or '').lower()
+        if a=='$MON_USER_LOGIN': print('1'); break
+except Exception: pass" 2>/dev/null || true)
+  if [[ "$exists" == "1" ]]; then
+    ok "compte ${MON_USER_LOGIN} existe"
+  else
+    # ADD: name;alias;email;password;admin;gui_access;lang;authtype (admin=0 = NON-admin).
+    clapi CONTACT add "NOC;${MON_USER_LOGIN};${MON_USER_EMAIL};${MON_USER_PASS};0;1;fr;local" >/dev/null \
+      || die "création du compte ${MON_USER_LOGIN} échouée (mot de passe conforme à la politique Centreon ?)"
+    ok "compte ${MON_USER_LOGIN} créé (${MON_USER_EMAIL})"
+  fi
+  # NON-ADMIN garanti (idempotent, les 2 branches).
+  clapi CONTACT setparam "${MON_USER_LOGIN};admin;0" >/dev/null 2>&1 \
+    || warn "setparam admin=0 : ${MON_USER_LOGIN} (déjà non-admin ?)"
+  # 2+3. ACL (groupe + topologie menu) — SQL (pas d'API en 26.10).
+  local gid uid topo_id nb
+  gid=$(db "SELECT acl_group_id FROM acl_groups WHERE acl_group_name='${MON_GROUP}' LIMIT 1" || true)
+  [[ -n "$gid" ]] || die "groupe ACL '${MON_GROUP}' introuvable (acl_groups) — vérifier le nom (groupe par défaut Centreon : ALL)"
+  uid=$(db "SELECT contact_id FROM contact WHERE contact_alias='${MON_USER_LOGIN}' LIMIT 1" || true)
+  [[ -n "$uid" ]] || die "compte ${MON_USER_LOGIN} introuvable en base (contact) — création échouée ?"
+  topo_id=$({ db "INSERT INTO acl_topology (acl_topo_name, acl_topo_alias, acl_comments, acl_topo_activate)
+SELECT '${MON_TOPO_NAME}','${MON_TOPO_NAME}','Menu Monitoring (vision, lecture seule)','1'
+WHERE NOT EXISTS (SELECT 1 FROM acl_topology WHERE acl_topo_name='${MON_TOPO_NAME}');
+SELECT acl_topo_id FROM acl_topology WHERE acl_topo_name='${MON_TOPO_NAME}' LIMIT 1;" 2>/dev/null || true; } | tail -1)
+  [[ -n "$topo_id" ]] || die "groupe topologie '${MON_TOPO_NAME}' : création/lecture échouée (acl_topology)"
+  db "INSERT INTO acl_topology_relations (acl_topo_id, topology_topology_id, access_right)
+SELECT ${topo_id}, topology_id, 2 FROM topology
+WHERE topology_page LIKE '2%'
+  AND topology_id NOT IN (SELECT topology_topology_id FROM acl_topology_relations WHERE acl_topo_id=${topo_id})"
+  db "INSERT INTO acl_group_topology_relations (acl_group_id, acl_topology_id)
+SELECT ${gid}, ${topo_id}
+WHERE NOT EXISTS (SELECT 1 FROM acl_group_topology_relations WHERE acl_group_id=${gid} AND acl_topology_id=${topo_id})"
+  db "INSERT INTO acl_group_contacts_relations (contact_contact_id, acl_group_id)
+SELECT ${uid}, ${gid}
+WHERE NOT EXISTS (SELECT 1 FROM acl_group_contacts_relations WHERE contact_contact_id=${uid} AND acl_group_id=${gid})"
+  db "UPDATE acl_groups SET acl_group_changed=1 WHERE acl_group_id=${gid}"
+  nb=$(db "SELECT COUNT(*) FROM topology WHERE topology_page LIKE '2%'" || true)
+  [[ "${nb:-0}" -gt 0 ]] || warn "aucune page de menu Monitoring (topology_page LIKE '2%') — le user n'aura pas de menu"
+  ok "user monitoring ${MON_USER_LOGIN} : groupe ${MON_GROUP} + topologie ${MON_TOPO_NAME} (lecture seule)"
+  # 4. Recalcul des ACL (sinon le cache est stale).
+  if command -v php >/dev/null 2>&1 && [[ -f /usr/share/centreon/cron/centAcl.php ]]; then
+    if php /usr/share/centreon/cron/centAcl.php >/dev/null 2>&1; then
+      ok "ACL recalculées (centAcl.php)"
+    else
+      warn "centAcl.php a échoué — recalculer à la main : php /usr/share/centreon/cron/centAcl.php"
+    fi
+  else
+    warn "centAcl.php introuvable — recalculer les ACL à la main : php /usr/share/centreon/cron/centAcl.php"
   fi
 }
 
@@ -581,6 +682,11 @@ summary() {
   echo "──────────────────────────────────────────────────────────────────"
   echo "  ⚠ Le token et le mdp NSCA ne sont affichés QUE ICI (et en base)."
   echo "    Groupe : ${GROUP_NAME} (admin global) · Compte : ${USER_LOGIN} (${USER_EMAIL})"
+  if [[ -n "$MON_USER_PASS" ]]; then
+    echo "    User monitoring (NON-admin, console) : ${MON_USER_LOGIN} (${MON_USER_EMAIL})"
+    echo "      → vision hosts/services (groupe ${MON_GROUP} + menu ${MON_TOPO_NAME} lecture seule)"
+    echo "      → mdp = celui saisi au setup (non affiché ici)"
+  fi
   echo "  ⚠ NSCA : vérifier que le daemon 'nsca-ng' est installé+démarré sur le central"
   echo "    et que NSCA_CHECK_COMMAND soumet bien le check à centengine."
   echo "══════════════════════════════════════════════════════════════════"
@@ -597,6 +703,14 @@ do_remove() {
   clapi ACLGROUP delcontact "${GROUP_NAME};${USER_LOGIN}" >/dev/null 2>&1 || true
   clapi CONTACT del "${USER_LOGIN}" >/dev/null 2>&1 || true
   clapi ACLGROUP del "${GROUP_NAME}" >/dev/null 2>&1 || true
+  # User de monitoring (compte + rattachement ACL — la topologie est conservée,
+  # elle est réutilisable par d'autres users).
+  local mon_id; mon_id=$(db "SELECT contact_id FROM contact WHERE contact_alias='${MON_USER_LOGIN}' LIMIT 1" 2>/dev/null || true)
+  if [[ -n "$mon_id" ]]; then
+    db "DELETE FROM acl_group_contacts_relations WHERE contact_contact_id=${mon_id}" 2>/dev/null || true
+    clapi CONTACT del "${MON_USER_LOGIN}" >/dev/null 2>&1 || true
+    ok "user monitoring ${MON_USER_LOGIN} supprimé"
+  fi
   ok "nettoyage terminé (re-vérifier manuellement dans l'UI Centreon)"
 }
 
@@ -684,12 +798,14 @@ main() {
     auth; do_remove; exit 0
   fi
   prompt_prox4u_pass
+  prompt_mon_user_pass
   prompt_pollers
   auth
   setup_group
   setup_user
-  ensure_db_access   # DB requise uniquement pour le token (pas d'équivalent CLAPI)
+  ensure_db_access   # DB requise pour le token + l'ACL du user monitoring
   setup_token
+  setup_monitoring_user
   setup_nsca
   verify
   summary
