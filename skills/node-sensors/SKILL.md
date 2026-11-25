@@ -5,6 +5,8 @@ description: Plugin « Capteurs nœuds » (node-sensors v1) de prox4u — métri
 
 # Node Sensors — métriques locales Telegraf
 
+> 📖 **Notice utilisateur** : module « Documentation » de l'app — route `/docs/node-sensors`, source `packages/web/src/plugins/docs/content/node-sensors.md`.
+
 Plugin **`node-sensors` v1** : expose dans le dashboard les **métriques locales** que l'API PVE
 ne donne pas — **SMART** (détection prédictive des pannes disque), **températures** (CPU/disques/
 mémoire), **ZFS ARC**, **unités systemd** en échec — collectées par l'agent **Telegraf** tournant

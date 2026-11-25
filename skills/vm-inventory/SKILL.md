@@ -5,6 +5,8 @@ description: Base de connaissance du plugin Inventaire VM de Prox4u — page /vm
 
 # Inventaire VM — Base de connaissance
 
+> 📖 **Notice utilisateur** : module « Documentation » de l'app — route `/docs/vm-view`, source `packages/web/src/plugins/docs/content/vm-view.md`.
+
 Page `/vms` : **inventaire des VMs et conteneurs LXC** du parc multi-endpoints, présentation type vCenter — arborescence `Datacenter → cluster (endpoint) → nœud` à gauche, tableau filtrable au centre, panneau détail à onglets à droite au clic sur une ligne. **Lecture seule** : les tokens PVE sont en lecture seule (`ManagerReader`) ; les actions power (start/stop/reboot) sont une itération dédiée (token écriture + endpoints POST + UI de confirmation).
 
 > Architecture globale : voir le skill `general`. Contrat API : skill `api` (`/api/vm-config`). Fonctions pures : skill `shared` (`vm-inventory.ts`).

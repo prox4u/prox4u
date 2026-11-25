@@ -5,6 +5,8 @@ description: Base de connaissance du plugin Network de Prox4u — page /topology
 
 # Network — Base de connaissance
 
+> 📖 **Notice utilisateur** : module « Documentation » de l'app — route `/docs/network`, source `packages/web/src/plugins/docs/content/network.md`.
+
 Page `/topology` : schéma de câblage **auto-découvert** via l'API PVE + **inventaire** des réseaux et des VMs qui les utilisent. Cible : managers/DSI en **hypervision réseau** (qui est branché où, ce qui tombe, l'impact). Migrated from legacy (Strangler Fig, étape 3).
 
 > Architecture globale : voir le skill `general`.

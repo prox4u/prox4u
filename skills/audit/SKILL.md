@@ -5,6 +5,8 @@ description: Plugin « Audit / best-practices » (audit v1) de prox4u — 2ᵉ s
 
 # Audit / best-practices — 2ᵉ score de configuration
 
+> 📖 **Notice utilisateur** : module « Documentation » de l'app — route `/docs/audit`, source `packages/web/src/plugins/docs/content/audit.md`.
+
 Plugin **`audit` v1** : un **2ᵉ score** (configuration) en **complément** du health score (qui
 mesure les **ressources**). Il détecte les **écarts aux bonnes pratiques** sur les données
 **déjà pollées** (API PVE) — chaque constat est **cliquable** vers la cible concernée.

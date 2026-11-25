@@ -5,6 +5,8 @@ description: Base de connaissance du plugin Inventaire Proxmox de Prox4u — pag
 
 # Inventaire Proxmox — Base de connaissance
 
+> 📖 **Notice utilisateur** : module « Documentation » de l'app — route `/docs/proxmox-inventory`, source `packages/web/src/plugins/docs/content/proxmox-inventory.md`.
+
 Page `/proxmox-inventory` : **inventaire consolidé du parc multi-endpoints** — **une machine par ligne** (QEMU + LXC), toutes sources confondues : ressources live (`/cluster/resources`) **jointes aux données d'agent invité** (OS réel, disques par filesystem, interfaces/IPs) et à la **config PVE** (tags, notes, ostype). Recherche globale + **filtres par colonne** + tri ; **export TXT/CSV/JSON de la vue filtrée**.
 
 > Architecture globale : voir le skill `general`. Fonctions pures : `@proxmox/shared/proxmox-inventory.ts`. Données d'agent : voir skill `vm-inventory` §7 (QGA, throttle, privilèges PVE).

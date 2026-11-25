@@ -12,7 +12,8 @@ Projet de **CIETED EURL** — [www.cieted.fr](https://www.cieted.fr) · Produit 
 
 | Document | Rôle |
 |---|---|
-| [`skills/`](./skills/) | **Base de connaissance** pour la reprise (humain ou IA) : 13 skills par module (architecture, plugins, API, shared, opérations…) + [inventaire et règles de maintenance](./skills/README.md) |
+| **Module « Documentation » de l'app** | **Notices d'utilisation par module** (rendu Markdown dans l'app) — menu « Documentation » (route `/docs`), une notice par module avec screenshots, accès par module (pas d'accès au plugin = pas accès à sa doc). Sources : [`packages/web/src/plugins/docs/content/`](./packages/web/src/plugins/docs/content/) |
+| [`skills/`](./skills/) | **Base de connaissance** pour la reprise (humain ou IA) : 15 skills par module (architecture, plugins, API, shared, opérations, documentation…) + [inventaire et règles de maintenance](./skills/README.md) |
 | [`STATUS.md`](./STATUS.md) | État d'avancement : jalons livrés, pièges corrigés, points en attente |
 | [`deploiement/DEPLOY.md`](./deploiement/DEPLOY.md) | Procédure de déploiement sur un nouveau serveur ([version EN](./deploiement/DEPLOY.en.md)) |
 
@@ -148,6 +149,17 @@ Centreon Engine (réception NSCA → statut du service passif)
 1. **Administration → Centreon (NSCA)** : activer le module, choisir le transport (CLAPI/REST), renseigner le central + identifiants, les pollers (**nom + IP** — l'IP est la destination NSCA des trames de ce poller, repli sur le serveur NSCA du central si vide), le serveur NSCA (hôte/port/mot de passe), et le mapping VM→hôte Centreon (bouton **Ajouter** pour d'autres correspondances).
 2. **Alarmes & Checks NSCA → Créer une surveillance** : définir la règle (cible VM/nœud, métrique, opérateur, seuil, durée de confirmation, sévérité, poller, hôte+service Centreon, message). À la soumission, le service est provisionné + la config déployée, puis la règle est enregistrée (statut provisioning affiché).
 3. **Tableau des règles** : activer/désactiver, **Tester** (trame NSCA immédiate), **Reprovisionner** (relance la création si échec), supprimer.
+
+### Trames périodiques (heartbeat OK + check hôte)
+
+En plus des trames aux transitions (alerte / récupération), l'engine envoie des **trames périodiques** pour que les checks passifs Centreon ne restent pas à l'état `Pending` (un check passif n'a pas de check actif qui le rafraîchit). Réglable dans l'admin (onglet « Centreon (NSCA) ») :
+
+| Trame | Paramètre | Défaut | `0` | Détail |
+|---|---|---|---|---|
+| **Heartbeat OK services** | `okHeartbeatSeconds` | 300 s | off | Pour chaque règle saine (état `ok`), une trame **OK (code 0)** toutes les N s. **Jamais envoyée si la règle est en alerte** (ne masque pas une alerte en cours). |
+| **Check hôte** | `hostCheckSeconds` | 60 s | off | Pour chaque hôte Centreon provisionné, une trame `PROCESS_HOST_CHECK_RESULT` toutes les N s — état **dérivé de Proxmox** (VM running→UP, stopped→DOWN ; nœud online→UP, offline→DOWN ; quorum ok→UP, perdu→DOWN). |
+
+L'**alerte** et la **récupération** restent **immédiates** (dès que la fenêtre de confirmation est remplie) ; seules ces deux trames sont périodiques.
 
 ### Exemples livrés
 

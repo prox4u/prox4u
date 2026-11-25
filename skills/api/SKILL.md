@@ -5,6 +5,8 @@ description: Contrat de l'API REST de Prox4u — /api/health, /api/dashboard (in
 
 # Prox4u — Contrat API REST
 
+> 📖 **Notice utilisateur (module InfluxDB 3 Core)** : module « Documentation » de l'app — route `/docs/influxdb`, source `packages/web/src/plugins/docs/content/influxdb.md`.
+
 Serveur Fastify (`packages/server`), HTTPS :8080 en prod. Modules : `modules/dashboard/routes.ts`, `modules/supervision/routes.ts`, enregistrés dans `modules/index.ts`.
 
 ## 1. Règles générales

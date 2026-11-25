@@ -5,6 +5,8 @@ description: Base de connaissance du plugin Hypervision de Prox4u — vue d'ense
 
 # Hypervision — Base de connaissance
 
+> 📖 **Notice utilisateur** : module « Documentation » de l'app — route `/docs/hypervision`, source `packages/web/src/plugins/docs/content/hypervision.md`.
+
 Plugin principal de Prox4u : **vue d'ensemble du parc** (multi-endpoints), **détail endpoint**, **détail nœud**. Migrated from legacy (Strangler Fig, étape 2).
 
 > Architecture globale (contrat plugin, flux de données, design system) : voir le skill `general`.

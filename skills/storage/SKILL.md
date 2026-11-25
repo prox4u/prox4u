@@ -5,6 +5,8 @@ description: Base de connaissance du plugin Storage de Prox4u — page /storage 
 
 # Storage — Base de connaissance
 
+> 📖 **Notice utilisateur** : module « Documentation » de l'app — route `/docs/storage`, source `packages/web/src/plugins/docs/content/storage.md`.
+
 Page `/storage` : **inventaire vCenter** des datastores — une ligne par datastore (barre de capacité, icône de type, nœud/partagé, contenus, VMs hébergées), dépliable vers les VMs dont le disque est sur ce datastore. Migrated from legacy (Strangler Fig, étape 4).
 
 > Architecture globale : voir le skill `general`.

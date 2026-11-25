@@ -5,6 +5,8 @@ description: Plugin « Alarmes & Centreon » (famille centreon-nsca) — règles
 
 # Centreon NSCA — Alarmes & Centreon
 
+> 📖 **Notice utilisateur** : module « Documentation » de l'app — route `/docs/centreon-nsca`, source `packages/web/src/plugins/docs/content/centreon-nsca.md`.
+
 Module qui transforme des **règles de surveillance** sur les VMs/nœuds/clusters Proxmox en **alarmes** transmises à **Centreon** sous forme de **checks passifs NSCA** (`send_nsca`). Cible : managers/DSI qui définissent des seuils, et le NOC Centreon qui reçoit les statuts.
 
 > Un futur backend **Zabbix** partagera le namespace `/api/alarms/*` et le store sans toucher à cette famille. Le transport runtime NSCA est imposé ; le provisioning (création du service Centreon) peut passer par **CLAPI** ou **REST v1** (choix sur la page de config).
