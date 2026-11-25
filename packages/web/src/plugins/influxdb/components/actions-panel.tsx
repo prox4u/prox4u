@@ -7,10 +7,43 @@ import { Input, Select } from '../../../components/ui/input';
 import { Dialog } from '../../../components/ui/dialog';
 import { downloadInfluxExport, fetchInfluxTables, postInfluxAction } from '../../../core/api/apiClient';
 
+type Risk = 'safe' | 'caution' | 'critical';
+
+/** Action en attente de validation (étape avant exécution). */
+interface PendingAction {
+  action: string;
+  label: string;
+  risk: Risk;
+  what: string;
+  impact: string;
+  details?: Array<{ k: string; v: string }>;
+  body?: Record<string, unknown>;
+}
+
+/** Métadonnées de validation par action (risque + clés i18n label/what/impact). */
+const ACTION_META: Record<string, { risk: Risk; labelKey: string; whatKey: string; impactKey: string }> = {
+  'flush': { risk: 'safe', labelKey: 'influxdb.actions.flush', whatKey: 'influxdb.actions.flush.what', impactKey: 'influxdb.actions.flush.impact' },
+  'archive/run': { risk: 'safe', labelKey: 'influxdb.actions.archiveRun', whatKey: 'influxdb.actions.archiveRun.what', impactKey: 'influxdb.actions.archiveRun.impact' },
+  'archive/reset': { risk: 'caution', labelKey: 'influxdb.actions.archiveReset', whatKey: 'influxdb.actions.archiveReset.what', impactKey: 'influxdb.actions.archiveReset.impact' },
+  'export': { risk: 'safe', labelKey: 'influxdb.actions.export', whatKey: 'influxdb.actions.export.what', impactKey: 'influxdb.actions.export.impact' },
+  'database/recreate': { risk: 'critical', labelKey: 'influxdb.actions.recreate', whatKey: 'influxdb.actions.recreate.what', impactKey: 'influxdb.actions.recreate.impact' },
+  'database/drop': { risk: 'critical', labelKey: 'influxdb.actions.dropDb', whatKey: 'influxdb.actions.dropDb.what', impactKey: 'influxdb.actions.dropDb.impact' },
+  'table/drop': { risk: 'critical', labelKey: 'influxdb.actions.dropTable', whatKey: 'influxdb.actions.dropTable.what', impactKey: 'influxdb.actions.dropTable.impact' },
+};
+
+/** Style du badge de risque (palette du design system). */
+const RISK_BADGE: Record<Risk, string> = {
+  safe: 'border-ok/30 bg-ok/10 text-ok',
+  caution: 'border-warn/30 bg-warn/10 text-warn',
+  critical: 'border-crit/30 bg-crit/10 text-crit',
+};
+
 /**
  * Panneau « Actions » InfluxDB — visible seulement si `canAct` (admin ou groupe
- * INFLUX_ACTION_GROUPS). Non-destructifs en 1 clic ; destructifs avec dialog de
- * confirmation. Chaque action est tracée côté serveur dans l'audit admin.
+ * INFLUX_ACTION_GROUPS). Chaque action passe par une ÉTAPE DE VALIDATION avant
+ * exécution : explication de la tâche + impact + niveau de risque (sûre /
+ * attention / critique) + Annuler / Continuer. Chaque action est tracée côté
+ * serveur dans l'audit admin.
  */
 export function InfluxActionsPanel({
   canAct,
@@ -37,6 +70,8 @@ export function InfluxActionsPanel({
   const [expTables, setExpTables] = useState<string[]>([]);
   const [expTablesLoading, setExpTablesLoading] = useState(false);
   const [expSelected, setExpSelected] = useState<Set<string>>(new Set());
+  // Étape de validation avant exécution (toutes les actions).
+  const [pending, setPending] = useState<PendingAction | null>(null);
 
   if (!canAct) return null;
 
@@ -64,23 +99,78 @@ export function InfluxActionsPanel({
     }
   };
 
+  /** Ouvre l'étape de validation avant exécution (explication + impact + risque). */
+  const requestAction = (
+    action: string,
+    body?: Record<string, unknown>,
+    details?: Array<{ k: string; v: string }>,
+    whatParams?: Record<string, unknown>,
+  ) => {
+    const meta = ACTION_META[action];
+    if (!meta) return;
+    setResult(null);
+    setPending({
+      action,
+      label: t(meta.labelKey),
+      risk: meta.risk,
+      what: t(meta.whatKey, whatParams ?? {}),
+      impact: t(meta.impactKey, whatParams ?? {}),
+      details,
+      body,
+    });
+  };
+
+  /** « Continuer » dans l'étape de validation → exécution. */
+  const confirmPending = () => {
+    if (!pending) return;
+    const { action, body } = pending;
+    setPending(null);
+    void run(action, body);
+  };
+
   const openDialog = (d: 'recreate' | 'drop-db' | 'drop-table') => {
     setResult(null);
     setDialog(d);
   };
 
+  /** « Continuer » du dialog paramètres → étape de validation (avec les valeurs saisies). */
   const confirm = () => {
     if (dialog === 'recreate') {
-      void run('database/recreate', { db, ...(retention ? { retention } : {}) });
+      const ret = retention || t('influxdb.actions.retention.infinite');
+      requestAction(
+        'database/recreate',
+        { db, ...(retention ? { retention } : {}) },
+        [
+          { k: t('influxdb.actions.db'), v: db },
+          { k: t('influxdb.actions.retention'), v: ret },
+        ],
+        { db, retention: ret },
+      );
     } else if (dialog === 'drop-db') {
-      void run('database/drop', { db });
+      requestAction('database/drop', { db }, [{ k: t('influxdb.actions.db'), v: db }], { db });
     } else if (dialog === 'drop-table') {
-      void run('table/drop', { db, table });
+      requestAction(
+        'table/drop',
+        { db, table },
+        [
+          { k: t('influxdb.actions.db'), v: db },
+          { k: t('influxdb.actions.table'), v: table },
+        ],
+        { db, table },
+      );
     } else if (dialog === 'export') {
       const from = Math.floor(new Date(expFrom).getTime() / 1000);
       const to = Math.floor(new Date(expTo).getTime() / 1000);
       if (Number.isFinite(from) && Number.isFinite(to) && from < to && expSelected.size > 0) {
-        void run('export', { tables: [...expSelected], from, to });
+        requestAction(
+          'export',
+          { tables: [...expSelected], from, to },
+          [
+            { k: t('influxdb.actions.tables'), v: String(expSelected.size) },
+            { k: t('influxdb.actions.period'), v: `${expFrom} → ${expTo}` },
+          ],
+          { tables: expSelected.size, from: expFrom, to: expTo },
+        );
       }
     }
     setDialog(null);
@@ -131,15 +221,15 @@ export function InfluxActionsPanel({
       </CardHeader>
       <CardContent>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" disabled={!enabled || busy !== null} onClick={() => void run('flush')}>
+          <Button variant="outline" size="sm" disabled={!enabled || busy !== null} onClick={() => requestAction('flush')}>
             <Zap className="mr-1 h-3.5 w-3.5" />
             {busy === 'flush' ? t('influxdb.actions.running') : t('influxdb.actions.flush')}
           </Button>
-          <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void run('archive/run')}>
+          <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => requestAction('archive/run')}>
             <Archive className="mr-1 h-3.5 w-3.5" />
             {busy === 'archive/run' ? t('influxdb.actions.running') : t('influxdb.actions.archiveRun')}
           </Button>
-          <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void run('archive/reset')}>
+          <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => requestAction('archive/reset')}>
             <RotateCcw className="mr-1 h-3.5 w-3.5" />
             {busy === 'archive/reset' ? t('influxdb.actions.running') : t('influxdb.actions.archiveReset')}
           </Button>
@@ -193,7 +283,7 @@ export function InfluxActionsPanel({
                 {t('common.cancel')}
               </Button>
               <Button size="sm" disabled={!db || busy !== null} onClick={confirm}>
-                {t('common.confirm')}
+                {t('influxdb.actions.continue')}
               </Button>
             </div>
           </div>
@@ -218,7 +308,7 @@ export function InfluxActionsPanel({
                 {t('common.cancel')}
               </Button>
               <Button size="sm" disabled={!db || busy !== null} onClick={confirm}>
-                {t('common.confirm')}
+                {t('influxdb.actions.continue')}
               </Button>
             </div>
           </div>
@@ -247,7 +337,7 @@ export function InfluxActionsPanel({
                 {t('common.cancel')}
               </Button>
               <Button size="sm" disabled={!db || !table || busy !== null} onClick={confirm}>
-                {t('common.confirm')}
+                {t('influxdb.actions.continue')}
               </Button>
             </div>
           </div>
@@ -308,10 +398,61 @@ export function InfluxActionsPanel({
                 {t('common.cancel')}
               </Button>
               <Button size="sm" disabled={expSelected.size === 0 || !expFrom || !expTo || busy !== null || expTablesLoading} onClick={confirm}>
-                {t('common.confirm')}
+                {t('influxdb.actions.continue')}
               </Button>
             </div>
           </div>
+        </Dialog>
+
+        {/* Étape de validation avant exécution (toutes les actions) */}
+        <Dialog
+          open={pending !== null}
+          onClose={() => setPending(null)}
+          title={
+            pending ? (
+              <span className="flex items-center gap-2">
+                <span className="truncate">{pending.label}</span>
+                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${RISK_BADGE[pending.risk]}`}>
+                  {t(`influxdb.actions.risk.${pending.risk}`)}
+                </span>
+              </span>
+            ) : ''
+          }
+        >
+          {pending && (
+            <div className="space-y-3">
+              <div>
+                <span className="text-sm font-medium">{t('influxdb.actions.whatHappens')}</span>
+                <p className="mt-1 text-sm text-muted-foreground">{pending.what}</p>
+              </div>
+              <div>
+                <span className="text-sm font-medium">{t('influxdb.actions.impact')}</span>
+                <p className="mt-1 text-sm text-muted-foreground">{pending.impact}</p>
+              </div>
+              {pending.details && pending.details.length > 0 && (
+                <div className="space-y-1 rounded-md border p-2 text-xs">
+                  {pending.details.map((d) => (
+                    <div key={d.k}>
+                      <span className="text-muted-foreground">{d.k} : </span>
+                      <span className="font-mono">{d.v}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setPending(null)}>
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  size="sm"
+                  className={pending.risk === 'critical' ? 'border border-crit/50 bg-crit/10 text-crit hover:bg-crit/20' : undefined}
+                  onClick={confirmPending}
+                >
+                  {t('influxdb.actions.continue')}
+                </Button>
+              </div>
+            </div>
+          )}
         </Dialog>
       </CardContent>
     </Card>

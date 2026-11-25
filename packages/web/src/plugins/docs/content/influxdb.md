@@ -44,16 +44,18 @@ Surveille la **santé** de la base de métriques **InfluxDB 3 Core** qui aliment
 
 Le panneau **Actions** n'est visible que si votre compte est **admin** ou membre d'un des groupes autorisés (défaut : **Administrateurs**, **Exploitations**).
 
-1. **Actions sans risque** (1 clic) :
+1. **Toutes les actions passent par une étape de validation** : avant l'exécution, un dialog explique **ce qui va se produire** et l'**impact** (réversible ou non), avec un **niveau de risque** (🟢 Sûre / 🟠 Attention / 🔴 Critique) et les paramètres de l'action — boutons **Annuler / Continuer**.
+2. **Actions sûres** (🟢) :
    - **Forcer un flush** : vide immédiatement la file d'écriture ;
    - **Archiver maintenant** : déclenche un cycle d'archivage ;
-   - **Réinitialiser l'archivage** : relance l'archivage depuis le début ;
    - **Exporter (CSV)** : exporte **une ou plusieurs tables** de la base `consolidated` sur une période (**Du**, **Au**) — une **liste de tables** (choix multiple + **Toutes**) ; le **ZIP** (1 CSV par table) est généré en mémoire et **téléchargé automatiquement** dans le dossier de téléchargements du navigateur — **aucun fichier n'est conservé sur le serveur**. Le **résultat** de l'action affiche le nombre de tables/lignes exportées.
-2. **Actions destructives** (dialogue de confirmation) :
+3. **Action d'attention** (🟠) :
+   - **Réinitialiser l'archivage** : relance l'archivage depuis le début (prochain cycle plus long).
+4. **Actions critiques** (🔴, irréversibles) :
    - **Recréer une base** : supprime puis recrée la base (données perdues), avec une **rétention** optionnelle (ex. `2y`, `365d` — vide = infinie) ;
    - **Supprimer une base** : supprime définitivement la base et toutes ses tables ;
    - **Supprimer une table** : supprime définitivement une table d'une base.
-3. Le **résultat** de chaque action s'affiche (succès / échec) et la page se rafraîchit.
+5. Le **résultat** de chaque action s'affiche (succès / échec) et la page se rafraîchit.
 
 ---
 

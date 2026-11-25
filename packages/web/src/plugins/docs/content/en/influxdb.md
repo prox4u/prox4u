@@ -44,16 +44,18 @@ Monitors the **health** of the **InfluxDB 3 Core** metrics database that powers 
 
 The **Actions** panel is only visible if your account is an **admin** or a member of one of the authorized groups (default: **Administrateurs**, **Exploitations**).
 
-1. **Risk-free actions** (1 click):
+1. **Every action goes through a validation step**: before execution, a dialog explains **what will happen** and the **impact** (reversible or not), with a **risk level** (🟢 Safe / 🟠 Caution / 🔴 Critical) and the action's parameters — **Cancel / Continue** buttons.
+2. **Safe actions** (🟢):
    - **Force flush**: empties the write queue immediately;
    - **Archive now**: triggers an archiving cycle;
-   - **Reset archive**: restarts the archiving from the beginning;
    - **Export (CSV)**: exports **one or more tables** from the `consolidated` database over a period (**From**, **To**) — a **table list** (multi-select + **All**) replaces the text field; the **ZIP** (one CSV per table) is generated in memory and **downloaded automatically** to the browser's downloads folder — **no file is kept on the server**. The action **result** shows the number of exported tables/rows.
-2. **Destructive actions** (confirmation dialog):
+3. **Caution action** (🟠):
+   - **Reset archive**: restarts the archiving from the beginning (next cycle will take longer).
+4. **Critical actions** (🔴, irreversible):
    - **Recreate database**: drops then recreates the database (data lost), with an optional **retention** (e.g. `2y`, `365d` — empty = infinite);
    - **Drop database**: permanently drops the database and all its tables;
    - **Drop table**: permanently drops a table from a database.
-3. The **result** of each action is displayed (success / failure) and the page refreshes.
+5. The **result** of each action is displayed (success / failure) and the page refreshes.
 
 ---
 
