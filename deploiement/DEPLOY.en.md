@@ -170,9 +170,15 @@ and **time** limits that matter: `--query-file-limit` (default 432 files = 72 h;
   (default 90 days) to CSV (1 file / table / day) in `INFLUX_ARCHIVE_DIR`
   (default `data/influx-archive/`), every `INFLUX_ARCHIVE_INTERVAL_HOURS` (default 6 h),
   with state resume (`data/archive-state.json`).
+- **Backups**: `POST /api/influxdb/actions/database/backup` creates a persistent ZIP
+  (one CSV per table + manifest) in `INFLUX_BACKUP_DIR` (default `data/influx-backups/`),
+  restorable via `database/restore` (line-protocol re-injection); `database/drop` accepts
+  `backup: true` (mandatory prior backup). Downloadable from the UI
+  (`GET /api/influxdb/actions/download?file=backup-*.zip`).
 - **"InfluxDB" module (vision + action)**: `/influxdb` page (KPIs, 24 h/7 d/30 d graphs,
-  databases, archive) + overview widget. **Actions** (flush, archiving, database/table
-  recreate/drop — `POST /api/influxdb/actions/*`) are restricted to the admin role
+  databases, archive, backups) + overview widget. **Actions** (flush, archiving, database
+  backup/restore, database/table recreate/drop — `POST /api/influxdb/actions/*`) are
+  restricted to the admin role
   **or** members of the `INFLUX_ACTION_GROUPS` groups (default
   `Administrateurs,Exploitations`, comma-separated names; empty = admin only). Each action
   is logged in the admin audit (`influxdb.action`). Details: `docs/plan-module-influxdb.md`.

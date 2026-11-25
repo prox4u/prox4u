@@ -38,12 +38,12 @@ Tableau de 9 entrées `{ id, labelKey, icon, content }`. `content` = le Markdown
 | `centreon-nsca` | Alarmes & Centreon | `/alarms` | `content/centreon-nsca.md` | 109 | 3 |
 | `node-sensors` | Capteurs nœuds | `/node-sensors` | `content/node-sensors.md` | 118 | 1 |
 | `audit` | Audit / best-practices | `/audit` | `content/audit.md` | 109 | 1 |
-| `influxdb` | InfluxDB 3 Core | `/influxdb` | `content/influxdb.md` | 122 | 1 |
+| `influxdb` | InfluxDB 3 Core | `/influxdb` | `content/influxdb.md` | 136 | 1 |
 
 - `labelKey` = la clé i18n du **menu du module concerné** (`nav.overview`, `nav.topology`, …) — la sidebar réutilise le libellé du menu, pas un libellé dédié.
 - `icon` = l'icône lucide du module (réutilisée).
 - **Bilingue** : chaque notice a une version EN dans **`content/en/<id>.md`** (traduction fidèle de la FR — mêmes sections, mêmes screenshots, mêmes termes `code`). Le tableau ci-dessus liste la source FR ; les 9 fichiers EN existent (`content/en/`).
-- **Total** : 1037 lignes FR + ~1030 lignes EN, 17 screenshots référencés (tous présents dans `public/screenshots/`).
+- **Total** : 1051 lignes FR + 1051 lignes EN, 17 screenshots référencés (tous présents dans `public/screenshots/`).
 
 ## 4. Accès par module (règle clé)
 - La sidebar ne liste que les modules de **`visibleModuleIds`** (autorisé ∩ préférences user) — **même source que `ModuleRoute`** : un user **sans accès à un plugin n'a pas accès à sa doc**.

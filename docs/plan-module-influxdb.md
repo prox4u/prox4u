@@ -69,7 +69,9 @@ Cache 5 min (pattern des caches dashboard) · table absente → `{ points: [], s
 | `POST .../archive/reset` | — | `archiver.resetState()` (re-archivage depuis 1 an) | faible |
 | `POST .../export` | `{table, from, to}` | export CSV ad-hoc dans `archiveDir` | aucun |
 | `POST .../database/recreate` | `{db, retention?}` | drop + create (l'op manuelle de DEPLOY.md) | **destructif** |
-| `POST .../database/drop` | `{db}` | `DELETE /api/v3/configure/database` | **destructif** |
+| `POST .../database/backup` | `{db}` | ZIP persistant (1 CSV/table + manifeste) dans `INFLUX_BACKUP_DIR` | aucun (lecture) |
+| `POST .../database/restore` | `{file}` | unzip + `createTable` + réinjection line-protocol (base d'origine du manifeste) | attention (append si tables existantes) |
+| `POST .../database/drop` | `{db, backup?}` | `DELETE /api/v3/configure/database` ; `backup: true` → sauvegarde préalable obligatoire | **destructif** |
 | `POST .../table/drop` | `{db, table}` | `DELETE /api/v3/configure/table` | **destructif** |
 
 Sécurité : validation des noms, 404 si base/table inexistante, audit admin par action.
@@ -79,6 +81,11 @@ Nouveaux besoins :
 - `influx.ts` : `dropDatabase(db)`, `dropTable(db, table)`.
 - `influx-archiver.ts` : `runNow()` + `resetState()` publics.
 - **L'archiver rejoint `AppContext`** (créé dans `index.ts`, accessible aux routes).
+
+> **Suivi (Gitea #14, livré)** : sauvegarde/restauration de bases — `database/backup`
+> (ZIP persistant + manifeste), `database/restore` (réinjection line-protocol), `GET
+> /api/influxdb/backups`, et `database/drop` avec `backup: true` (sauvegarde préalable).
+> Hors du périmètre de ce plan d'origine. Détail : skill `api` + notice `docs/influxdb`.
 
 ## 3. Permission par groupe
 

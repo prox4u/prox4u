@@ -170,9 +170,15 @@ rétention **immuable**. L'app gère ces manques sans dépendance (détail :
   (défaut 90 j) vers des CSV (1 fichier / table / jour) dans `INFLUX_ARCHIVE_DIR`
   (défaut `data/influx-archive/`), toutes les `INFLUX_ARCHIVE_INTERVAL_HOURS` (défaut 6 h),
   avec reprise d'état (`data/archive-state.json`).
+- **Sauvegardes** : `POST /api/influxdb/actions/database/backup` crée un ZIP persistant
+  (1 CSV/table + manifeste) dans `INFLUX_BACKUP_DIR` (défaut `data/influx-backups/`),
+  restaurable via `database/restore` (réinjection line-protocol) ; `database/drop` accepte
+  `backup: true` (sauvegarde préalable obligatoire). Téléchargeable depuis l'UI
+  (`GET /api/influxdb/actions/download?file=backup-*.zip`).
 - **Module « InfluxDB » (vision + action)** : page `/influxdb` (KPIs, graphiques 24 h/7 j/30 j,
-  bases, archivage) + widget de la vue d'ensemble. Les **actions** (flush, archivage,
-  recréation/suppression de bases et tables — `POST /api/influxdb/actions/*`) sont réservées
+  bases, archivage, sauvegardes) + widget de la vue d'ensemble. Les **actions** (flush, archivage,
+  sauvegarde/restauration de bases, recréation/suppression de bases et tables —
+  `POST /api/influxdb/actions/*`) sont réservées
   au rôle admin **ou** aux membres des groupes `INFLUX_ACTION_GROUPS` (défaut
   `Administrateurs,Exploitations`, noms séparés par `,` ; vide = admin seul). Chaque action
   est tracée dans l'audit admin (`influxdb.action`). Détail : `docs/plan-module-influxdb.md`.
