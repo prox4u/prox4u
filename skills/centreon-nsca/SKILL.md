@@ -79,6 +79,17 @@ Paramètres du service passif (les deux transports) : `passive_checks_enabled=1`
 
 **Enchaînement imposé** : création du service → génération de config → déploiement (`POLLERGENERATE`/`CFGMOVE` ou `config/generate`+`config/move`). Un service passif ne reçoit des trames NSCA qu'après déploiement.
 
+**User Centreon de monitoring (non-admin) — procédure validée 26.10** (débogage E2E 25/11, compte de test) : pour qu'un user voie les hosts/services dans la console **sans être admin** :
+1. **Créer le user AVEC mot de passe** (UI : Administration → Users → Add). ⚠️ Un user sans ligne `contact_password` (créé sans mdp, ou avec seulement une autologin key) → **500 au login** (pas un 401) : `password_verify($mdp, null)` / `str_starts_with(null, …)` lève une exception PHP 8 dans `centreonAuth.class.php`, attrapée par le `catch (\Throwable)` du use case `Login` → `ErrorResponse`. Diagnostic : `SELECT * FROM contact_password WHERE contact_id=<id>;` (vide = cause). Correction : `INSERT INTO contact_password (password, contact_id, creation_date) VALUES ('<php -r "echo password_hash(…)">', <id>, UNIX_TIMESTAMP());`
+2. **Rattacher à un access group** avec ressource + action : le groupe **ALL** (id 1) existe par défaut avec ressource `All Resources` (`all_hosts=1`, `all_hostgroups=1`) + action **Simple User** (vision monitoring hosts+services) — c'est le rattachement « vision sur tout, pas admin » (`contact_admin` reste 0 ; un admin bypass les ACL).
+3. **Recalcul des ACL** : `php /usr/share/centreon/cron/centAcl.php` (ou attendre le cron) — sinon le cache ACL est stale (les compteurs du haut peuvent afficher des données mais la liste Ressources reste « Vous n'avez pas la permission de voir cette page »).
+
+> ⚠️ **Pas d'API pour rattacher un user à un access group en 26.10** (vérifié dans le source du tag `release-onprem-20261001-26.10`) : la nouvelle API n'expose que `GET /configuration/access-groups` (lecture seule, 1 controller `FindLocalUserAccessGroups`) ; l'objet CLAPI `ACL` ne garde que `reload`/`lastreload` (le `setparam` contacts est retiré) ; l'API legacy `/api/restapi` est supprimée. → **UI legacy** (Administration → Users → onglet Access Groups) ou **SQL** : `INSERT INTO acl_group_contacts_relations (contact_contact_id, acl_group_id) VALUES (<id>, 1); UPDATE acl_groups SET acl_group_changed=1 WHERE acl_group_id=1;` puis `centAcl.php`.
+>
+> ⚠️ **La « login key » = Autologin Key** (`contact_autologin_key`) : elle sert au flux d'autologin (embedding), **pas** au formulaire de login classique (autologin désactivé dans le flow API `CentreonAuth::AUTOLOGIN_DISABLE`). Le login normal utilise le mot de passe.
+>
+> **Vérification sans UI** : `GET /api/latest/monitoring/hosts` + `/monitoring/services` (token `X-AUTH-TOKEN`) → `state` 0=OK/UP, 1=WARNING, 2=CRITICAL, 4=Pending ; `state_type` 1=hard.
+
 ### 4.3 Engine — machine à états + trames périodiques
 Tick 15 s, pour chaque règle active (module actif) : échantillonner la métrique → `evaluateAlarm` (la condition doit tenir sur **toute** la fenêtre de confirmation) → transitions **ok⇄firing** → trame à chaque transition (alarme = code sévérité, récupération = 0). L'état bascule **avant** l'envoi (transition consommée même si `send_nsca` échoue → pas de boucle). Échec = `lastSendState=error` + message, **aucun crash**.
 
