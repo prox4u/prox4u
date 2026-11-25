@@ -429,6 +429,31 @@ export class InfluxClient {
   }
 
   /**
+   * Crée une table avec schéma explicite (POST /api/v3/configure/table).
+   * Idempotent : 409 (table existante) ignoré — même pattern que createDatabase.
+   * Le body exige `db` + `table` dans le JSON (pas seulement les query params) ;
+   * types autorisés : utf8 | int64 | uint64 | float64 | bool.
+   */
+  async createTable(
+    db: string,
+    table: string,
+    tags: string[],
+    fields: Array<{ name: string; type: InfluxFieldType }>,
+  ): Promise<void> {
+    const res = await fetch(`${this.cfg.url}/api/v3/configure/table`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.cfg.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ db, table, tags, fields }),
+      signal: AbortSignal.timeout(10_000),
+      dispatcher: this.dispatcher,
+    });
+    if (!res.ok && res.status !== 409) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`InfluxDB create_table ${db}.${table} → HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+  }
+
+  /**
    * Schéma d'une table via information_schema.columns (DuckDB) : la colonne
    * `Timestamp` = time, `Dictionary(Int32, Utf8)` = tag, le reste = champ typé
    * (Float64/Int64/UInt64/Bool, repli utf8). null si la table n'existe pas.

@@ -39,6 +39,10 @@ import { influxTsToUnix, type InfluxQueryStats, type InfluxWriteStats } from '..
  *  - POST /api/influxdb/actions/database/backup     : sauvegarde complète d'une base
  *                                                     → ZIP persistant (1 CSV/table +
  *                                                     manifest.json) dans backupDir.
+ *  - POST /api/influxdb/actions/database/restore    : restaure une sauvegarde (ZIP)
+ *                                                     → base d'origine (createDatabase
+ *                                                     + createTable + line-protocol
+ *                                                     par lots de 1000).
  *  - POST /api/influxdb/actions/database/drop       : supprime une base (destructif) ;
  *                                                     `backup: true` → sauvegarde
  *                                                     préalable obligatoire.
@@ -325,6 +329,32 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
     const r = await ctx.archiver.backupDatabase(body.db);
     auditAction(ctx, req, 'database/backup', { db: body.db, file: r.file, tables: r.tables.length, rows: r.totalRows });
     return { ok: true, db: body.db, file: r.file, dir: ctx.config.influx.backupDir, tables: r.tables, totalRows: r.totalRows };
+  });
+
+  app.post('/api/influxdb/actions/database/restore', async (req, reply) => {
+    if (!influxReady(ctx)) return reply.code(404).send({ error: 'not-found', code: 'influx-disabled' });
+    if (!ctx.archiver) return reply.code(503).send({ error: 'unavailable', code: 'archiver-missing' });
+    const body = (req.body ?? {}) as { file?: string };
+    // basename + pattern fixe → pas de path traversal (aucun « / » possible).
+    if (typeof body.file !== 'string' || !/^backup-[\w.-]+\.zip$/.test(body.file)) {
+      return reply.code(400).send({ error: 'invalid', code: 'bad-file' });
+    }
+    let r: { db: string; tables: Array<{ table: string; rows: number; written: number; skipped: number }> };
+    try {
+      r = await ctx.archiver.restoreBackup(body.file);
+    } catch (err) {
+      if (/backup not found|sans manifeste/i.test((err as Error).message ?? '')) {
+        return reply.code(404).send({ error: 'not-found', code: 'file-not-found' });
+      }
+      throw err;
+    }
+    auditAction(ctx, req, 'database/restore', {
+      file: body.file,
+      db: r.db,
+      tables: r.tables.length,
+      rows: r.tables.reduce((s, t) => s + t.written, 0),
+    });
+    return { ok: true, db: r.db, tables: r.tables };
   });
 
   app.post('/api/influxdb/actions/database/drop', async (req, reply) => {

@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Archive, Database, DatabaseBackup, Download, RotateCcw, Trash2, Zap } from 'lucide-react';
+import { Archive, Database, DatabaseBackup, Download, History, RotateCcw, Trash2, Zap } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Button } from '../../../components/ui/button';
 import { Input, Select } from '../../../components/ui/input';
 import { Dialog } from '../../../components/ui/dialog';
 import {
   downloadInfluxExport,
+  fetchInfluxBackups,
   fetchInfluxTables,
   influxDownloadUrl,
   postInfluxAction,
@@ -32,6 +33,7 @@ const ACTION_META: Record<string, { risk: Risk; labelKey: string; whatKey: strin
   'archive/reset': { risk: 'caution', labelKey: 'influxdb.actions.archiveReset', whatKey: 'influxdb.actions.archiveReset.what', impactKey: 'influxdb.actions.archiveReset.impact' },
   'export': { risk: 'safe', labelKey: 'influxdb.actions.export', whatKey: 'influxdb.actions.export.what', impactKey: 'influxdb.actions.export.impact' },
   'database/backup': { risk: 'safe', labelKey: 'influxdb.actions.backup', whatKey: 'influxdb.actions.backup.what', impactKey: 'influxdb.actions.backup.impact' },
+  'database/restore': { risk: 'caution', labelKey: 'influxdb.actions.restore', whatKey: 'influxdb.actions.restore.what', impactKey: 'influxdb.actions.restore.impact' },
   'database/recreate': { risk: 'critical', labelKey: 'influxdb.actions.recreate', whatKey: 'influxdb.actions.recreate.what', impactKey: 'influxdb.actions.recreate.impact' },
   'database/drop': { risk: 'critical', labelKey: 'influxdb.actions.dropDb', whatKey: 'influxdb.actions.dropDb.what', impactKey: 'influxdb.actions.dropDb.impact' },
   'table/drop': { risk: 'critical', labelKey: 'influxdb.actions.dropTable', whatKey: 'influxdb.actions.dropTable.what', impactKey: 'influxdb.actions.dropTable.impact' },
@@ -65,13 +67,17 @@ export function InfluxActionsPanel({
   const { t } = useTranslation();
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; msg: string; downloadFile?: string } | null>(null);
-  // dialog ouvert (destructifs + export + sauvegarde) + champs
-  const [dialog, setDialog] = useState<null | 'recreate' | 'drop-db' | 'drop-table' | 'export' | 'backup'>(null);
+  // dialog ouvert (destructifs + export + sauvegarde/restauration) + champs
+  const [dialog, setDialog] = useState<null | 'recreate' | 'drop-db' | 'drop-table' | 'export' | 'backup' | 'restore'>(null);
   const [db, setDb] = useState('');
   const [table, setTable] = useState('');
   const [retention, setRetention] = useState('');
   // drop-db : sauvegarde préalable (checkbox)
   const [dropBackup, setDropBackup] = useState(false);
+  // restauration : liste des sauvegardes (GET /api/influxdb/backups) + sélection
+  const [backups, setBackups] = useState<Array<{ file: string; db: string; createdAt: string; size: number; tables: number; rows: number }>>([]);
+  const [backupsLoading, setBackupsLoading] = useState(false);
+  const [restoreFile, setRestoreFile] = useState('');
   const [expFrom, setExpFrom] = useState('');
   const [expTo, setExpTo] = useState('');
   // Export multi-tables : liste dynamique (GET /api/influxdb/tables) + sélection.
@@ -107,6 +113,11 @@ export function InfluxActionsPanel({
             }),
             downloadFile: typeof r.file === 'string' ? r.file : undefined,
           });
+        } else if (action === 'database/restore') {
+          const rows = Array.isArray(r.tables)
+            ? (r.tables as Array<{ written?: number }>).reduce((s, x) => s + (x.written ?? 0), 0)
+            : 0;
+          setResult({ ok: true, msg: t('influxdb.actions.restore.result', { db: r.db, rows }) });
         } else if (action === 'database/drop' && typeof r.backup === 'string') {
           // Drop avec sauvegarde préalable : la copie de sécurité est téléchargeable.
           setResult({
@@ -161,10 +172,23 @@ export function InfluxActionsPanel({
     void run(action, body);
   };
 
-  const openDialog = (d: 'recreate' | 'drop-db' | 'drop-table' | 'backup') => {
+  const openDialog = (d: 'recreate' | 'drop-db' | 'drop-table' | 'backup' | 'restore') => {
     setResult(null);
     if (d === 'drop-db') setDropBackup(false);
+    if (d === 'restore') void loadBackups();
     setDialog(d);
+  };
+
+  const loadBackups = async () => {
+    setBackupsLoading(true);
+    try {
+      const r = await fetchInfluxBackups();
+      setBackups(r.backups);
+    } catch {
+      setBackups([]);
+    } finally {
+      setBackupsLoading(false);
+    }
   };
 
   /** « Continuer » du dialog paramètres → étape de validation (avec les valeurs saisies). */
@@ -193,6 +217,21 @@ export function InfluxActionsPanel({
       );
     } else if (dialog === 'backup') {
       requestAction('database/backup', { db }, [{ k: t('influxdb.actions.db'), v: db }], { db });
+    } else if (dialog === 'restore') {
+      const b = backups.find((x) => x.file === restoreFile);
+      if (b) {
+        requestAction(
+          'database/restore',
+          { file: b.file },
+          [
+            { k: t('influxdb.actions.backupFile'), v: b.file },
+            { k: t('influxdb.actions.db'), v: b.db },
+            { k: t('influxdb.actions.tables'), v: String(b.tables) },
+            { k: t('influxdb.actions.rows'), v: String(b.rows) },
+          ],
+          { file: b.file, db: b.db, tables: b.tables, rows: b.rows },
+        );
+      }
     } else if (dialog === 'drop-table') {
       requestAction(
         'table/drop',
@@ -285,6 +324,10 @@ export function InfluxActionsPanel({
           <Button variant="outline" size="sm" disabled={!enabled || busy !== null} onClick={() => openDialog('backup')}>
             <DatabaseBackup className="mr-1 h-3.5 w-3.5" />
             {t('influxdb.actions.backup')}
+          </Button>
+          <Button variant="outline" size="sm" disabled={!enabled || busy !== null} onClick={() => openDialog('restore')}>
+            <History className="mr-1 h-3.5 w-3.5" />
+            {t('influxdb.actions.restore')}
           </Button>
           <Button variant="outline" size="sm" disabled={!enabled || busy !== null} onClick={() => openDialog('recreate')}>
             <Database className="mr-1 h-3.5 w-3.5" />
@@ -396,6 +439,37 @@ export function InfluxActionsPanel({
                 {t('common.cancel')}
               </Button>
               <Button size="sm" disabled={!db || busy !== null} onClick={confirm}>
+                {t('influxdb.actions.continue')}
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+
+        {/* Dialog restaurer une base (attention) — réinjection line-protocol */}
+        <Dialog open={dialog === 'restore'} onClose={() => setDialog(null)} title={t('influxdb.actions.restore')}>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">{t('influxdb.actions.restore.confirm')}</p>
+            <label className="block space-y-1 text-sm">
+              <span className="text-muted-foreground">{t('influxdb.actions.backupFile')}</span>
+              {backupsLoading ? (
+                <p className="text-xs text-muted-foreground">{t('influxdb.actions.tablesLoading')}</p>
+              ) : backups.length === 0 ? (
+                <p className="text-xs text-muted-foreground">{t('influxdb.actions.backupsEmpty')}</p>
+              ) : (
+                <Select value={restoreFile} onChange={(e) => setRestoreFile(e.target.value)} className="w-full">
+                  {backups.map((b) => (
+                    <option key={b.file} value={b.file}>
+                      {b.file} — {b.db} ({b.createdAt.slice(0, 16).replace('T', ' ')})
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDialog(null)}>
+                {t('common.cancel')}
+              </Button>
+              <Button size="sm" disabled={restoreFile === '' || busy !== null || backupsLoading} onClick={confirm}>
                 {t('influxdb.actions.continue')}
               </Button>
             </div>

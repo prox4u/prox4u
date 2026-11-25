@@ -206,4 +206,102 @@ describe('InfluxArchiver', () => {
     const archiver = new InfluxArchiver(makeCtx(dir, async () => [], {}, path.join(dir, 'absent')));
     expect(archiver.listBackups()).toEqual([]);
   });
+
+  it('restoreBackup : round-trip backup → restore (createDatabase + createTable + line-protocol)', async () => {
+    const t0 = 1767225600; // 2026-01-01T00:00:00Z
+    const iso = (ts: number) => new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
+    const rows: SqlRow[] = [
+      { time: iso(t0), node: 'n1', usage: 1.5, label: 'a,b' },
+      { time: iso(t0 + 300), node: 'n1', usage: 2.5, label: null },
+    ];
+    const backupDir = path.join(dir, 'backups');
+    const archiver = new InfluxArchiver(
+      makeCtx(
+        dir,
+        async (_db, buildSql) => (buildSql('x', 'y').includes('"cpu"') ? rows : []),
+        {
+          listTables: async () => ['cpu'],
+          tableSchema: async () => ({ time: 'time', tags: ['node'], fields: [{ name: 'usage', type: 'float64' }, { name: 'label', type: 'utf8' }] }),
+          querySql: async (_db: string, sql: string) =>
+            sql.includes('"cpu"') ? [{ min: rows[0].time, max: rows[1].time }] : [{ min: null, max: null }],
+        },
+        backupDir,
+      ),
+    );
+    const r = await archiver.backupDatabase('raw');
+
+    // Restauration : mock frais qui capture createDatabase / createTable / writeLp.
+    const calls: { createDb: string[]; createTable: Array<[string, string, string[], unknown[]]>; lp: string[][] } = {
+      createDb: [],
+      createTable: [],
+      lp: [],
+    };
+    const archiver2 = new InfluxArchiver(
+      makeCtx(
+        dir,
+        async () => [],
+        {
+          createDatabase: async (db: string) => {
+            calls.createDb.push(db);
+          },
+          createTable: async (db: string, table: string, tags: string[], fields: unknown[]) => {
+            calls.createTable.push([db, table, tags, fields]);
+          },
+          writeLp: async (_db: string, lines: string[]) => {
+            calls.lp.push([...lines]);
+          },
+        },
+        backupDir,
+      ),
+    );
+    const res = await archiver2.restoreBackup(r.file);
+    expect(res.db).toBe('raw');
+    expect(res.tables).toEqual([{ table: 'cpu', rows: 2, written: 2, skipped: 0 }]);
+    expect(calls.createDb).toEqual(['raw']);
+    expect(calls.createTable).toEqual([
+      ['raw', 'cpu', ['node'], [{ name: 'usage', type: 'float64' }, { name: 'label', type: 'utf8' }]],
+    ]);
+    expect(calls.lp).toHaveLength(1);
+    expect(calls.lp[0]).toEqual([
+      `cpu,node=n1 usage=1.5,label="a,b" ${t0}`, // string avec virgule + tag
+      `cpu,node=n1 usage=2.5 ${t0 + 300}`, // label vide → champ omis
+    ]);
+  });
+
+  it('restoreBackup : champ absent → skipped (line-protocol exige ≥ 1 champ)', async () => {
+    const backupDir = path.join(dir, 'backups');
+    mkdirSync(backupDir, { recursive: true });
+    const file = 'backup-t-2026-01-01-000000.zip';
+    const manifest = {
+      db: 't',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      influxVersion: null,
+      tables: [{ name: 't1', rows: 2, time: 'time', tags: [], fields: [{ name: 'f', type: 'float64' }] }],
+    };
+    const csv = 'time,f\n2026-01-01T00:00:00Z,\n2026-01-01T00:00:01Z,42\n';
+    writeFileSync(path.join(backupDir, file), Buffer.from(zipSync({ 'manifest.json': strToU8(JSON.stringify(manifest)), 't1.csv': strToU8(csv) })));
+    const lp: string[][] = [];
+    const archiver = new InfluxArchiver(
+      makeCtx(
+        dir,
+        async () => [],
+        {
+          createDatabase: async () => undefined,
+          createTable: async () => undefined,
+          writeLp: async (_db: string, lines: string[]) => {
+            lp.push([...lines]);
+          },
+        },
+        backupDir,
+      ),
+    );
+    const res = await archiver.restoreBackup(file);
+    expect(res.tables).toEqual([{ table: 't1', rows: 2, written: 1, skipped: 1 }]);
+    expect(lp[0]).toEqual([`t1 f=42 ${1767225601}`]);
+  });
+
+  it('restoreBackup : fichier absent → erreur « backup not found »', async () => {
+    const archiver = new InfluxArchiver(makeCtx(dir, async () => [], {}, path.join(dir, 'backups')));
+    await expect(archiver.restoreBackup('backup-x.zip')).rejects.toThrow(/backup not found/);
+  });
 });

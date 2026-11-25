@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { influxTsToUnix, type InfluxFieldType, type SqlRow } from './influx.js';
+import { escapeFieldString, escapeTag, influxTsToUnix, type InfluxFieldType, type SqlRow } from './influx.js';
 import type { AppContext } from './poller.js';
 
 /**
@@ -86,6 +86,45 @@ interface BackupManifest {
   createdAt: string;
   influxVersion: string | null;
   tables: BackupTableManifest[];
+}
+
+/**
+ * Parseur CSV RFC4180 minimal (champ cité : virgules, guillemets doublés,
+ * retours à la ligne). Compatible avec l'échappement de csvEscape.
+ */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      row.push(field);
+      field = '';
+    } else if (c === '\n') {
+      row.push(field);
+      field = '';
+      rows.push(row);
+      row = [];
+    } else if (c !== '\r') {
+      field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
 }
 
 export class InfluxArchiver {
@@ -393,6 +432,73 @@ export class InfluxArchiver {
       }
     }
     return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /**
+   * Restaure une sauvegarde (POST /api/influxdb/actions/database/restore) :
+   * unzip → createDatabase (idempotent) → pour chaque table du manifeste :
+   * createTable (idempotent, schéma du manifeste) + réinjection line-protocol
+   * par lots de 1000 lignes (writeLp, précision seconde). Cible = base d'origine
+   * du manifeste ; table existante → append (doublons possibles).
+   * Lève si le fichier est absent ou le manifeste illisible.
+   */
+  async restoreBackup(
+    file: string,
+  ): Promise<{ db: string; tables: Array<{ table: string; rows: number; written: number; skipped: number }> }> {
+    const influx = this.ctx.influx;
+    const full = path.join(this.ctx.config.influx.backupDir, file);
+    if (!existsSync(full)) throw new Error(`backup not found: ${file}`);
+    const zip = unzipSync(readFileSync(full));
+    const raw = zip['manifest.json'];
+    if (!raw) throw new Error(`backup sans manifeste: ${file}`);
+    const manifest = JSON.parse(strFromU8(raw)) as BackupManifest;
+    await influx.createDatabase(manifest.db);
+    const results: Array<{ table: string; rows: number; written: number; skipped: number }> = [];
+    for (const t of manifest.tables) {
+      await influx.createTable(manifest.db, t.name, t.tags, t.fields);
+      let written = 0;
+      let skipped = 0;
+      const csvRaw = zip[`${t.name}.csv`];
+      if (csvRaw) {
+        const lines = parseCsv(strFromU8(csvRaw));
+        const header = lines[0] ?? [];
+        const timeIdx = t.time ? header.indexOf(t.time) : -1;
+        const tagIdxs = t.tags.map((tag) => header.indexOf(tag));
+        const fieldIdxs = t.fields.map((f) => ({ f, idx: header.indexOf(f.name) }));
+        const batch: string[] = [];
+        for (const row of lines.slice(1)) {
+          const ts = timeIdx >= 0 ? influxTsToUnix(row[timeIdx] ?? null) : 0;
+          if (!ts) {
+            skipped++;
+            continue;
+          }
+          const tagPart = t.tags
+            .map((tag, i) => `${tag}=${escapeTag(row[tagIdxs[i]] ?? '')}`)
+            .join(',');
+          const fieldParts: string[] = [];
+          for (const { f, idx } of fieldIdxs) {
+            const v = row[idx];
+            if (v === null || v === undefined || v === '') continue; // champ absent
+            fieldParts.push(
+              f.type === 'utf8' ? `${escapeTag(f.name)}=${escapeFieldString(v)}` : `${escapeTag(f.name)}=${v}`,
+            );
+          }
+          if (fieldParts.length === 0) {
+            skipped++; // line-protocol exige ≥ 1 champ
+            continue;
+          }
+          batch.push([t.name, tagPart].filter(Boolean).join(',') + ` ${fieldParts.join(',')} ${ts}`);
+          written++;
+          if (batch.length >= 1000) {
+            await influx.writeLp(manifest.db, batch);
+            batch.length = 0;
+          }
+        }
+        if (batch.length > 0) await influx.writeLp(manifest.db, batch);
+      }
+      results.push({ table: t.name, rows: t.rows, written, skipped });
+    }
+    return { db: manifest.db, tables: results };
   }
 
   /** Archive [from, to) de `consolidated` vers CSV (1 fichier / table / jour). */

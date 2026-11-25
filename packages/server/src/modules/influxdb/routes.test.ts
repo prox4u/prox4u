@@ -628,6 +628,49 @@ describe('POST /api/influxdb/actions/*', () => {
     await app.close();
   });
 
+  it('database/restore : ok + db/tables + audit', async () => {
+    const ctx = makeCtx();
+    const app = await boot(ctx, admin);
+    const res = await app.inject({
+      method: 'POST', url: '/api/influxdb/actions/database/restore',
+      payload: { file: 'backup-raw-2026-11-25-190000.zip' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      db: 'raw',
+      tables: [{ table: 'node_metrics', rows: 5, written: 5, skipped: 0 }],
+    });
+    const restore = (ctx.archiver as unknown as { restoreBackup: ReturnType<typeof vi.fn> }).restoreBackup;
+    expect(restore).toHaveBeenCalledWith('backup-raw-2026-11-25-190000.zip');
+    expect((ctx.auth.audit.append as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      { id: 'u1', username: 'tester' }, 'influxdb.action', 'database/restore',
+      { file: 'backup-raw-2026-11-25-190000.zip', db: 'raw', tables: 1, rows: 5 },
+    );
+    await app.close();
+  });
+
+  it('database/restore : fichier invalide (slash / pattern) → 400 bad-file', async () => {
+    const app = await boot(makeCtx(), admin);
+    for (const file of ['../etc/passwd.zip', 'export-a.zip', 'backup-raw.csv', '']) {
+      const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/restore', payload: { file } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('bad-file');
+    }
+    await app.close();
+  });
+
+  it('database/restore : sauvegarde absente → 404 file-not-found', async () => {
+    const app = await boot(makeCtx({ restoreError: new Error('backup not found: backup-x.zip') }), admin);
+    const res = await app.inject({
+      method: 'POST', url: '/api/influxdb/actions/database/restore',
+      payload: { file: 'backup-x.zip' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('file-not-found');
+    await app.close();
+  });
+
   it('table/drop : ok + audit', async () => {
     const ctx = makeCtx();
     const app = await boot(ctx, admin);
