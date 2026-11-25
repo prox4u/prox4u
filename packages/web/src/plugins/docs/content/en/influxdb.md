@@ -48,7 +48,7 @@ The **Actions** panel is only visible if your account is an **admin** or a membe
    - **Force flush**: empties the write queue immediately;
    - **Archive now**: triggers an archiving cycle;
    - **Reset archive**: restarts the archiving from the beginning;
-   - **Export (CSV)**: exports **one or more tables** from the `consolidated` database over a period (**From**, **To**) to the archive directory — a **table list** (multi-select + **All**) replaces the text field; the result is **1 ZIP file containing one CSV per table**.
+   - **Export (CSV)**: exports **one or more tables** from the `consolidated` database over a period (**From**, **To**) — a **table list** (multi-select + **All**) replaces the text field; the result is **1 ZIP file containing one CSV per table**. The action **result** shows the number of exported tables/rows + a **Download the ZIP** button (saved to the browser's downloads folder); the ZIP is also kept in the server's archive directory.
 2. **Destructive actions** (confirmation dialog):
    - **Recreate database**: drops then recreates the database (data lost), with an optional **retention** (e.g. `2y`, `365d` — empty = infinite);
    - **Drop database**: permanently drops the database and all its tables;
@@ -116,7 +116,7 @@ Long-term queries are approaching the InfluxDB 3 Core file limit. Reduce the cha
 Your account is neither an **admin** nor a member of one of the groups in `INFLUX_ACTION_GROUPS`. Ask an admin to add you to a group (default: **Administrateurs**, **Exploitations**).
 
 **How do I export a precise history?**
-**Export (CSV)**: tick the wanted **tables** in the list (`consolidated` database — multi-select or **All**), the **From / To** period, and confirm. The **ZIP** (one CSV per table) is dropped in the archive directory.
+**Export (CSV)**: tick the wanted **tables** in the list (`consolidated` database — multi-select or **All**), the **From / To** period, and confirm. The **ZIP** (one CSV per table) is downloaded via the **Download the ZIP** button in the result (and kept in the server's archive directory).
 
 **How do I change a database's retention?**
 In Core the retention is immutable: use **Recreate database** with the new **retention** (e.g. `2y`, `365d`). The database is dropped then recreated — the existing data is lost.

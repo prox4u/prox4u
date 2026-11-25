@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { AppContext } from '../../core/poller.js';
@@ -32,6 +34,8 @@ interface MockOpts {
   /** groupes de l'utilisateur courant (pour canAct) */
   groupIds?: string[];
   role?: Role;
+  /** dossier d'archivage (route download) */
+  archiveDir?: string;
 }
 
 function makeCtx(over: MockOpts = {}): AppContext {
@@ -41,7 +45,10 @@ function makeCtx(over: MockOpts = {}): AppContext {
     return over.historyRows ?? [];
   });
   const ctx = {
-    config: { influxActionGroups: ['Administrateurs', 'Exploitations'] } as AppContext['config'],
+    config: {
+      influxActionGroups: ['Administrateurs', 'Exploitations'],
+      influx: { archiveDir: over.archiveDir ?? '/tmp/prox4u-influx-test' },
+    } as AppContext['config'],
     endpoints: [],
     logger,
     influx: {
@@ -490,6 +497,67 @@ describe('POST /api/influxdb/actions/*', () => {
     delete (ctx as { archiver?: unknown }).archiver;
     const app = await boot(ctx, admin);
     const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/archive/run' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().code).toBe('archiver-missing');
+    await app.close();
+  });
+});
+
+describe('GET /api/influxdb/actions/download', () => {
+  const dir = '/tmp/prox4u-influx-download-test';
+
+  it('ZIP d\'export valide → 200 + Content-Disposition attachment + contenu', async () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'export-2026-11-18_2026-11-25-165022.zip'), 'ZIPDATA');
+    const app = await boot(makeCtx({ archiveDir: dir }), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=export-2026-11-18_2026-11-25-165022.zip' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/zip');
+    expect(res.headers['content-disposition']).toBe('attachment; filename="export-2026-11-18_2026-11-25-165022.zip"');
+    expect(res.payload).toBe('ZIPDATA');
+    await app.close();
+  });
+
+  it('CSV single valide → 200 + content-type csv', async () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'export-node_metrics-2026-11-24_2026-11-25.csv'), 'a,b\n1,2\n');
+    const app = await boot(makeCtx({ archiveDir: dir }), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=export-node_metrics-2026-11-24_2026-11-25.csv' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/csv');
+    expect(res.payload).toBe('a,b\n1,2\n');
+    await app.close();
+  });
+
+  it('path traversal (slash) → 400 bad-file', async () => {
+    const app = await boot(makeCtx({ archiveDir: dir }), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=../etc/passwd.zip' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-file');
+    await app.close();
+  });
+
+  it('nom sans pattern export- → 400 bad-file', async () => {
+    const app = await boot(makeCtx({ archiveDir: dir }), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=node_metrics-2026-11-24.csv' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-file');
+    await app.close();
+  });
+
+  it('fichier absent → 404 file-not-found', async () => {
+    const app = await boot(makeCtx({ archiveDir: dir }), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=export-2026-01-01_2026-01-02-000000.zip' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('file-not-found');
+    await app.close();
+  });
+
+  it('archiver absent → 503 archiver-missing', async () => {
+    const ctx = makeCtx({ archiveDir: dir });
+    delete (ctx as { archiver?: unknown }).archiver;
+    const app = await boot(ctx, admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=export-a_b.zip' });
     expect(res.statusCode).toBe(503);
     expect(res.json().code).toBe('archiver-missing');
     await app.close();

@@ -25,7 +25,7 @@ export function InfluxActionsPanel({
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState<string | null>(null);
-  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; msg: string; file?: string } | null>(null);
   // dialog ouvert (destructifs + export) + champs
   const [dialog, setDialog] = useState<null | 'recreate' | 'drop-db' | 'drop-table' | 'export'>(null);
   const [db, setDb] = useState('');
@@ -48,7 +48,15 @@ export function InfluxActionsPanel({
     setResult(null);
     try {
       const r = await postInfluxAction(action, body);
-      setResult({ ok: true, msg: t('influxdb.actions.done', { action }) + (r && Object.keys(r).length ? ` — ${JSON.stringify(r)}` : '') });
+      // Export : message lisible (nb tables/lignes + nom de fichier) + bouton de téléchargement.
+      if (action === 'export' && typeof r.file === 'string' && r.file) {
+        const ex = Array.isArray(r.exports) ? (r.exports as Array<{ rows?: number }>) : [];
+        const rows = ex.reduce((s, e) => s + (Number(e.rows) || 0), 0);
+        const base = r.file.split('/').pop() ?? r.file;
+        setResult({ ok: true, msg: t('influxdb.actions.export.result', { tables: ex.length, rows, file: base }), file: r.file });
+      } else {
+        setResult({ ok: true, msg: t('influxdb.actions.done', { action }) + (r && Object.keys(r).length ? ` — ${JSON.stringify(r)}` : '') });
+      }
       onAction();
     } catch (err) {
       const e = err as Error & { code?: string; status?: number };
@@ -160,6 +168,16 @@ export function InfluxActionsPanel({
             className={`mt-3 rounded-md border p-2 text-xs ${result.ok ? 'border-ok/30 bg-ok/10 text-ok' : 'border-crit/30 bg-crit/10 text-crit'}`}
           >
             {result.msg}
+            {result.file && (
+              <a
+                href={`/api/influxdb/actions/download?file=${encodeURIComponent(result.file.split('/').pop() ?? result.file)}`}
+                download
+                className="mt-2 inline-flex items-center gap-1 font-medium underline underline-offset-2 hover:opacity-80"
+              >
+                <Download className="h-3.5 w-3.5" />
+                {t('influxdb.actions.download')}
+              </a>
+            )}
           </div>
         )}
 

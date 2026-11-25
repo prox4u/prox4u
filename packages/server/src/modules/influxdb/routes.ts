@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { InfluxHistoryRange, InfluxHistoryResponse } from '@prox4u/shared';
 import type { AppContext } from '../../core/poller.js';
@@ -23,6 +25,9 @@ import { influxTsToUnix, type InfluxQueryStats, type InfluxWriteStats } from '..
  *                                                     (tables[] + range → 1 ZIP,
  *                                                     1 CSV par table ; repli table
  *                                                     single → [table]).
+ *  - GET  /api/influxdb/actions/download            : télécharge un fichier d'export
+ *                                                     (file=basename, pattern export-*,
+ *                                                     Content-Disposition attachment).
  *  - POST /api/influxdb/actions/database/recreate   : drop + create (rétention).
  *  - POST /api/influxdb/actions/database/drop       : supprime une base (destructif).
  *  - POST /api/influxdb/actions/table/drop          : supprime une table (destructif).
@@ -238,6 +243,25 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
     const { file, exports } = await ctx.archiver.exportTablesZip(tables, from, to);
     auditAction(ctx, req, 'export', { tables, from, to, rows: exports.reduce((s, e) => s + e.rows, 0) });
     return { ok: true, file, exports };
+  });
+
+  app.get('/api/influxdb/actions/download', async (req, reply) => {
+    if (!ctx.archiver) return reply.code(503).send({ error: 'unavailable', code: 'archiver-missing' });
+    const file = (req.query as { file?: string }).file ?? '';
+    // Fichiers d'export ad-hoc uniquement (ZIP multi-tables / CSV single) :
+    // basename + pattern fixe → pas de path traversal (aucun « / » possible).
+    if (!/^export-[\w.-]+\.(zip|csv)$/.test(file)) {
+      return reply.code(400).send({ error: 'invalid', code: 'bad-file' });
+    }
+    const archiveDir = path.resolve(ctx.config.influx.archiveDir);
+    const full = path.join(archiveDir, file);
+    if (!full.startsWith(archiveDir + path.sep)) {
+      return reply.code(400).send({ error: 'invalid', code: 'bad-file' });
+    }
+    if (!existsSync(full)) return reply.code(404).send({ error: 'not-found', code: 'file-not-found' });
+    reply.header('Content-Type', file.endsWith('.zip') ? 'application/zip' : 'text/csv; charset=utf-8');
+    reply.header('Content-Disposition', `attachment; filename="${file}"`);
+    return reply.send(readFileSync(full));
   });
 
   app.post('/api/influxdb/actions/database/recreate', async (req, reply) => {
