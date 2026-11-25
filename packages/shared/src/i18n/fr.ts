@@ -259,6 +259,13 @@ export const fr: Record<string, string> = {
   'nav.alarms': 'Alarmes & Centreon',
   'nav.nodeSensors': 'Capteurs nœuds',
   'nav.influxdb': 'InfluxDB',
+  'nav.docs': 'Documentation',
+
+  'docs.title': 'Documentation',
+  'docs.subtitle': "Notices d'utilisation par module",
+  'docs.comingSoon': 'Notice à venir — cette page sera rédigée prochainement.',
+  'docs.noAccess': "Aucun module visible — sélectionnez vos modules dans votre profil.",
+  'docs.noAccessModule': "Vous n'avez pas accès à ce module — sélectionnez vos modules dans votre profil.",
   'nodeSensors.title': 'Capteurs nœuds — métriques locales Telegraf',
   'nodeSensors.refresh': 'Actualiser',
   'nodeSensors.retry': 'Réessayer',

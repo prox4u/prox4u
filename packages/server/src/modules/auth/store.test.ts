@@ -38,7 +38,7 @@ describe('AuthStore', () => {
     const { verifyPassword } = await import('./password.js');
     expect(await verifyPassword(admin!.passwordHash!, 'proX4u')).toBe(true);
     // catalogue des familles de plugins, activé globalement par défaut
-    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory', 'centreon-nsca', 'node-sensors', 'audit', 'influxdb']);
+    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory', 'centreon-nsca', 'node-sensors', 'audit', 'influxdb', 'docs']);
     expect(store.listModules().every((m) => m.globallyEnabled)).toBe(true);
   });
 
@@ -69,10 +69,28 @@ describe('AuthStore', () => {
     const store = new AuthStore(file, logger);
     await store.init(hashPassword);
     // les ids inconnus sont retirés, le catalogue Prox4u est restauré
-    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory', 'centreon-nsca', 'node-sensors', 'audit', 'influxdb']);
+    expect(store.listModules().map((m) => m.id)).toEqual(['hypervision', 'network', 'storage', 'vm-view', 'proxmox-inventory', 'centreon-nsca', 'node-sensors', 'audit', 'influxdb', 'docs']);
     // les références aux modules retirés sont nettoyées
     expect(store.data.groupModules.some((gm) => gm.moduleId === 'supervision')).toBe(false);
     expect(store.data.userModules.some((um) => um.moduleId === 'dashboard')).toBe(false);
+  });
+
+  it('migration : un module global nouvellement ajouté est ajouté aux préférences de tous les users', async () => {
+    const store = await freshStore();
+    const u = store.createUser({ username: 'dave', displayName: 'Dave', passwordHash: 'h', role: 'user', groupIds: [] });
+    // Simule un fichier antérieur à l'ajout de « docs » (absent du catalogue,
+    // donc absent des préférences) — le user n'a que hypervision.
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    raw.modules = raw.modules.filter((m: { id: string }) => m.id !== 'docs');
+    raw.userModules = raw.userModules.filter((um: { moduleId: string }) => um.moduleId !== 'docs');
+    writeFileSync(file, JSON.stringify(raw));
+
+    const store2 = new AuthStore(file, logger);
+    await store2.init(hashPassword);
+    // « docs » est ré-ajouté au catalogue…
+    expect(store2.listModules().some((m) => m.id === 'docs')).toBe(true);
+    // …et ajouté aux préférences du user existant (module global = pour tous).
+    expect(store2.data.userModules).toContainEqual({ userId: u.id, moduleId: 'docs' });
   });
 
   it('crée un utilisateur (mdp forcé) et refuse les identifiants en double', async () => {
@@ -238,6 +256,7 @@ describe('AuthStore', () => {
     expect(store.listModules().map((m) => m.id).sort()).toEqual([
       'audit',
       'centreon-nsca',
+      'docs',
       'hypervision',
       'influxdb',
       'network',
@@ -279,6 +298,7 @@ describe('AuthStore', () => {
       'node-sensors',
       'audit',
       'influxdb',
+      'docs',
       'vm-view_v2',
     ]);
     expect(store2.data.userModules).toContainEqual({ userId: u.id, moduleId: 'vm-view_v2' });

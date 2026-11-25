@@ -100,6 +100,12 @@ export default function App() {
                 <Route path="/alarms/edit/:id" element={<ModuleDisabled module="centreon-nsca" flag="VITE_USE_PLUGIN_CENTREON_NSCA" />} />
               </>
             )}
+            {!FEATURES.USE_PLUGIN_DOCS && (
+              <>
+                <Route path="/docs" element={<ModuleDisabled module="docs" flag="VITE_USE_PLUGIN_DOCS" />} />
+                <Route path="/docs/:moduleId" element={<ModuleDisabled module="docs" flag="VITE_USE_PLUGIN_DOCS" />} />
+              </>
+            )}
 
             {/* Routes des plugins, par famille (visibilité par utilisateur). */}
             {[...families.entries()].map(([family, routes]) => {

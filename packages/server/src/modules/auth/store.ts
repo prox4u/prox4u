@@ -105,7 +105,12 @@ export class AuthStore {
    *   code est retiré (ex. « supervision » découpé en networks/storage) et ses
    *   références sont nettoyées (groupModules, userModules) ; les entrées de
    *   version (`<famille>_vN`) d'une famille connue sont conservées ;
-   * - un module par défaut absent du fichier est ajouté (globallyEnabled=false).
+   * - un module par défaut absent du fichier est ajouté (avec son état
+   *   globallyEnabled du code) ; s'il est activé globalement (« pour tout le
+   *   monde »), il est aussi ajouté aux préférences de TOUS les users — un
+   *   module global est sélectionné par défaut (ex. « docs » : la
+   *   documentation est visible par tous les users connectés, pas seulement
+   *   les nouveaux).
    * Retourne true si le fichier a été modifié.
    */
   private reconcileModules(): boolean {
@@ -121,10 +126,26 @@ export class AuthStore {
       f.userModules = f.userModules.filter((um) => isKnown(um.moduleId));
       changed = true;
     }
+    // Modules par défaut manquants : ajoutés au catalogue. S'ils sont activés
+    // globalement (« pour tout le monde »), ils sont aussi ajoutés aux
+    // préférences de TOUS les users — un module global est sélectionné par
+    // défaut (ex. « docs » : la documentation est visible par tous les users
+    // connectés, pas seulement les nouveaux).
+    const newlyGlobal: string[] = [];
     for (const def of DEFAULT_MODULES) {
       if (!f.modules.some((m) => m.id === def.id)) {
         f.modules.push({ ...def });
+        if (def.globallyEnabled) newlyGlobal.push(def.id);
         changed = true;
+      }
+    }
+    if (newlyGlobal.length > 0) {
+      for (const u of f.users) {
+        for (const moduleId of newlyGlobal) {
+          if (!f.userModules.some((um) => um.userId === u.id && um.moduleId === moduleId)) {
+            f.userModules.push({ userId: u.id, moduleId });
+          }
+        }
       }
     }
     return changed;

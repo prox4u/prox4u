@@ -28,6 +28,8 @@ export const FEATURES = {
   USE_PLUGIN_AUDIT: env.VITE_USE_PLUGIN_AUDIT !== 'false',
   // InfluxDB 3 Core (vision + action sur la base de métriques) : défaut ON, disjoncteur opt-out.
   USE_PLUGIN_INFLUXDB: env.VITE_USE_PLUGIN_INFLUXDB !== 'false',
+  // Documentation (notices d'utilisation par module, rendu Markdown) : défaut ON, disjoncteur opt-out.
+  USE_PLUGIN_DOCS: env.VITE_USE_PLUGIN_DOCS !== 'false',
 } as const;
 
 export type FeatureFlag = keyof typeof FEATURES;

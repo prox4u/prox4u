@@ -13,6 +13,7 @@ import { centreonNscaPlugin } from '../../plugins/centreon-nsca';
 import { nodeSensorsPlugin } from '../../plugins/node-sensors';
 import { auditPlugin } from '../../plugins/audit';
 import { influxdbPlugin } from '../../plugins/influxdb';
+import { docsPlugin } from '../../plugins/docs';
 import { FEATURES } from '../config/features';
 import type { Plugin } from './types';
 
@@ -47,4 +48,7 @@ export const PLUGINS: Plugin[] = [
   // Famille influxdb : vision + action sur InfluxDB 3 Core (KPIs, graphiques,
   // bases, archivage, actions restreintes aux groupes INFLUX_ACTION_GROUPS).
   ...(FEATURES.USE_PLUGIN_INFLUXDB ? [influxdbPlugin] : []),
+  // Famille docs : notices d'utilisation par module (Markdown → HTML, accès
+  // par module = visibleModuleIds).
+  ...(FEATURES.USE_PLUGIN_DOCS ? [docsPlugin] : []),
 ];

@@ -259,6 +259,13 @@ export const en: Record<string, string> = {
   'nav.alarms': 'Alarms & Centreon',
   'nav.nodeSensors': 'Node Sensors',
   'nav.influxdb': 'InfluxDB',
+  'nav.docs': 'Documentation',
+
+  'docs.title': 'Documentation',
+  'docs.subtitle': "Per-module user guides",
+  'docs.comingSoon': 'Guide coming soon — this page will be written shortly.',
+  'docs.noAccess': 'No visible module — select your modules in your profile.',
+  'docs.noAccessModule': 'You do not have access to this module — select your modules in your profile.',
   'nodeSensors.title': 'Node Sensors — local Telegraf metrics',
   'nodeSensors.refresh': 'Refresh',
   'nodeSensors.retry': 'Retry',

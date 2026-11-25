@@ -271,4 +271,10 @@ export const DEFAULT_MODULES: ModuleDef[] = [
     description: 'Vision + action sur la base de métriques InfluxDB 3 Core (KPIs, graphiques, bases, archivage, actions)',
     globallyEnabled: true,
   },
+  {
+    id: 'docs',
+    name: 'Documentation',
+    description: "Notices d'utilisation par module (rendu Markdown dans l'app)",
+    globallyEnabled: true,
+  },
 ];
