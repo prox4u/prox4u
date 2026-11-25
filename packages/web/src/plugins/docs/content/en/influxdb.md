@@ -1,6 +1,6 @@
 # InfluxDB 3 Core
 
-Monitors the **health** of the **InfluxDB 3 Core** metrics database that powers all of Prox4u's charts, and lets you **act** on it (flush, archiving, export, recreating / dropping databases and tables).
+Monitors the **health** of the **InfluxDB 3 Core** metrics database that powers all of Prox4u's charts, and lets you **act** on it (flush, archiving, export, **backup / restore** of databases, recreating / dropping databases and tables).
 
 - **Who uses it**: the **IT department / admin** who monitors the database and intervenes on it, and the **NOC** who tracks health continuously.
 - **What it does**: Prox4u reads the state of the InfluxDB database (status, version, write queue, dropped lines, latency, file headroom), displays its health history (24 h / 7 d / 30 d), lists the databases and their retention, tracks CSV archiving, and offers administrative actions restricted to the authorized groups.
@@ -49,11 +49,13 @@ The **Actions** panel is only visible if your account is an **admin** or a membe
    - **Force flush**: empties the write queue immediately;
    - **Archive now**: triggers an archiving cycle;
    - **Export (CSV)**: exports **one or more tables** from the `consolidated` database over a period (**From**, **To**) — a **table list** (multi-select + **All**) replaces the text field; the **ZIP** (one CSV per table) is generated in memory and **downloaded automatically** to the browser's downloads folder — **no file is kept on the server**. The action **result** shows the number of exported tables/rows.
-3. **Caution action** (🟠):
-   - **Reset archive**: restarts the archiving from the beginning (next cycle will take longer).
+   - **Backup a database**: creates a **full backup** of a database (all tables, full history) — a **persistent ZIP** (one CSV per table + manifest) is kept **on the server** (backup directory). The **result** shows the file name + a **Download** link (optional) to fetch it in the browser.
+3. **Caution actions** (🟠):
+   - **Reset archive**: restarts the archiving from the beginning (next cycle will take longer);
+   - **Restore a database**: re-injects the data of a **backup** (chosen from the server's backup list) into its **original database**. The database is recreated if missing; if the tables already exist, the rows are **appended** (duplicates possible).
 4. **Critical actions** (🔴, irreversible):
    - **Recreate database**: drops then recreates the database (data lost), with an optional **retention** (e.g. `2y`, `365d` — empty = infinite);
-   - **Drop database**: permanently drops the database and all its tables;
+   - **Drop database**: permanently drops the database and all its tables — optional checkbox **“Save a safety copy before dropping”**: a full backup is created **before** the drop (the 🔴 validation says so, and the result offers the **Download** of the copy);
    - **Drop table**: permanently drops a table from a database.
 5. The **result** of each action is displayed (success / failure) and the page refreshes.
 
@@ -87,6 +89,7 @@ Prox4u continuously writes Proxmox metrics into InfluxDB 3 Core, then consolidat
 | Archiving interval | `.env` `INFLUX_ARCHIVE_INTERVAL_HOURS` | 6 h |
 | Minimum archived age | `.env` `INFLUX_ARCHIVE_AGE_DAYS` | 90 d |
 | Archive directory | `.env` `INFLUX_ARCHIVE_DIR` | `data/influx-archive` |
+| Backup directory | `.env` `INFLUX_BACKUP_DIR` | `data/influx-backups` |
 | Consolidated database | `.env` `INFLUX_AGG_DB` | `consolidated` |
 | Consolidation window | code (fixed) | 5 min |
 | Query chunk | `.env` `INFLUX_QUERY_CHUNK_DAYS` | 30 d |
@@ -122,3 +125,12 @@ Your account is neither an **admin** nor a member of one of the groups in `INFLU
 
 **How do I change a database's retention?**
 In Core the retention is immutable: use **Recreate database** with the new **retention** (e.g. `2y`, `365d`). The database is dropped then recreated — the existing data is lost.
+
+**How do I back up a database before dropping it?**
+Two ways: **Backup a database** (🟢 action, creates a persistent ZIP on the server, downloadable), or **Drop database** with the **“Save a safety copy before dropping”** checkbox ticked (the backup is created right before the drop). The ZIP contains **one CSV per table + a manifest** (table schemas) — that manifest is what makes the restore possible.
+
+**How do I restore a dropped database?**
+**Restore a database** (🟠 action): choose the **backup** in the list (the server's backups are listed with their date, database, table/row counts). The restore re-injects the data into the **original database** from the manifest — the database is recreated if missing. ⚠️ If the database already exists, the rows are **appended** (duplicates possible): drop the database first (without backup) for a clean restore.
+
+**Where are the backups stored?**
+On the **server disk**, in the backup directory (`.env` `INFLUX_BACKUP_DIR`, default `data/influx-backups`). They are **downloadable** from the UI (**Download** link in the action result) — copy them elsewhere if you want an off-server copy.

@@ -1,6 +1,6 @@
 # InfluxDB 3 Core
 
-Surveille la **santé** de la base de métriques **InfluxDB 3 Core** qui alimente tous les graphiques de Prox4u, et permet d'**agir** dessus (flush, archivage, export, recréation / suppression de bases et tables).
+Surveille la **santé** de la base de métriques **InfluxDB 3 Core** qui alimente tous les graphiques de Prox4u, et permet d'**agir** dessus (flush, archivage, export, **sauvegarde / restauration** de bases, recréation / suppression de bases et tables).
 
 - **Qui s'en sert** : la **DSI / admin** qui surveille la base et intervient dessus, et le **NOC** qui suit la santé en continu.
 - **Ce que ça fait** : Prox4u lit l'état de la base InfluxDB (état, version, file d'écriture, lignes abandonnées, latence, headroom fichiers), affiche son historique de santé (24 h / 7 j / 30 j), liste les bases et leur rétention, suit l'archivage CSV, et propose des actions d'administration restreintes aux groupes autorisés.
@@ -49,11 +49,13 @@ Le panneau **Actions** n'est visible que si votre compte est **admin** ou membre
    - **Forcer un flush** : vide immédiatement la file d'écriture ;
    - **Archiver maintenant** : déclenche un cycle d'archivage ;
    - **Exporter (CSV)** : exporte **une ou plusieurs tables** de la base `consolidated` sur une période (**Du**, **Au**) — une **liste de tables** (choix multiple + **Toutes**) ; le **ZIP** (1 CSV par table) est généré en mémoire et **téléchargé automatiquement** dans le dossier de téléchargements du navigateur — **aucun fichier n'est conservé sur le serveur**. Le **résultat** de l'action affiche le nombre de tables/lignes exportées.
-3. **Action d'attention** (🟠) :
-   - **Réinitialiser l'archivage** : relance l'archivage depuis le début (prochain cycle plus long).
+   - **Sauvegarder une base** : crée une **sauvegarde complète** d'une base (toutes les tables, historique complet) — un **ZIP persistant** (`1 CSV par table + manifeste`) est conservé **sur le serveur** (dossier de sauvegardes). Le **résultat** affiche le nom du fichier + un lien **Télécharger** (optionnel) pour le récupérer dans le navigateur.
+3. **Actions d'attention** (🟠) :
+   - **Réinitialiser l'archivage** : relance l'archivage depuis le début (prochain cycle plus long) ;
+   - **Restaurer une base** : réinjecte les données d'une **sauvegarde** (choisie dans la liste des sauvegardes du serveur) dans sa **base d'origine**. La base est recréée si absente ; si les tables existent déjà, les lignes sont **ajoutées** (doublons possibles).
 4. **Actions critiques** (🔴, irréversibles) :
    - **Recréer une base** : supprime puis recrée la base (données perdues), avec une **rétention** optionnelle (ex. `2y`, `365d` — vide = infinie) ;
-   - **Supprimer une base** : supprime définitivement la base et toutes ses tables ;
+   - **Supprimer une base** : supprime définitivement la base et toutes ses tables — case optionnelle **« Sauvegarder une copie de sécurité avant suppression »** : une sauvegarde complète est créée **avant** le drop (la validation 🔴 l'indique, et le résultat propose le **Télécharger** de la copie) ;
    - **Supprimer une table** : supprime définitivement une table d'une base.
 5. Le **résultat** de chaque action s'affiche (succès / échec) et la page se rafraîchit.
 
@@ -87,6 +89,7 @@ Prox4u écrit en continu les métriques Proxmox dans InfluxDB 3 Core, puis les c
 | Intervalle d'archivage | `.env` `INFLUX_ARCHIVE_INTERVAL_HOURS` | 6 h |
 | Âge minimal archivé | `.env` `INFLUX_ARCHIVE_AGE_DAYS` | 90 j |
 | Dossier d'archivage | `.env` `INFLUX_ARCHIVE_DIR` | `data/influx-archive` |
+| Dossier de sauvegardes | `.env` `INFLUX_BACKUP_DIR` | `data/influx-backups` |
 | Base consolidée | `.env` `INFLUX_AGG_DB` | `consolidated` |
 | Fenêtre de consolidation | code (fixe) | 5 min |
 | Chunk de requête | `.env` `INFLUX_QUERY_CHUNK_DAYS` | 30 j |
@@ -122,3 +125,12 @@ Votre compte n'est ni **admin** ni membre d'un des groupes de `INFLUX_ACTION_GRO
 
 **Comment changer la rétention d'une base ?**
 En Core la rétention est immuable : utilisez **Recréer une base** avec la nouvelle **rétention** (ex. `2y`, `365d`). La base est supprimée puis recréée — les données existantes sont perdues.
+
+**Comment sauvegarder une base avant de la supprimer ?**
+Deux façons : **Sauvegarder une base** (action 🟢, crée un ZIP persistant sur le serveur, téléchargeable), ou **Supprimer une base** en cochant **« Sauvegarder une copie de sécurité avant suppression »** (la sauvegarde est créée juste avant le drop). Le ZIP contient **1 CSV par table + un manifeste** (schéma des tables) — c'est ce manifeste qui permet la restauration.
+
+**Comment restaurer une base supprimée ?**
+**Restaurer une base** (action 🟠) : choisissez la **sauvegarde** dans la liste (les sauvegardes du serveur sont listées avec leur date, base, nombre de tables/lignes). La restauration réinjecte les données dans la **base d'origine** du manifeste — la base est recréée si absente. ⚠️ Si la base existe déjà, les lignes sont **ajoutées** (doublons possibles) : supprimez d'abord la base (sans sauvegarde) pour une restauration propre.
+
+**Où sont stockées les sauvegardes ?**
+Sur le **disque du serveur**, dans le dossier de sauvegardes (`.env` `INFLUX_BACKUP_DIR`, défaut `data/influx-backups`). Elles sont **téléchargeables** depuis l'UI (lien **Télécharger** dans le résultat de l'action) — pensez à les copier ailleurs si vous voulez une copie hors serveur.
