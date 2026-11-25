@@ -20,7 +20,15 @@ import '../docs.css';
 
 // Notices Markdown (source dans le repo, bundlées au build via `?raw`).
 // Une notice = un fichier .md ; `content: null` → état « à venir ».
+import hypervisionMd from '../content/hypervision.md?raw';
+import networkMd from '../content/network.md?raw';
+import storageMd from '../content/storage.md?raw';
+import vmViewMd from '../content/vm-view.md?raw';
+import proxmoxInventoryMd from '../content/proxmox-inventory.md?raw';
 import centreonNscaMd from '../content/centreon-nsca.md?raw';
+import nodeSensorsMd from '../content/node-sensors.md?raw';
+import auditMd from '../content/audit.md?raw';
+import influxdbMd from '../content/influxdb.md?raw';
 
 /**
  * Catalogue des notices : une entrée PAR FAMILLE de plugin (id = famille).
@@ -34,15 +42,15 @@ const DOC_MODULES: Array<{
   icon: LucideIcon;
   content: string | null;
 }> = [
-  { id: 'hypervision', labelKey: 'nav.overview', icon: LayoutDashboard, content: null },
-  { id: 'network', labelKey: 'nav.topology', icon: Network, content: null },
-  { id: 'storage', labelKey: 'nav.storage', icon: HardDrive, content: null },
-  { id: 'vm-view', labelKey: 'nav.vmView', icon: MonitorSmartphone, content: null },
-  { id: 'proxmox-inventory', labelKey: 'nav.proxmoxInventory', icon: Boxes, content: null },
+  { id: 'hypervision', labelKey: 'nav.overview', icon: LayoutDashboard, content: hypervisionMd },
+  { id: 'network', labelKey: 'nav.topology', icon: Network, content: networkMd },
+  { id: 'storage', labelKey: 'nav.storage', icon: HardDrive, content: storageMd },
+  { id: 'vm-view', labelKey: 'nav.vmView', icon: MonitorSmartphone, content: vmViewMd },
+  { id: 'proxmox-inventory', labelKey: 'nav.proxmoxInventory', icon: Boxes, content: proxmoxInventoryMd },
   { id: 'centreon-nsca', labelKey: 'nav.alarms', icon: Siren, content: centreonNscaMd },
-  { id: 'node-sensors', labelKey: 'nav.nodeSensors', icon: Thermometer, content: null },
-  { id: 'audit', labelKey: 'nav.audit', icon: ShieldCheck, content: null },
-  { id: 'influxdb', labelKey: 'nav.influxdb', icon: Database, content: null },
+  { id: 'node-sensors', labelKey: 'nav.nodeSensors', icon: Thermometer, content: nodeSensorsMd },
+  { id: 'audit', labelKey: 'nav.audit', icon: ShieldCheck, content: auditMd },
+  { id: 'influxdb', labelKey: 'nav.influxdb', icon: Database, content: influxdbMd },
 ];
 
 /**
