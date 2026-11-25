@@ -1,13 +1,13 @@
 ---
 name: docs
-description: Base de connaissance du plugin Documentation de Prox4u — module in-app « Documentation » (routes /docs + /docs/:moduleId, menu BookOpen order 90) : notices d'utilisation par module en Markdown (source .md dans le repo, bundlées au build via `?raw`), rendues en HTML par `marked` (GFM). Une notice par famille de plugin (9 modules : hypervision, network, storage, vm-view, proxmox-inventory, centreon-nsca, node-sensors, audit, influxdb). Accès par module (pas d'accès au plugin = pas accès à sa doc, même source visibleModuleIds que ModuleRoute), le module `docs` lui-même géré par le catalogue (globallyEnabled — visible par tous les users connectés, migration reconcileModules). Bibliothèque de screenshots packages/web/public/screenshots/ (28 images, servies à /screenshots/…). Structure type d'une notice (6 sections) + règles de rédaction. Use when working on the docs plugin (packages/web/src/plugins/docs/), the /docs page, adding or editing a notice (content/*.md), the screenshot library, or the docs access control / migration.
+description: Base de connaissance du plugin Documentation de Prox4u — module in-app « Documentation » (routes /docs + /docs/:moduleId, menu BookOpen order 90) : notices d'utilisation par module en Markdown (source .md dans le repo, bundlées au build via `?raw`), rendues en HTML par `marked` (GFM), **bilingues FR + EN** (FR `content/<id>.md` + EN `content/en/<id>.md`, sélection par `i18n.language`, repli FR). Une notice par famille de plugin (9 modules : hypervision, network, storage, vm-view, proxmox-inventory, centreon-nsca, node-sensors, audit, influxdb). Accès par module (pas d'accès au plugin = pas accès à sa doc, même source visibleModuleIds que ModuleRoute), le module `docs` lui-même géré par le catalogue (globallyEnabled — visible par tous les users connectés, migration reconcileModules). Bibliothèque de screenshots packages/web/public/screenshots/ (28 images, servies à /screenshots/…). Structure type d'une notice (6 sections) + règles de rédaction/translation. Use when working on the docs plugin (packages/web/src/plugins/docs/), the /docs page, adding or editing a notice (content/*.md + content/en/*.md), the screenshot library, or the docs access control / migration.
 ---
 
 # Documentation — Base de connaissance
 
 > 📖 **C'est le module lui-même** : les notices utilisateur vivent dans ce plugin (`content/*.md`) et s'affichent dans l'app à `/docs` (menu « Documentation »).
 
-Module in-app de **documentation utilisateur** : une **notice d'utilisation par module** (famille de plugin), rédigée en **Markdown** dans le repo et rendue en **HTML** dans l'app. Contenu **FR** (v1) ; l'EN viendra ensuite.
+Module in-app de **documentation utilisateur** : une **notice d'utilisation par module** (famille de plugin), rédigée en **Markdown** dans le repo et rendue en **HTML** dans l'app. **Bilingue FR + EN** : chaque notice existe en 2 langues (FR = référence, EN = traduction), la version affichée suit la langue de l'app.
 
 > Architecture globale (plugin host/loader/registry) : voir le skill `general`.
 
@@ -19,10 +19,11 @@ Module in-app de **documentation utilisateur** : une **notice d'utilisation par 
 | Fichier | Rôle |
 |---|---|
 | `index.ts` | Manifest du plugin (routes + menu). |
-| `pages/docs.tsx` | La page : catalogue `DOC_MODULES` (9 entrées), sidebar des modules accessibles, rendu de la notice active. |
+| `pages/docs.tsx` | La page : catalogue `DOC_MODULES` (9 entrées `{ id, labelKey, icon, content: { fr, en } }`), sidebar des modules accessibles, **sélection de la langue** (`i18n.language` → `fr`/`en`, repli FR), rendu de la notice active. |
 | `lib/markdown.tsx` | `renderMarkdown(md)` — rendu Markdown → HTML via `marked` (GFM : tableaux, listes, code). `marked.setOptions({ gfm: true, breaks: false })`. |
 | `docs.css` | Styles de la prose (`.docs-prose`) : titres, tableaux, code, images, listes. |
-| `content/*.md` | **Les 9 notices** (source de vérité du contenu, dans le repo). |
+| `content/*.md` | **Les 9 notices FR** (source de vérité du contenu, dans le repo). |
+| `content/en/*.md` | **Les 9 notices EN** (traductions fidèles des FR). |
 
 ## 3. Catalogue des notices (`DOC_MODULES` dans `docs.tsx`)
 Tableau de 9 entrées `{ id, labelKey, icon, content }`. `content` = le Markdown importé via **`?raw`** (bundlé au build) ou `null` (→ état « à venir »). **Toutes les 9 sont rédigées** (v1) :
@@ -41,7 +42,8 @@ Tableau de 9 entrées `{ id, labelKey, icon, content }`. `content` = le Markdown
 
 - `labelKey` = la clé i18n du **menu du module concerné** (`nav.overview`, `nav.topology`, …) — la sidebar réutilise le libellé du menu, pas un libellé dédié.
 - `icon` = l'icône lucide du module (réutilisée).
-- **Total** : 1037 lignes de Markdown, 17 screenshots référencés (tous présents dans `public/screenshots/`).
+- **Bilingue** : chaque notice a une version EN dans **`content/en/<id>.md`** (traduction fidèle de la FR — mêmes sections, mêmes screenshots, mêmes termes `code`). Le tableau ci-dessus liste la source FR ; les 9 fichiers EN existent (`content/en/`).
+- **Total** : 1037 lignes FR + ~1030 lignes EN, 17 screenshots référencés (tous présents dans `public/screenshots/`).
 
 ## 4. Accès par module (règle clé)
 - La sidebar ne liste que les modules de **`visibleModuleIds`** (autorisé ∩ préférences user) — **même source que `ModuleRoute`** : un user **sans accès à un plugin n'a pas accès à sa doc**.
@@ -102,6 +104,13 @@ Toute notice suit cette structure (6 sections) :
 - Screenshots : uniquement ceux qui existent et sont pertinents, référencés `![légende](/screenshots/<fichier>.png)`.
 - **Référence croisée** : chaque skill de module pointe vers sa notice (ligne `> 📖 **Notice utilisateur** : …` après le H1 de la skill) — maintenir cette réciproque quand on ajoute/modifie une notice.
 
+### 8.1 Règles de traduction EN (`content/en/`)
+- L'EN est une **traduction fidèle de la FR** (source de vérité) — même structure, même nombre de sections/séparateurs/screenshots, même longueur (~mêmes lignes).
+- Anglais **naturel** (pas mot-à-mot), ton utilisateur.
+- **Termes d'UI en gras** : traduits en anglais avec le **libellé UI anglais exact** de `packages/shared/src/i18n/en.ts` (l'app est bilingue — en mode EN, l'UI affiche les libellés EN).
+- **Termes `code`** : inchangés. **Chemins de screenshots** : inchangés (seule la légende est traduite).
+- **À chaque modification d'une notice FR → retraduire la EN** (garder les deux en synchro).
+
 ## 9. i18n
 Clés dans `packages/shared/src/i18n/fr.ts` + `en.ts` : `nav.docs` (menu), `docs.title`, `docs.subtitle`, `docs.comingSoon`, `docs.noAccess`, `docs.noAccessModule`.
 
@@ -110,5 +119,5 @@ Clés dans `packages/shared/src/i18n/fr.ts` + `en.ts` : `nav.docs` (menu), `docs
 - **Contenu de confiance** : les notices sont du Markdown statique dans le repo → `dangerouslySetInnerHTML` sans sanitization externe (pas de XSS externe). Ne pas accepter de Markdown utilisateur.
 - **Landing par défaut** : `/docs` tombe sur la **1ʳᵉ notice rédigée accessible** (repli : 1ᵉʳ module accessible) — depuis la v1, c'est `hypervision` (1ʳᵉ du catalogue).
 - **`labelKey` réutilise le menu** : la sidebar affiche le libellé du menu du module (`nav.*`), pas un libellé dédié — si le libellé du menu change, la sidebar doc suit.
-- **EN à venir** : le contenu des notices est FR (v1) ; la structure i18n existe déjà pour les libellés de chrome (title/subtitle/comingSoon/noAccess).
+- **Bilingue FR + EN** : chaque notice existe en 2 langues (`content/<id>.md` FR + `content/en/<id>.md` EN). La version affichée suit `i18n.language` (switcher topbar), **repli FR** si la EN est absente/null. Le modèle `DOC_MODULES` est `content: { fr: string; en: string | null } | null`. Les libellés de chrome (title/subtitle/comingSoon/noAccess) sont déjà i18n fr/en.
 - **Module global** : `docs` est `globallyEnabled` — la migration `reconcileModules` l'ajoute aux préférences de tous les users ; ne pas le retirer du catalogue sans prévoir la migration inverse.
