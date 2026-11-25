@@ -225,22 +225,36 @@ prompt_admin() {
 
 prompt_prox4u_pass() {
   if [[ $DRY_RUN -eq 1 ]]; then PROX4U_PASS="DRYRUN-PASS"; ok "mdp ${USER_LOGIN} (dry-run)"; return; fi
-  read -r -s -p "Mot de passe du compte ${USER_LOGIN} : " PROX4U_PASS; echo
-  local p2; read -r -s -p "Confirmation : " p2; echo
-  [[ "$PROX4U_PASS" == "$p2" ]] || die "les deux mots de passe ne correspondent pas"
+  # Boucle de re-saisie : un simple mauvais recopiage ne doit pas tuer le script
+  # (tout serait à refaire). On redemande tant que les deux saisies ne correspondent pas.
+  local p2 attempt=0
+  while :; do
+    read -r -s -p "Mot de passe du compte ${USER_LOGIN} : " PROX4U_PASS; echo
+    read -r -s -p "Confirmation : " p2; echo
+    [[ "$PROX4U_PASS" == "$p2" ]] && break
+    attempt=$((attempt+1))
+    warn "les deux mots de passe ne correspondent pas — nouvelle saisie (tentative $attempt)"
+  done
   [[ ${#PROX4U_PASS} -ge 8 ]] || warn "mot de passe < 8 caractères (recommandé ≥ 8)"
 }
 
 # Mdp du user de monitoring (console, non-admin). Vide = pas de user créé.
 prompt_mon_user_pass() {
   if [[ $DRY_RUN -eq 1 ]]; then MON_USER_PASS="DRYRUN-MON"; ok "mdp ${MON_USER_LOGIN} (dry-run)"; return; fi
-  read -r -s -p "Mot de passe du compte ${MON_USER_LOGIN} (vide = pas de user monitoring) : " MON_USER_PASS; echo
-  if [[ -z "$MON_USER_PASS" ]]; then
-    ok "user monitoring : sauté (mdp vide)"
-    return
-  fi
-  local p2; read -r -s -p "Confirmation : " p2; echo
-  [[ "$MON_USER_PASS" == "$p2" ]] || die "les deux mots de passe ne correspondent pas"
+  # Boucle de re-saisie (comme prompt_prox4u_pass) : un mauvais recopiage ne tue
+  # pas le script. Mdp vide (1ʳᵉ saisie) = pas de user monitoring.
+  local p2 attempt=0
+  while :; do
+    read -r -s -p "Mot de passe du compte ${MON_USER_LOGIN} (vide = pas de user monitoring) : " MON_USER_PASS; echo
+    if [[ -z "$MON_USER_PASS" ]]; then
+      ok "user monitoring : sauté (mdp vide)"
+      return
+    fi
+    read -r -s -p "Confirmation : " p2; echo
+    [[ "$MON_USER_PASS" == "$p2" ]] && break
+    attempt=$((attempt+1))
+    warn "les deux mots de passe ne correspondent pas — nouvelle saisie (tentative $attempt)"
+  done
   [[ ${#MON_USER_PASS} -ge 8 ]] || warn "mot de passe < 8 caractères (recommandé ≥ 8)"
 }
 
