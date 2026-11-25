@@ -22,6 +22,8 @@ Transforme des **règles de surveillance** sur vos VMs, nœuds et clusters Proxm
 
 > Le mot de passe NSCA, le token REST et le mot de passe CLAPI peuvent être fournis via le `.env` du serveur (`CENTREON_NSCA_PASSWORD`, `CENTREON_REST_TOKEN`, `CENTREON_CLAPI_PASSWORD`) — ils prévalent sur la saisie dans l'interface.
 
+![Administration — onglet « Centreon (NSCA) »](/screenshots/admin-centreon-nsca.png)
+
 ### 2. Créer une règle d'alarme
 
 1. Ouvrez **Alarmes & Centreon → Nouvelle règle**.
@@ -32,11 +34,15 @@ Transforme des **règles de surveillance** sur vos VMs, nœuds et clusters Proxm
    - la **fenêtre de confirmation** : la condition doit tenir sur toute la fenêtre avant d'alerter (évite les à-coups).
 3. Enregistrez : Prox4u **provisionne le service Centreon** (service passif), puis enregistre la règle.
 
+![Créer une surveillance — formulaire de règle](/screenshots/alarms-new.png)
+
 ### 3. Gérer les règles
 
 Dans **Alarmes & Centreon**, le tableau liste toutes les règles avec :
 - filtres (texte, poller, état, provisioning) et recherche ;
 - actions : **activer / désactiver**, **modifier**, **supprimer**, **Tester** (envoie une trame de test), **Reprovisionner** (recrée le service Centreon).
+
+![Règles de surveillance actives — tableau des règles](/screenshots/alarms.png)
 
 ---
 
