@@ -225,16 +225,17 @@ export class InfluxArchiver {
   }
 
   /**
-   * Export ad-hoc MULTI-tables (POST /api/influxdb/actions/export avec `tables[]`) :
-   * 1 CSV par table, regroupés dans un UNIQUE ZIP dans `archiveDir`
-   * (`export-<from>_<to>-<hhmmss>.zip`). Les tables sans ligne sont exclues du ZIP
-   * (rows: 0 dans la réponse). Renvoie le chemin du ZIP + le détail par table.
+   * Construit le ZIP d'export MULTI-tables EN MÉMOIRE (sans écriture disque) :
+   * 1 CSV par table (`export-<from>_<to>-<hhmmss>.zip`). Les tables sans ligne
+   * sont exclues du ZIP (rows: 0). Renvoie le nom de fichier + les bytes du ZIP
+   * + le détail par table. Sert le téléchargement direct (?download=1) et
+   * exportTablesZip (mode disque).
    */
-  async exportTablesZip(
+  async buildTablesZip(
     tables: string[],
     from: number,
     to: number,
-  ): Promise<{ file: string; exports: Array<{ table: string; rows: number }> }> {
+  ): Promise<{ filename: string; data: Uint8Array; exports: Array<{ table: string; rows: number }> }> {
     const files: Record<string, Uint8Array> = {};
     const exports: Array<{ table: string; rows: number }> = [];
     for (const table of tables) {
@@ -242,11 +243,26 @@ export class InfluxArchiver {
       exports.push({ table, rows });
       if (rows > 0) files[`${table}.csv`] = strToU8(csv);
     }
-    mkdirSync(this.ctx.config.influx.archiveDir, { recursive: true });
     const day = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
     const hhmmss = new Date().toISOString().slice(11, 19).replace(/:/g, '');
-    const file = path.join(this.ctx.config.influx.archiveDir, `export-${day(from)}_${day(to)}-${hhmmss}.zip`);
-    writeFileSync(file, Buffer.from(zipSync(files, { level: 6 })));
+    const filename = `export-${day(from)}_${day(to)}-${hhmmss}.zip`;
+    return { filename, data: zipSync(files, { level: 6 }), exports };
+  }
+
+  /**
+   * Export ad-hoc MULTI-tables (POST /api/influxdb/actions/export avec `tables[]`,
+   * mode disque legacy) : construit le ZIP en mémoire puis l'écrit dans
+   * `archiveDir`. Renvoie le chemin du ZIP + le détail par table.
+   */
+  async exportTablesZip(
+    tables: string[],
+    from: number,
+    to: number,
+  ): Promise<{ file: string; exports: Array<{ table: string; rows: number }> }> {
+    const { filename, data, exports } = await this.buildTablesZip(tables, from, to);
+    mkdirSync(this.ctx.config.influx.archiveDir, { recursive: true });
+    const file = path.join(this.ctx.config.influx.archiveDir, filename);
+    writeFileSync(file, Buffer.from(data));
     return { file, exports };
   }
 

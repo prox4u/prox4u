@@ -76,6 +76,11 @@ function makeCtx(over: MockOpts = {}): AppContext {
         file: '/tmp/export.zip',
         exports: tables.map((t) => ({ table: t, rows: 5 })),
       }),
+      buildTablesZip: vi.fn(async (tables: string[]) => ({
+        filename: 'export-2026-01-01_2026-01-02-000000.zip',
+        data: new TextEncoder().encode('ZIPDATA'),
+        exports: tables.map((t) => ({ table: t, rows: 5 })),
+      })),
       getState: () => ({ lastArchivedTs: 1000, archiveDir: '/tmp/arch', fileCount: 3, totalBytes: 1234 }),
     } as unknown as AppContext['archiver'],
     auth: {
@@ -379,6 +384,37 @@ describe('POST /api/influxdb/actions/*', () => {
     const res = await app.inject({
       method: 'POST', url: '/api/influxdb/actions/export',
       payload: { table: 'bad name!', from: 1000, to: 2000 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-table');
+    await app.close();
+  });
+
+  it('export?download=1 : ZIP binaire direct + X-Export-Summary (buildTablesZip, zéro disque)', async () => {
+    const ctx = makeCtx();
+    const app = await boot(ctx, admin);
+    const res = await app.inject({
+      method: 'POST', url: '/api/influxdb/actions/export?download=1',
+      payload: { tables: ['node_metrics', 'vm_metrics'], from: 1000, to: 2000 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('application/zip');
+    expect(res.headers['content-disposition']).toBe('attachment; filename="export-2026-01-01_2026-01-02-000000.zip"');
+    expect(typeof res.headers['x-export-summary']).toBe('string');
+    expect(JSON.parse(res.headers['x-export-summary'] as string)).toEqual({
+      tables: 2, rows: 10, file: 'export-2026-01-01_2026-01-02-000000.zip',
+    });
+    expect(res.payload).toBe('ZIPDATA');
+    const build = (ctx.archiver as unknown as { buildTablesZip: ReturnType<typeof vi.fn> }).buildTablesZip;
+    expect(build).toHaveBeenCalledWith(['node_metrics', 'vm_metrics'], 1000, 2000);
+    await app.close();
+  });
+
+  it('export?download=1 : validations identiques (tables vide → 400)', async () => {
+    const app = await boot(makeCtx(), admin);
+    const res = await app.inject({
+      method: 'POST', url: '/api/influxdb/actions/export?download=1',
+      payload: { tables: [], from: 1000, to: 2000 },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe('bad-table');

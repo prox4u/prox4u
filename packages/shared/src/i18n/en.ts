@@ -1187,6 +1187,5 @@ export const en: Record<string, string> = {
   'influxdb.actions.tablesHint': 'Dynamic list (consolidated db). One CSV per table, bundled in a ZIP file.',
   'influxdb.actions.tablesLoading': 'Loading tables…',
   'influxdb.actions.tablesEmpty': 'No table found in the database.',
-  'influxdb.actions.export.result': 'Export done: {{tables}} table(s), {{rows}} row(s) — file {{file}}',
-  'influxdb.actions.download': 'Download the ZIP',
+  'influxdb.actions.export.result': 'Export done: {{tables}} table(s), {{rows}} row(s) — file {{file}} downloaded',
 };

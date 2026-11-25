@@ -202,6 +202,46 @@ export function fetchInfluxTables(db?: string): Promise<{ db: string; tables: st
 }
 
 /**
+ * Export ad-hoc multi-tables en TÉLÉCHARGEMENT DIRECT (?download=1) : le serveur
+ * renvoie le ZIP en binaire (généré en mémoire, aucune écriture disque) et cette
+ * fonction déclenche le téléchargement navigateur. Renvoie le résumé
+ * (nb tables/lignes + nom de fichier) pour le banner de résultat.
+ */
+export async function downloadInfluxExport(body: {
+  tables: string[];
+  from: number;
+  to: number;
+}): Promise<{ tables: number; rows: number; file: string }> {
+  const res = await fetch('/api/influxdb/actions/export?download=1', {
+    method: 'POST',
+    headers: { Accept: 'application/zip', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const json = (await res.json().catch(() => ({}))) as { code?: string };
+    const err = new Error(`export → HTTP ${res.status}`) as Error & { code?: string; status: number };
+    err.code = json.code;
+    err.status = res.status;
+    throw err;
+  }
+  const summary = JSON.parse(res.headers.get('X-Export-Summary') ?? '{}') as {
+    tables: number;
+    rows: number;
+    file: string;
+  };
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = summary.file ?? 'export.zip';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return summary;
+}
+
+/**
  * Lance une action InfluxDB (POST /api/influxdb/actions/<action>).
  * `action` ∈ flush | archive/run | archive/reset | export | database/recreate |
  * database/drop | table/drop. Le guard (admin ou groupe) renvoie 403 sinon.

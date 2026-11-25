@@ -1187,6 +1187,5 @@ export const fr: Record<string, string> = {
   'influxdb.actions.tablesHint': 'Liste dynamique (base consolidated). 1 CSV par table, regroupés dans un fichier ZIP.',
   'influxdb.actions.tablesLoading': 'Chargement des tables…',
   'influxdb.actions.tablesEmpty': 'Aucune table trouvée dans la base.',
-  'influxdb.actions.export.result': 'Export terminé : {{tables}} table(s), {{rows}} ligne(s) — fichier {{file}}',
-  'influxdb.actions.download': 'Télécharger le ZIP',
+  'influxdb.actions.export.result': 'Export terminé : {{tables}} table(s), {{rows}} ligne(s) — fichier {{file}} téléchargé',
 };

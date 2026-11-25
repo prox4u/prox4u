@@ -24,7 +24,11 @@ import { influxTsToUnix, type InfluxQueryStats, type InfluxWriteStats } from '..
  *  - POST /api/influxdb/actions/export              : export CSV ad-hoc multi-tables
  *                                                     (tables[] + range → 1 ZIP,
  *                                                     1 CSV par table ; repli table
- *                                                     single → [table]).
+ *                                                     single → [table]). Sans param
+ *                                                     → JSON { ok, file, exports } +
+ *                                                     écriture disque ; ?download=1
+ *                                                     → ZIP binaire direct (mémoire,
+ *                                                     zéro disque) + X-Export-Summary.
  *  - GET  /api/influxdb/actions/download            : télécharge un fichier d'export
  *                                                     (file=basename, pattern export-*,
  *                                                     Content-Disposition attachment).
@@ -239,6 +243,17 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
     const to = Number(body.to);
     if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0 || from >= to) {
       return reply.code(400).send({ error: 'invalid', code: 'bad-range' });
+    }
+    // ?download=1 : téléchargement direct — ZIP en mémoire → réponse binaire,
+    // aucune écriture disque. Résumé dans X-Export-Summary (JSON).
+    if ((req.query as { download?: string }).download === '1') {
+      const { filename, data, exports } = await ctx.archiver.buildTablesZip(tables, from, to);
+      const rows = exports.reduce((s, e) => s + e.rows, 0);
+      auditAction(ctx, req, 'export', { tables, from, to, rows, mode: 'download' });
+      reply.header('Content-Type', 'application/zip');
+      reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+      reply.header('X-Export-Summary', JSON.stringify({ tables: exports.length, rows, file: filename }));
+      return reply.send(Buffer.from(data));
     }
     const { file, exports } = await ctx.archiver.exportTablesZip(tables, from, to);
     auditAction(ctx, req, 'export', { tables, from, to, rows: exports.reduce((s, e) => s + e.rows, 0) });
