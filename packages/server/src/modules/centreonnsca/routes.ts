@@ -169,6 +169,7 @@ export function registerAlarmRoutes(
       lastSendState: null,
       lastSendMessage: '',
       lastAlarmAt: null,
+      lastOkSendAt: null,
       lastOutput: '',
       currentState: 'ok',
     });

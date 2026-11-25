@@ -1,6 +1,6 @@
 ---
 name: centreon-nsca
-description: Plugin « Alarmes & Centreon » (famille centreon-nsca) — règles de surveillance sur VMs/nœuds/clusters Proxmox (dont quorum cluster via métrique cluster_quorum + Qdevice via cluster_qdevice + cible kind=cluster), engine d'évaluation (tick 15 s), provisioning du service passif Centreon via CLAPI (SSH/local) ou API REST v1, envoi des trames send_nsca, mapping VM→hôte Centreon (ajout manuel), pollers avec IP (destination NSCA), et page de config admin. Use when working on the centreon-nsca plugin, /api/alarms/*, the alarm engine, NSCA frames, Centreon provisioning, the /alarms pages, the cluster quorum/qdevice alarm, or the « Centreon (NSCA) » admin tab.
+description: Plugin « Alarmes & Centreon » (famille centreon-nsca) — règles de surveillance sur VMs/nœuds/clusters Proxmox (dont quorum cluster via métrique cluster_quorum + Qdevice via cluster_qdevice + cible kind=cluster), engine d'évaluation (tick 15 s), provisioning du service passif Centreon via CLAPI (SSH/local) ou API REST v1, envoi des trames send_nsca, **trames périodiques : heartbeat OK services (okHeartbeatSeconds, code 0 pour les règles saines) + check hôte PROCESS_HOST_CHECK_RESULT (hostCheckSeconds, état dérivé de Proxmox — sort les hôtes/services de `Pending`)**, mapping VM→hôte Centreon (ajout manuel), pollers avec IP (destination NSCA), et page de config admin. Use when working on the centreon-nsca plugin, /api/alarms/*, the alarm engine, NSCA frames, the OK heartbeat / host check periodic frames, Centreon provisioning, the /alarms pages, the cluster quorum/qdevice alarm, or the « Centreon (NSCA) » admin tab.
 ---
 
 # Centreon NSCA — Alarmes & Centreon
@@ -16,9 +16,9 @@ Module qui transforme des **règles de surveillance** sur les VMs/nœuds/cluster
 | `/alarms` | `pages/rules.tsx` | **Page 2** — tableau des règles : filtres (texte/poller/état/provisionnement), recherche globale, tri, indicateurs, actions (activer/désactiver, modifier, supprimer, **Tester**, **Reprovisionner**) |
 | `/alarms/new` | `pages/create-rule.tsx` | **Page 1** — formulaire de création → provisionne le service Centreon puis enregistre la règle + récap provisioning |
 | `/alarms/edit/:id` | `pages/edit-rule.tsx` | Édition (même formulaire, ne re-provisionne pas) |
-| Admin → onglet « Centreon (NSCA) » | `components/admin/nsca-config.tsx` | **Page 3** — activation du module, transport CLAPI/REST, central, pollers (nom + IP), NSCA, mapping VM→hôte (+ bouton Ajouter) |
+| Admin → onglet « Centreon (NSCA) » | `components/admin/nsca-config.tsx` | **Page 3** — activation du module, transport CLAPI/REST, central, pollers (nom + IP), NSCA, **trames périodiques (heartbeat OK + check hôte)**, mapping VM→hôte (+ bouton Ajouter) |
 | API | `GET/POST /api/alarms/*` | règles, cibles (VMs/nœuds/clusters), config, test, provisioning |
-| Engine | `engine.ts` | tick 15 s, évaluation des règles actives, envoi des trames aux transitions |
+| Engine | `engine.ts` | tick 15 s, évaluation des règles actives, trames aux transitions **+ trames périodiques (heartbeat OK services + check hôte)** |
 
 Feature flag : `VITE_USE_PLUGIN_CENTREON_NSCA` (défaut ON, opt-out). Famille `centreon-nsca` (pas de versionnement `_vN` — premier module de la famille).
 
@@ -26,7 +26,7 @@ Feature flag : `VITE_USE_PLUGIN_CENTREON_NSCA` (défaut ON, opt-out). Famille `c
 
 ```
 packages/shared/src/centreon-nsca.ts         # types + fonctions pures (testées)
-packages/shared/src/centreon-nsca.test.ts    # 28 tests (échappement, trame, évaluation…)
+packages/shared/src/centreon-nsca.test.ts    # 32 tests (échappement, trame service+hôte, évaluation…)
 packages/server/src/modules/centreonnsca/
   index.ts     # registerAlarmNsca (store + engine + routes)
   store.ts     # NscaStore — data/centreon-nsca.json (seed, CRUD, stats)
@@ -57,9 +57,10 @@ packages/web/src/components/admin/nsca-config.tsx  # Page 3 (onglet admin)
 ### 4.1 Runtime — send_nsca
 - L'app **génère** `data/nsca/send_nsca.cfg` (chmod 600) depuis la config (serveur, port, encrypt, mot de passe) puis : `printf '<host>\t<svc>\t<code>\t<output>\n' | send_nsca -H <server> -c <cfg>`.
 - **Destination NSCA** : l'IP du poller cible si renseignée (`CentreonPoller.ip`), sinon le serveur NSCA du central (`config.nsca.server`). Chaque poller peut ainsi avoir son propre daemon NSCA.
-- Trame construite par `buildNscaFrame` (shared) : les champs hôte/service sont **échappés** (`;`→`\;`, `\n`→`\n` littéral, tab→espace) contre l'injection.
-- `output` = template `{{vm}} {{metric}} {{value}} {{threshold}}` rendu par `renderOutput`.
-- Return code : 0=OK (récupération), 1=WARNING, 2=CRITICAL, 3=UNKNOWN (`nscaReturnCode`).
+- Trame **service** construite par `buildNscaFrame` (shared) : 4 champs `host\tsvc\tcode\toutput`, les champs hôte/service **échappés** (`;`→`\;`, `\n`→`\n` littéral, tab→espace) contre l'injection.
+- Trame **hôte** construite par `buildNscaHostFrame` (shared) : 3 champs `host\tcode\toutput` **sans le service** (format documenté nsca-ng : « host check results … just without the service description ») → le daemon en génère un `PROCESS_HOST_CHECK_RESULT`.
+- `output` = template `{{vm}} {{metric}} {{value}} {{threshold}}` rendu par `renderOutput` (services) ; output factice dérivé de l'état Proxmox (check hôte).
+- Return code : 0=OK (récupération / heartbeat / UP), 1=WARNING / DOWN, 2=CRITICAL, 3=UNKNOWN (`nscaReturnCode`).
 
 ### 4.2 Provisioning — CLAPI **ou** REST v1 (choix Page 3)
 Paramètres du service passif (les deux transports) : `passive_checks_enabled=1`, `active_checks_enabled=0`, `is_volatile=1`, `max_check_attempts=1`, `check_command=check_dummy!0` (factice, jamais exécutée).
@@ -78,8 +79,13 @@ Paramètres du service passif (les deux transports) : `passive_checks_enabled=1`
 
 **Enchaînement imposé** : création du service → génération de config → déploiement (`POLLERGENERATE`/`CFGMOVE` ou `config/generate`+`config/move`). Un service passif ne reçoit des trames NSCA qu'après déploiement.
 
-### 4.3 Engine — machine à états
+### 4.3 Engine — machine à états + trames périodiques
 Tick 15 s, pour chaque règle active (module actif) : échantillonner la métrique → `evaluateAlarm` (la condition doit tenir sur **toute** la fenêtre de confirmation) → transitions **ok⇄firing** → trame à chaque transition (alarme = code sévérité, récupération = 0). L'état bascule **avant** l'envoi (transition consommée même si `send_nsca` échoue → pas de boucle). Échec = `lastSendState=error` + message, **aucun crash**.
+
+**Trames périodiques** (config `okHeartbeatSeconds` / `hostCheckSeconds`, défauts 300/60, `0` = off) — ajoutées pour que les checks passifs Centreon ne restent pas à l'état `Pending` (un check passif n'a pas de check actif qui le rafraîchit) :
+- **Heartbeat OK services** : pour chaque règle active dans l'état `ok`, une trame **OK (code 0)** est envoyée toutes les `okHeartbeatSeconds`. **Jamais envoyé si `state ≠ ok`** (ne masque pas une alerte en cours) — c'est la « règle saine » : une règle qui n'alerte jamais émet un code 0 périodique. La trame de **récupération** pose aussi `lastOkSendAt` (elle EST une trame OK → pas de double envoi au même tick). Suivi par règle : champ `AlarmRule.lastOkSendAt` (persisté). Log `alarm : OK heartbeat « … »`.
+- **Check hôte** : pour chaque **hôte Centreon provisionné** (règles actives, dédoublonné par hôte), une trame `PROCESS_HOST_CHECK_RESULT` (3 champs, `buildNscaHostFrame`) toutes les `hostCheckSeconds`. L'état est **dérivé du target Proxmox** : VM running→0 / stopped→1 / introuvable→3 ; nœud online→0 / offline→1 ; quorum ok→0 / perdu→1 / inconnu→3 (`null` = endpoint indisponible → pas de trame, réessai au tick suivant). Suivi en **mémoire** par hôte (`hostLastSend`/`hostLastCode`) — log uniquement au **changement d'état** ou en **échec** (pas de spam). L'hôte Centreon sort de `Pending` **sans commande de check active** (l'erreur engine « no check command » devient sans impact).
+- **Effet validé E2E (Centreon 26.10)** : hôte `ia-u24-01` → **UP** (state 0, output « UP — VM running (Proxmox) »), service CPU → **OK** (heartbeat), service IP → **CRITICAL** (alerte réelle `ip_reachable=0`). Vérifiable via l'API monitoring du central : `GET /api/latest/monitoring/hosts` + `/monitoring/services` (token `X-AUTH-TOKEN`) — `state` 0=OK/UP, 1=WARNING, 2=CRITICAL, 4=Pending ; `state_type` 1=hard.
 
 ## 5. Sécurité & robustesse (contraintes)
 - **Mots de passe** CLAPI / NSCA / token REST : jamais loggués, jamais renvoyés en clair par l'API (masqués `••••••` à la relecture ; renvoyer le masque = « inchangé »). Stockés dans `data/centreon-nsca.json` (chmod 600, gitignoré).
@@ -103,9 +109,10 @@ Tick 15 s, pour chaque règle active (module actif) : échantillonner la métriq
 - **Échappement** : `escapeNscaField` échappe d'abord les `\` puis `;`/`\n` — ne pas réordonner (sinon double-échappement).
 
 ## 8. Tests
-- `packages/shared/src/centreon-nsca.test.ts` (23) : `nscaReturnCode`, `escapeNscaField` (`;`/`\n`/tab), `buildNscaFrame`, `renderOutput`, `defaultServiceName`, `suggestCenteronHost`, `conditionMet`, `evaluateAlarm` (fenêtre), `nscaCfgContent`, `clapiProvisionCommands` (séquence exacte), `clapiDeleteCommand`.
-- `packages/server/src/modules/centreonnsca/store.test.ts` (9) : seed, persistance, CRUD règles, setPollers (slug+dédup), upsertMapping, stats 24 h.
+- `packages/shared/src/centreon-nsca.test.ts` (32) : `nscaReturnCode`, `escapeNscaField` (`;`/`\n`/tab), `buildNscaFrame` (trame service 4 champs), `buildNscaHostFrame` (trame hôte 3 champs, sans service), `renderOutput`, `defaultServiceName`, `suggestCenteronHost`, `conditionMet`, `evaluateAlarm` (fenêtre), `nscaCfgContent`, `clapiProvisionCommands` (séquence exacte), `clapiDeleteCommand`.
+- `packages/server/src/modules/centreonnsca/store.test.ts` (13) : seed, persistance, CRUD règles (dont `lastOkSendAt`), setConfig (normalisation `okHeartbeatSeconds`/`hostCheckSeconds`), setPollers (slug+dédup), upsertMapping, stats 24 h.
 - `packages/server/src/modules/centreonnsca/routes.test.ts` (10) : GET/POST/PATCH/DELETE règles, validation 400, nom en double 409, test, provision, PUT config (masquage mdp + « inchangé »).
+- `packages/server/src/modules/centreonnsca/provision.test.ts` (10) : séquence CLAPI + REST v1.
 
 ## 9. Exemples de trame & commande (livrable)
 - Trame générée : `vm-web-01\tProx4u-Alarm-CPU\t2\tvm-web-01 CPU 94% (seuil 90%)\n`

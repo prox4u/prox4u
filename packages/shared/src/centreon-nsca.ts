@@ -120,6 +120,20 @@ export interface CentreonConfig {
   /** token d'API Centreon (Basic) — jamais loggué. */
   restToken: string;
   nsca: NscaConfig;
+  /**
+   * Heartbeat OK des services (secondes) : pour chaque règle active dans l'état
+   * `ok`, une trame OK (code 0) est envoyée toutes les N secondes — le service
+   * Centreon reste à l'état OK (et hors `Pending`) même sans alerte, et survit
+   * aux restarts de l'engine (services volatiles). `0` = désactivé.
+   */
+  okHeartbeatSeconds: number;
+  /**
+   * Check hôte (secondes) : pour chaque hôte Centreon provisionné, une trame
+   * `PROCESS_HOST_CHECK_RESULT` est envoyée toutes les N secondes, l'état étant
+   * dérivé du target Proxmox (VM running → UP / stopped → DOWN, nœud online →
+   * UP / offline → DOWN). `0` = désactivé.
+   */
+  hostCheckSeconds: number;
 }
 
 /** Mapping VM Proxmox → hôte Centreon (auto-suggestion + override manuel). */
@@ -165,6 +179,8 @@ export interface AlarmRule {
   lastSendMessage: string;
   /** timestamp (ms) de la dernière alarme (transition vers firing). */
   lastAlarmAt: number | null;
+  /** timestamp (ms) du dernier heartbeat OK envoyé (null = jamais). */
+  lastOkSendAt: number | null;
   /** plugin_output de la dernière trame. */
   lastOutput: string;
   /** état courant de la machine à états (ok = nomimal). */
@@ -233,6 +249,17 @@ export function escapeNscaField(value: string): string {
  */
 export function buildNscaFrame(host: string, service: string, code: number, output: string): string {
   return `${escapeNscaField(host)}\t${escapeNscaField(service)}\t${code}\t${escapeNscaField(output)}\n`;
+}
+
+/**
+ * Construit la trame NSCA de CHECK HÔTE : `<host>\t<code>\t<output>\n` — 3 champs,
+ * SANS le service (format documenté de send_nsca/nsca-ng : « host check results
+ * are expected in the same format, just without the service description »). Le
+ * daemon en génère un `PROCESS_HOST_CHECK_RESULT`. Le nom d'hôte et l'output
+ * sont échappés (injection `;` impossible).
+ */
+export function buildNscaHostFrame(host: string, code: number, output: string): string {
+  return `${escapeNscaField(host)}\t${code}\t${escapeNscaField(output)}\n`;
 }
 
 /**
@@ -452,5 +479,7 @@ export function defaultCenteronConfig(): CentreonConfig {
     restUser: '',
     restToken: '',
     nsca: { server: '', port: 5668, encrypt: true, password: '' },
+    okHeartbeatSeconds: 300,
+    hostCheckSeconds: 60,
   };
 }

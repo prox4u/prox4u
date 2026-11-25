@@ -26,6 +26,7 @@ function rule(over: Partial<Parameters<NscaStore['createRule']>[0]> = {}) {
     lastSendState: null,
     lastSendMessage: '',
     lastAlarmAt: null,
+    lastOkSendAt: null,
     lastOutput: '',
     currentState: 'ok' as const,
     ...over,

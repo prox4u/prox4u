@@ -97,7 +97,7 @@ export const alarmsApi = {
   list: () => request<AlarmList>('/api/alarms'),
   targets: () => request<AlarmTargets>('/api/alarms/targets'),
 
-  create: (rule: Omit<AlarmRule, 'id' | 'createdAt' | 'updatedAt' | 'provisionStatus' | 'provisionMessage' | 'lastSendState' | 'lastSendMessage' | 'lastAlarmAt' | 'lastOutput' | 'currentState'>) =>
+  create: (rule: Omit<AlarmRule, 'id' | 'createdAt' | 'updatedAt' | 'provisionStatus' | 'provisionMessage' | 'lastSendState' | 'lastSendMessage' | 'lastAlarmAt' | 'lastOkSendAt' | 'lastOutput' | 'currentState'>) =>
     request<{ rule: AlarmRule; provision: ProvisionOutcome }>('/api/alarms/rules', { method: 'POST', body: JSON.stringify(rule) }),
   update: (id: string, patch: Partial<AlarmRule>) =>
     request<{ rule: AlarmRule }>(`/api/alarms/rules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),

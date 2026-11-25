@@ -253,6 +253,34 @@ export function NscaConfig({ onDone }: Props) {
         </div>
       </section>
 
+      {/* Trames périodiques (heartbeat OK services + check hôte) */}
+      <section className="space-y-3 rounded-xl border p-4">
+        <h3 className="text-sm font-semibold">{t('alarm.admin.frames')}</h3>
+        <p className="text-xs text-muted-foreground">{t('alarm.admin.frames.hint')}</p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1 text-xs font-medium">
+            {t('alarm.admin.okHeartbeat')}
+            <Input
+              type="number"
+              min={0}
+              value={config.okHeartbeatSeconds}
+              onChange={(e) => setCfg({ okHeartbeatSeconds: Math.max(0, Number(e.target.value)) })}
+            />
+            <span className="font-normal text-muted-foreground">{t('alarm.admin.okHeartbeat.hint')}</span>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium">
+            {t('alarm.admin.hostCheck')}
+            <Input
+              type="number"
+              min={0}
+              value={config.hostCheckSeconds}
+              onChange={(e) => setCfg({ hostCheckSeconds: Math.max(0, Number(e.target.value)) })}
+            />
+            <span className="font-normal text-muted-foreground">{t('alarm.admin.hostCheck.hint')}</span>
+          </label>
+        </div>
+      </section>
+
       {/* Pollers — deux entrées : nom + IP (IP = destination NSCA du poller) */}
       <section className="space-y-3 rounded-xl border p-4">
         <h3 className="text-sm font-semibold">{t('alarm.admin.pollers')}</h3>

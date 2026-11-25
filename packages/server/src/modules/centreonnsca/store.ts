@@ -109,13 +109,20 @@ export class NscaStore {
    */
   getConfig(): CentreonConfig {
     const c = this.data.config;
-    const e = this.envSecrets;
-    if (!e.restToken && !e.nscaPassword && !e.clapiPassword) return c;
-    return {
+    // Normalisation : les champs ajoutés après la création du fichier (ex.
+    // okHeartbeatSeconds / hostCheckSeconds) ont un défaut si absents.
+    const norm: CentreonConfig = {
       ...c,
+      okHeartbeatSeconds: c.okHeartbeatSeconds ?? 300,
+      hostCheckSeconds: c.hostCheckSeconds ?? 60,
+    };
+    const e = this.envSecrets;
+    if (!e.restToken && !e.nscaPassword && !e.clapiPassword) return norm;
+    return {
+      ...norm,
       ...(e.restToken ? { restToken: e.restToken } : {}),
       ...(e.clapiPassword ? { clapiPassword: e.clapiPassword } : {}),
-      nsca: { ...c.nsca, ...(e.nscaPassword ? { password: e.nscaPassword } : {}) },
+      nsca: { ...norm.nsca, ...(e.nscaPassword ? { password: e.nscaPassword } : {}) },
     };
   }
 
@@ -144,6 +151,8 @@ export class NscaStore {
     if (patch.restUrl !== undefined) c.restUrl = patch.restUrl;
     if (patch.restUser !== undefined) c.restUser = patch.restUser;
     if (patch.restToken !== undefined) c.restToken = patch.restToken;
+    if (patch.okHeartbeatSeconds !== undefined) c.okHeartbeatSeconds = patch.okHeartbeatSeconds;
+    if (patch.hostCheckSeconds !== undefined) c.hostCheckSeconds = patch.hostCheckSeconds;
     if (patch.nsca) {
       if (patch.nsca.server !== undefined) c.nsca.server = patch.nsca.server;
       if (patch.nsca.port !== undefined) c.nsca.port = patch.nsca.port;

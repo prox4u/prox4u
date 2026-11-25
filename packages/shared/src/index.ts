@@ -110,6 +110,7 @@ export {
   nscaReturnCode,
   escapeNscaField,
   buildNscaFrame,
+  buildNscaHostFrame,
   renderOutput,
   defaultServiceName,
   suggestCenteronHost,

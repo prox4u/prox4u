@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildNscaFrame,
+  buildNscaHostFrame,
   clapiDeleteCommand,
   clapiProvisionCommands,
   conditionMet,
@@ -50,6 +51,17 @@ describe('buildNscaFrame', () => {
   it('échappe les champs host/service contre l\'injection', () => {
     // Un `;` dans le nom d'hôte ne doit pas créer un champ parasite.
     expect(buildNscaFrame('h;ost', 'svc', 0, 'ok')).toBe('h\\;ost\tsvc\t0\tok\n');
+  });
+});
+
+describe('buildNscaHostFrame', () => {
+  it('construit host\tcode\toutput\n (3 champs, sans service — check hôte)', () => {
+    expect(buildNscaHostFrame('ia-u24-01', 0, 'UP — VM running (Proxmox)')).toBe(
+      'ia-u24-01\t0\tUP — VM running (Proxmox)\n',
+    );
+  });
+  it('échappe le nom d\'hôte et l\'output contre l\'injection', () => {
+    expect(buildNscaHostFrame('h;ost', 1, 'DOWN; arrêtée')).toBe('h\\;ost\t1\tDOWN\\; arrêtée\n');
   });
 });
 
