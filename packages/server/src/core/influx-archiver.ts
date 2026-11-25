@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { strToU8, zipSync } from 'fflate';
-import { influxTsToUnix, type SqlRow } from './influx.js';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { influxTsToUnix, type InfluxFieldType, type SqlRow } from './influx.js';
 import type { AppContext } from './poller.js';
 
 /**
@@ -54,12 +54,38 @@ function csvEscape(v: string | number | null | undefined): string {
   return s;
 }
 
+/**
+ * Identifiant SQL DuckDB entre guillemets (guillemets internes doublés).
+ * Requis pour les noms de tables avec tiret (ex. `proxmox-support`) —
+ * un identifiant brut avec `-` casse le parser.
+ */
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
 /** Convertit la valeur `time` d'une ligne en jour YYYY-MM-DD (UTC). */
 function dayOf(row: SqlRow): string | null {
   const t = row.time;
   const ts = typeof t === 'number' ? t : influxTsToUnix(typeof t === 'string' ? t : null);
   if (!ts) return null;
   return new Date(ts * 1000).toISOString().slice(0, 10);
+}
+
+/** Entrée du manifeste de sauvegarde : schéma complet (time + tags + champs typés). */
+interface BackupTableManifest {
+  name: string;
+  rows: number;
+  time: string;
+  tags: string[];
+  fields: Array<{ name: string; type: InfluxFieldType }>;
+}
+
+/** manifest.json d'une sauvegarde (ZIP) — suffit à la restauration. */
+interface BackupManifest {
+  db: string;
+  createdAt: string;
+  influxVersion: string | null;
+  tables: BackupTableManifest[];
 }
 
 export class InfluxArchiver {
@@ -189,15 +215,15 @@ export class InfluxArchiver {
   }
 
   /**
-   * Requiert [from, to) d'une table de `consolidated` (chunké 30 j) et construit
-   * le CSV en mémoire (entête + lignes, `\n` final). Table absente → 0 ligne
-   * (querySqlChunked ignore « cannot find table »). `table` est validée par le caller.
+   * Requiert [from, to) d'une table (chunké 30 j) et construit le CSV en mémoire
+   * (entête + lignes, `\n` final). Table absente → 0 ligne (querySqlChunked
+   * ignore « cannot find table »). `db`/`table` sont validés par le caller.
    */
-  private async tableCsv(table: string, from: number, to: number): Promise<{ csv: string; rows: number }> {
+  async tableCsv(db: string, table: string, from: number, to: number): Promise<{ csv: string; rows: number }> {
     const influx = this.ctx.influx;
     const rows = await influx.querySqlChunked<SqlRow>(
-      influx.aggDb,
-      (_f, _t) => `SELECT * FROM ${table} WHERE time >= '${_f}' AND time < '${_t}' ORDER BY time`,
+      db,
+      (_f, _t) => `SELECT * FROM ${quoteIdent(table)} WHERE time >= '${_f}' AND time < '${_t}' ORDER BY time`,
       from,
       to,
       { chunkDays: ARCHIVE_CHUNK_DAYS },
@@ -216,7 +242,7 @@ export class InfluxArchiver {
    */
   async exportTable(table: string, from: number, to: number): Promise<{ file: string; rows: number }> {
     mkdirSync(this.ctx.config.influx.archiveDir, { recursive: true });
-    const { csv, rows } = await this.tableCsv(table, from, to);
+    const { csv, rows } = await this.tableCsv(this.ctx.influx.aggDb, table, from, to);
     if (rows === 0) return { file: '', rows: 0 };
     const day = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
     const file = path.join(this.ctx.config.influx.archiveDir, `export-${table}-${day(from)}_${day(to)}.csv`);
@@ -239,7 +265,7 @@ export class InfluxArchiver {
     const files: Record<string, Uint8Array> = {};
     const exports: Array<{ table: string; rows: number }> = [];
     for (const table of tables) {
-      const { csv, rows } = await this.tableCsv(table, from, to);
+      const { csv, rows } = await this.tableCsv(this.ctx.influx.aggDb, table, from, to);
       exports.push({ table, rows });
       if (rows > 0) files[`${table}.csv`] = strToU8(csv);
     }
@@ -266,6 +292,109 @@ export class InfluxArchiver {
     return { file, exports };
   }
 
+  // ---------- Sauvegarde / restauration de bases ----------
+
+  /**
+   * Sauvegarde COMPLÈTE d'une base (POST /api/influxdb/actions/database/backup) :
+   * ZIP persistant dans `backupDir` = 1 CSV par table (historique complet) +
+   * `manifest.json` (db, date, version, schéma time/tags/champs par table — lu
+   * depuis information_schema, indispensable à la restauration). Les tables vides
+   * sont dans le manifeste (rows: 0) sans CSV. `db` est validée par le caller.
+   */
+  async backupDatabase(
+    db: string,
+  ): Promise<{ file: string; tables: Array<{ table: string; rows: number }>; totalRows: number }> {
+    const influx = this.ctx.influx;
+    const backupDir = this.ctx.config.influx.backupDir;
+    const tables = await influx.listTables(db);
+    const files: Record<string, Uint8Array> = {};
+    const manifestTables: BackupTableManifest[] = [];
+    const tableResults: Array<{ table: string; rows: number }> = [];
+    let totalRows = 0;
+    for (const table of tables) {
+      const schema = await influx.tableSchema(db, table);
+      if (!schema) continue; // table disparue entre-temps
+      // Plage réelle [min(time), max(time)] — évite les chunks vides.
+      const range = await influx.querySql<{ min: string | number | null; max: string | number | null }>(
+        db,
+        `SELECT min(time) AS min, max(time) AS max FROM ${quoteIdent(table)}`,
+      );
+      const from = influxTsToUnix(range[0]?.min ?? null);
+      const max = influxTsToUnix(range[0]?.max ?? null);
+      let rows = 0;
+      if (from && max) {
+        // Borne haute EXCLUSIVE (time < to) → max + 1 pour inclure la dernière
+        // ligne (sinon la ligne à max(time) est perdue).
+        const to = max + 1;
+        const { csv, rows: n } = await this.tableCsv(db, table, from, to);
+        rows = n;
+        if (rows > 0) files[`${table}.csv`] = strToU8(csv);
+      }
+      // Table vide : dans le manifeste (rows: 0, sans CSV) — schéma préservé.
+      manifestTables.push({ name: table, rows, time: schema.time, tags: schema.tags, fields: schema.fields });
+      tableResults.push({ table, rows });
+      totalRows += rows;
+    }
+    const info = influx.getServerInfo ? await influx.getServerInfo().catch(() => null) : null;
+    const version = info?.version ?? null;
+    const manifest: BackupManifest = {
+      db,
+      createdAt: new Date().toISOString(),
+      influxVersion: version,
+      tables: manifestTables,
+    };
+    files['manifest.json'] = strToU8(JSON.stringify(manifest, null, 2));
+    const day = new Date().toISOString().slice(0, 10);
+    const hhmmss = new Date().toISOString().slice(11, 19).replace(/:/g, '');
+    const file = `backup-${db}-${day}-${hhmmss}.zip`;
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(path.join(backupDir, file), Buffer.from(zipSync(files, { level: 6 })));
+    return { file, tables: tableResults, totalRows };
+  }
+
+  /**
+   * Liste des sauvegardes (GET /api/influxdb/backups) : lit le manifest.json de
+   * chaque ZIP de `backupDir`. ZIP corrompu / sans manifeste → ignoré. Tri date
+   * décroissante. Défensif : dossier absent → [].
+   */
+  listBackups(): Array<{ file: string; db: string; createdAt: string; size: number; tables: number; rows: number }> {
+    const backupDir = this.ctx.config.influx.backupDir;
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(backupDir);
+    } catch {
+      return [];
+    }
+    const out: Array<{ file: string; db: string; createdAt: string; size: number; tables: number; rows: number }> = [];
+    for (const f of entries) {
+      if (!/^backup-[\w.-]+\.zip$/.test(f)) continue;
+      const full = path.join(backupDir, f);
+      let size = 0;
+      try {
+        size = statSync(full).size;
+      } catch {
+        continue;
+      }
+      try {
+        const zip = unzipSync(readFileSync(full));
+        const raw = zip['manifest.json'];
+        if (!raw) continue;
+        const m = JSON.parse(strFromU8(raw)) as BackupManifest;
+        out.push({
+          file: f,
+          db: m.db,
+          createdAt: m.createdAt,
+          size,
+          tables: m.tables.length,
+          rows: m.tables.reduce((s, t) => s + t.rows, 0),
+        });
+      } catch {
+        continue; // ZIP corrompu / manifeste illisible → ignoré
+      }
+    }
+    return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
   /** Archive [from, to) de `consolidated` vers CSV (1 fichier / table / jour). */
   private async archiveRange(from: number, to: number): Promise<void> {
     const influx = this.ctx.influx;
@@ -276,7 +405,7 @@ export class InfluxArchiver {
       try {
         rows = await influx.querySqlChunked<SqlRow>(
           influx.aggDb,
-          (_f, _t) => `SELECT * FROM ${table} WHERE time >= '${_f}' AND time < '${_t}' ORDER BY time`,
+          (_f, _t) => `SELECT * FROM ${quoteIdent(table)} WHERE time >= '${_f}' AND time < '${_t}' ORDER BY time`,
           from,
           to,
           { chunkDays: ARCHIVE_CHUNK_DAYS },

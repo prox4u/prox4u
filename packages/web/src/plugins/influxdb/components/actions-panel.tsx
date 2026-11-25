@@ -1,11 +1,16 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Archive, Database, Download, RotateCcw, Trash2, Zap } from 'lucide-react';
+import { Archive, Database, DatabaseBackup, Download, RotateCcw, Trash2, Zap } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Button } from '../../../components/ui/button';
 import { Input, Select } from '../../../components/ui/input';
 import { Dialog } from '../../../components/ui/dialog';
-import { downloadInfluxExport, fetchInfluxTables, postInfluxAction } from '../../../core/api/apiClient';
+import {
+  downloadInfluxExport,
+  fetchInfluxTables,
+  influxDownloadUrl,
+  postInfluxAction,
+} from '../../../core/api/apiClient';
 
 type Risk = 'safe' | 'caution' | 'critical';
 
@@ -26,6 +31,7 @@ const ACTION_META: Record<string, { risk: Risk; labelKey: string; whatKey: strin
   'archive/run': { risk: 'safe', labelKey: 'influxdb.actions.archiveRun', whatKey: 'influxdb.actions.archiveRun.what', impactKey: 'influxdb.actions.archiveRun.impact' },
   'archive/reset': { risk: 'caution', labelKey: 'influxdb.actions.archiveReset', whatKey: 'influxdb.actions.archiveReset.what', impactKey: 'influxdb.actions.archiveReset.impact' },
   'export': { risk: 'safe', labelKey: 'influxdb.actions.export', whatKey: 'influxdb.actions.export.what', impactKey: 'influxdb.actions.export.impact' },
+  'database/backup': { risk: 'safe', labelKey: 'influxdb.actions.backup', whatKey: 'influxdb.actions.backup.what', impactKey: 'influxdb.actions.backup.impact' },
   'database/recreate': { risk: 'critical', labelKey: 'influxdb.actions.recreate', whatKey: 'influxdb.actions.recreate.what', impactKey: 'influxdb.actions.recreate.impact' },
   'database/drop': { risk: 'critical', labelKey: 'influxdb.actions.dropDb', whatKey: 'influxdb.actions.dropDb.what', impactKey: 'influxdb.actions.dropDb.impact' },
   'table/drop': { risk: 'critical', labelKey: 'influxdb.actions.dropTable', whatKey: 'influxdb.actions.dropTable.what', impactKey: 'influxdb.actions.dropTable.impact' },
@@ -58,12 +64,14 @@ export function InfluxActionsPanel({
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState<string | null>(null);
-  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
-  // dialog ouvert (destructifs + export) + champs
-  const [dialog, setDialog] = useState<null | 'recreate' | 'drop-db' | 'drop-table' | 'export'>(null);
+  const [result, setResult] = useState<{ ok: boolean; msg: string; downloadFile?: string } | null>(null);
+  // dialog ouvert (destructifs + export + sauvegarde) + champs
+  const [dialog, setDialog] = useState<null | 'recreate' | 'drop-db' | 'drop-table' | 'export' | 'backup'>(null);
   const [db, setDb] = useState('');
   const [table, setTable] = useState('');
   const [retention, setRetention] = useState('');
+  // drop-db : sauvegarde préalable (checkbox)
+  const [dropBackup, setDropBackup] = useState(false);
   const [expFrom, setExpFrom] = useState('');
   const [expTo, setExpTo] = useState('');
   // Export multi-tables : liste dynamique (GET /api/influxdb/tables) + sélection.
@@ -88,7 +96,27 @@ export function InfluxActionsPanel({
         setResult({ ok: true, msg: t('influxdb.actions.export.result', { tables: s.tables, rows: s.rows, file: s.file }) });
       } else {
         const r = await postInfluxAction(action, body);
-        setResult({ ok: true, msg: t('influxdb.actions.done', { action }) + (r && Object.keys(r).length ? ` — ${JSON.stringify(r)}` : '') });
+        if (action === 'database/backup') {
+          // Sauvegarde persistante : lien de téléchargement (optionnel) dans le banner.
+          setResult({
+            ok: true,
+            msg: t('influxdb.actions.backup.result', {
+              file: r.file,
+              tables: Array.isArray(r.tables) ? r.tables.length : 0,
+              rows: r.totalRows ?? 0,
+            }),
+            downloadFile: typeof r.file === 'string' ? r.file : undefined,
+          });
+        } else if (action === 'database/drop' && typeof r.backup === 'string') {
+          // Drop avec sauvegarde préalable : la copie de sécurité est téléchargeable.
+          setResult({
+            ok: true,
+            msg: t('influxdb.actions.done', { action }) + ` — ${JSON.stringify(r)}`,
+            downloadFile: r.backup,
+          });
+        } else {
+          setResult({ ok: true, msg: t('influxdb.actions.done', { action }) + (r && Object.keys(r).length ? ` — ${JSON.stringify(r)}` : '') });
+        }
       }
       onAction();
     } catch (err) {
@@ -99,12 +127,17 @@ export function InfluxActionsPanel({
     }
   };
 
-  /** Ouvre l'étape de validation avant exécution (explication + impact + risque). */
+  /**
+   * Ouvre l'étape de validation avant exécution (explication + impact + risque).
+   * `whatKey`/`impactKey` : overrides des clés i18n (ex. drop-db avec sauvegarde).
+   */
   const requestAction = (
     action: string,
     body?: Record<string, unknown>,
     details?: Array<{ k: string; v: string }>,
     whatParams?: Record<string, unknown>,
+    whatKey?: string,
+    impactKey?: string,
   ) => {
     const meta = ACTION_META[action];
     if (!meta) return;
@@ -113,8 +146,8 @@ export function InfluxActionsPanel({
       action,
       label: t(meta.labelKey),
       risk: meta.risk,
-      what: t(meta.whatKey, whatParams ?? {}),
-      impact: t(meta.impactKey, whatParams ?? {}),
+      what: t(whatKey ?? meta.whatKey, whatParams ?? {}),
+      impact: t(impactKey ?? meta.impactKey, whatParams ?? {}),
       details,
       body,
     });
@@ -128,8 +161,9 @@ export function InfluxActionsPanel({
     void run(action, body);
   };
 
-  const openDialog = (d: 'recreate' | 'drop-db' | 'drop-table') => {
+  const openDialog = (d: 'recreate' | 'drop-db' | 'drop-table' | 'backup') => {
     setResult(null);
+    if (d === 'drop-db') setDropBackup(false);
     setDialog(d);
   };
 
@@ -147,7 +181,18 @@ export function InfluxActionsPanel({
         { db, retention: ret },
       );
     } else if (dialog === 'drop-db') {
-      requestAction('database/drop', { db }, [{ k: t('influxdb.actions.db'), v: db }], { db });
+      const details: Array<{ k: string; v: string }> = [{ k: t('influxdb.actions.db'), v: db }];
+      if (dropBackup) details.push({ k: t('influxdb.actions.dropDb.backupCheckbox'), v: '✓' });
+      requestAction(
+        'database/drop',
+        { db, backup: dropBackup },
+        details,
+        { db },
+        dropBackup ? 'influxdb.actions.dropDb.whatBackup' : undefined,
+        dropBackup ? 'influxdb.actions.dropDb.impactBackup' : undefined,
+      );
+    } else if (dialog === 'backup') {
+      requestAction('database/backup', { db }, [{ k: t('influxdb.actions.db'), v: db }], { db });
     } else if (dialog === 'drop-table') {
       requestAction(
         'table/drop',
@@ -237,6 +282,10 @@ export function InfluxActionsPanel({
             <Download className="mr-1 h-3.5 w-3.5" />
             {t('influxdb.actions.export')}
           </Button>
+          <Button variant="outline" size="sm" disabled={!enabled || busy !== null} onClick={() => openDialog('backup')}>
+            <DatabaseBackup className="mr-1 h-3.5 w-3.5" />
+            {t('influxdb.actions.backup')}
+          </Button>
           <Button variant="outline" size="sm" disabled={!enabled || busy !== null} onClick={() => openDialog('recreate')}>
             <Database className="mr-1 h-3.5 w-3.5" />
             {t('influxdb.actions.recreate')}
@@ -253,9 +302,14 @@ export function InfluxActionsPanel({
 
         {result && (
           <div
-            className={`mt-3 rounded-md border p-2 text-xs ${result.ok ? 'border-ok/30 bg-ok/10 text-ok' : 'border-crit/30 bg-crit/10 text-crit'}`}
+            className={`mt-3 flex flex-wrap items-center gap-x-2 rounded-md border p-2 text-xs ${result.ok ? 'border-ok/30 bg-ok/10 text-ok' : 'border-crit/30 bg-crit/10 text-crit'}`}
           >
-            {result.msg}
+            <span>{result.msg}</span>
+            {result.downloadFile && (
+              <a href={influxDownloadUrl(result.downloadFile)} download className="underline hover:no-underline">
+                {t('influxdb.actions.download')}
+              </a>
+            )}
           </div>
         )}
 
@@ -293,6 +347,40 @@ export function InfluxActionsPanel({
         <Dialog open={dialog === 'drop-db'} onClose={() => setDialog(null)} title={t('influxdb.actions.dropDb')}>
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">{t('influxdb.actions.dropDb.confirm')}</p>
+            <label className="block space-y-1 text-sm">
+              <span className="text-muted-foreground">{t('influxdb.actions.db')}</span>
+              <Select value={db} onChange={(e) => setDb(e.target.value)} className="w-full">
+                {dbNames.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-secondary/50">
+              <input
+                type="checkbox"
+                checked={dropBackup}
+                onChange={(e) => setDropBackup(e.target.checked)}
+                className="h-3.5 w-3.5"
+              />
+              <span>{t('influxdb.actions.dropDb.backupCheckbox')}</span>
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDialog(null)}>
+                {t('common.cancel')}
+              </Button>
+              <Button size="sm" disabled={!db || busy !== null} onClick={confirm}>
+                {t('influxdb.actions.continue')}
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+
+        {/* Dialog sauvegarder une base (non destructif) — ZIP persistant sur le serveur */}
+        <Dialog open={dialog === 'backup'} onClose={() => setDialog(null)} title={t('influxdb.actions.backup')}>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">{t('influxdb.actions.backup.confirm')}</p>
             <label className="block space-y-1 text-sm">
               <span className="text-muted-foreground">{t('influxdb.actions.db')}</span>
               <Select value={db} onChange={(e) => setDb(e.target.value)} className="w-full">

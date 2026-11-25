@@ -30,11 +30,22 @@ import { influxTsToUnix, type InfluxQueryStats, type InfluxWriteStats } from '..
  *                                                     → ZIP binaire direct (mémoire,
  *                                                     zéro disque) + X-Export-Summary.
  *  - GET  /api/influxdb/actions/download            : télécharge un fichier d'export
- *                                                     (file=basename, pattern export-*,
- *                                                     Content-Disposition attachment).
+ *                                                     (pattern export-*, dossier
+ *                                                     d'archivage) ou de sauvegarde
+ *                                                     (pattern backup-*.zip, dossier
+ *                                                     de sauvegardes) — Content-
+ *                                                     Disposition attachment.
  *  - POST /api/influxdb/actions/database/recreate   : drop + create (rétention).
- *  - POST /api/influxdb/actions/database/drop       : supprime une base (destructif).
+ *  - POST /api/influxdb/actions/database/backup     : sauvegarde complète d'une base
+ *                                                     → ZIP persistant (1 CSV/table +
+ *                                                     manifest.json) dans backupDir.
+ *  - POST /api/influxdb/actions/database/drop       : supprime une base (destructif) ;
+ *                                                     `backup: true` → sauvegarde
+ *                                                     préalable obligatoire.
  *  - POST /api/influxdb/actions/table/drop          : supprime une table (destructif).
+ *
+ * LECTURE sauvegardes (ouverte à toute session, comme /tables) :
+ *  - GET /api/influxdb/backups                      : liste des sauvegardes (manifeste).
  *
  * Chaque action est loggée dans l'audit admin (action `influxdb.action`).
  * Les noms db/table sont validés (`/^[a-zA-Z0-9_-]+$/`) avant toute interpolation.
@@ -203,6 +214,11 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
     return { db, tables };
   });
 
+  app.get('/api/influxdb/backups', async (_req, reply) => {
+    if (!ctx.archiver) return reply.code(503).send({ error: 'unavailable', code: 'archiver-missing' });
+    return { backups: ctx.archiver.listBackups() };
+  });
+
   // ---------- ACTIONS (guard : admin ou groupe configuré) ----------
 
   app.post('/api/influxdb/actions/flush', async (req, reply) => {
@@ -263,14 +279,19 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
   app.get('/api/influxdb/actions/download', async (req, reply) => {
     if (!ctx.archiver) return reply.code(503).send({ error: 'unavailable', code: 'archiver-missing' });
     const file = (req.query as { file?: string }).file ?? '';
-    // Fichiers d'export ad-hoc uniquement (ZIP multi-tables / CSV single) :
-    // basename + pattern fixe → pas de path traversal (aucun « / » possible).
-    if (!/^export-[\w.-]+\.(zip|csv)$/.test(file)) {
+    // Fichiers d'export ad-hoc (ZIP/CSV, dossier d'archivage) ou de sauvegarde
+    // (ZIP, dossier de sauvegardes) : basename + pattern fixe → pas de path
+    // traversal (aucun « / » possible).
+    let baseDir: string;
+    if (/^export-[\w.-]+\.(zip|csv)$/.test(file)) {
+      baseDir = path.resolve(ctx.config.influx.archiveDir);
+    } else if (/^backup-[\w.-]+\.zip$/.test(file)) {
+      baseDir = path.resolve(ctx.config.influx.backupDir);
+    } else {
       return reply.code(400).send({ error: 'invalid', code: 'bad-file' });
     }
-    const archiveDir = path.resolve(ctx.config.influx.archiveDir);
-    const full = path.join(archiveDir, file);
-    if (!full.startsWith(archiveDir + path.sep)) {
+    const full = path.join(baseDir, file);
+    if (!full.startsWith(baseDir + path.sep)) {
       return reply.code(400).send({ error: 'invalid', code: 'bad-file' });
     }
     if (!existsSync(full)) return reply.code(404).send({ error: 'not-found', code: 'file-not-found' });
@@ -294,15 +315,34 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
     return { ok: true, db: body.db, retention: body.retention ?? null };
   });
 
-  app.post('/api/influxdb/actions/database/drop', async (req, reply) => {
+  app.post('/api/influxdb/actions/database/backup', async (req, reply) => {
     if (!influxReady(ctx)) return reply.code(404).send({ error: 'not-found', code: 'influx-disabled' });
+    if (!ctx.archiver) return reply.code(503).send({ error: 'unavailable', code: 'archiver-missing' });
     const body = (req.body ?? {}) as { db?: string };
     if (!validName(body.db)) return reply.code(400).send({ error: 'invalid', code: 'bad-db' });
     const dbs = await ctx.influx.listDatabases();
     if (!dbs.some((d) => d.name === body.db)) return reply.code(404).send({ error: 'not-found', code: 'db-not-found' });
+    const r = await ctx.archiver.backupDatabase(body.db);
+    auditAction(ctx, req, 'database/backup', { db: body.db, file: r.file, tables: r.tables.length, rows: r.totalRows });
+    return { ok: true, db: body.db, file: r.file, dir: ctx.config.influx.backupDir, tables: r.tables, totalRows: r.totalRows };
+  });
+
+  app.post('/api/influxdb/actions/database/drop', async (req, reply) => {
+    if (!influxReady(ctx)) return reply.code(404).send({ error: 'not-found', code: 'influx-disabled' });
+    const body = (req.body ?? {}) as { db?: string; backup?: boolean };
+    if (!validName(body.db)) return reply.code(400).send({ error: 'invalid', code: 'bad-db' });
+    const dbs = await ctx.influx.listDatabases();
+    if (!dbs.some((d) => d.name === body.db)) return reply.code(404).send({ error: 'not-found', code: 'db-not-found' });
+    // `backup: true` → sauvegarde préalable OBLIGATOIRE (doit réussir) avant le drop.
+    let backupFile: string | null = null;
+    if (body.backup) {
+      if (!ctx.archiver) return reply.code(503).send({ error: 'unavailable', code: 'archiver-missing' });
+      const b = await ctx.archiver.backupDatabase(body.db);
+      backupFile = b.file;
+    }
     await ctx.influx.dropDatabase(body.db);
-    auditAction(ctx, req, 'database/drop', { db: body.db });
-    return { ok: true, db: body.db };
+    auditAction(ctx, req, 'database/drop', { db: body.db, backup: backupFile });
+    return { ok: true, db: body.db, backup: backupFile };
   });
 
   app.post('/api/influxdb/actions/table/drop', async (req, reply) => {

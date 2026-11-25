@@ -201,6 +201,18 @@ export function fetchInfluxTables(db?: string): Promise<{ db: string; tables: st
   return getJson<{ db: string; tables: string[] }>(`/api/influxdb/tables${db ? `?db=${encodeURIComponent(db)}` : ''}`);
 }
 
+/** Sauvegardes InfluxDB (GET /api/influxdb/backups) — manifestes lus sur disque. */
+export function fetchInfluxBackups(): Promise<{
+  backups: Array<{ file: string; db: string; createdAt: string; size: number; tables: number; rows: number }>;
+}> {
+  return getJson('/api/influxdb/backups');
+}
+
+/** URL de téléchargement d'un fichier InfluxDB (export ou sauvegarde). */
+export function influxDownloadUrl(file: string): string {
+  return `/api/influxdb/actions/download?file=${encodeURIComponent(file)}`;
+}
+
 /**
  * Export ad-hoc multi-tables en TÉLÉCHARGEMENT DIRECT (?download=1) : le serveur
  * renvoie le ZIP en binaire (généré en mémoire, aucune écriture disque) et cette

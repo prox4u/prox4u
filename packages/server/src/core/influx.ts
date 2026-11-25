@@ -40,6 +40,19 @@ export function escapeFieldString(v: string): string {
 
 export type FieldValue = number | string;
 
+/** Type de champ pour la création de table (POST /api/v3/configure/table). */
+export type InfluxFieldType = 'utf8' | 'int64' | 'uint64' | 'float64' | 'bool';
+
+/** Schéma d'une table (colonne time + tags + champs typés) — lu depuis information_schema. */
+export interface TableSchema {
+  /** nom de la colonne time (Timestamp) — '' si absente */
+  time: string;
+  /** colonnes tags (Dictionary) */
+  tags: string[];
+  /** colonnes champs typées */
+  fields: Array<{ name: string; type: InfluxFieldType }>;
+}
+
 /** Construit une ligne line-protocol : `mesure,t1=v1,t2=v2 f1=1,f2="x" ts`. */
 export function buildLine(
   measurement: string,
@@ -319,7 +332,10 @@ export class InfluxClient {
     while (cursor < to) {
       const end = Math.min(cursor + chunkSec, to);
       try {
-        out.push(...(await this.querySql<T>(db, buildSql(iso(cursor), iso(end)))));
+        // Boucle (pas `out.push(...chunk)`) : le spread déborde la pile au-delà
+        // de ~100 k lignes par tranche (bases RRD haute résolution, ex. proxmox).
+        const chunk = await this.querySql<T>(db, buildSql(iso(cursor), iso(end)));
+        for (const row of chunk) out.push(row);
       } catch (err) {
         if (!/cannot find table|does not exist|No field named/i.test((err as Error).message ?? '')) {
           throw err;
@@ -409,6 +425,44 @@ export class InfluxClient {
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       throw new Error(`InfluxDB drop_table ${db}.${table} → HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+  }
+
+  /**
+   * Schéma d'une table via information_schema.columns (DuckDB) : la colonne
+   * `Timestamp` = time, `Dictionary(Int32, Utf8)` = tag, le reste = champ typé
+   * (Float64/Int64/UInt64/Bool, repli utf8). null si la table n'existe pas.
+   * `table` est validée par le caller (validName).
+   */
+  async tableSchema(db: string, table: string): Promise<TableSchema | null> {
+    try {
+      const rows = await this.querySql<{ column_name: string; data_type: string }>(
+        db,
+        `SELECT column_name, data_type FROM information_schema.columns ` +
+          `WHERE table_schema = 'iox' AND table_name = '${table.replace(/'/g, "''")}' ORDER BY ordinal_position`,
+      );
+      if (rows.length === 0) return null;
+      let time = '';
+      const tags: string[] = [];
+      const fields: Array<{ name: string; type: InfluxFieldType }> = [];
+      for (const r of rows) {
+        const name = typeof r.column_name === 'string' ? r.column_name : '';
+        const dt = typeof r.data_type === 'string' ? r.data_type : '';
+        if (dt.startsWith('Timestamp')) {
+          if (!time) time = name;
+          continue;
+        }
+        if (dt.startsWith('Dictionary')) {
+          tags.push(name);
+          continue;
+        }
+        const type: InfluxFieldType =
+          dt === 'Float64' ? 'float64' : dt === 'Int64' ? 'int64' : dt === 'UInt64' ? 'uint64' : dt === 'Bool' ? 'bool' : 'utf8';
+        fields.push({ name, type });
+      }
+      return { time, tags, fields };
+    } catch {
+      return null;
     }
   }
 

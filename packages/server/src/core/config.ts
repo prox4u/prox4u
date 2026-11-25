@@ -70,6 +70,7 @@ const envSchema = z.object({
   INFLUX_ARCHIVE_INTERVAL_HOURS: z.coerce.number().int().min(1).max(168).default(6),
   INFLUX_ARCHIVE_AGE_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
   INFLUX_ARCHIVE_DIR: z.string().default('data/influx-archive'),
+  INFLUX_BACKUP_DIR: z.string().default('data/influx-backups'),
   // Groupes autorisés à lancer les ACTIONS InfluxDB (POST /api/influxdb/actions/*) :
   // noms de groupes séparés par des virgules. Le rôle admin passe toujours.
   // Vide = seules les actions du rôle admin (aucun groupe).
@@ -114,6 +115,8 @@ export interface InfluxConfig {
   archiveAgeMs: number;
   /** archivage : dossier de sortie (chemin absolu) — P5 */
   archiveDir: string;
+  /** sauvegardes de bases : dossier de sortie (chemin absolu) */
+  backupDir: string;
 }
 
 /** Un endpoint Proxmox surveillé (cluster ou nœud autonome). */
@@ -509,6 +512,7 @@ export function loadConfig(): AppConfig {
       archiveIntervalMs: env.INFLUX_ARCHIVE_INTERVAL_HOURS * 3_600_000,
       archiveAgeMs: env.INFLUX_ARCHIVE_AGE_DAYS * 86_400_000,
       archiveDir: resolvePath(env.INFLUX_ARCHIVE_DIR),
+      backupDir: resolvePath(env.INFLUX_BACKUP_DIR),
     },
     authFile: resolvePath('data/auth.json'),
     auditFile: resolvePath('data/admin-audit.jsonl'),

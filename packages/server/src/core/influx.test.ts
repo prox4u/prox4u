@@ -24,6 +24,7 @@ const cfg: InfluxConfig = {
   archiveIntervalMs: 6 * 3_600_000,
   archiveAgeMs: 90 * 86_400_000,
   archiveDir: 'data/influx-archive',
+  backupDir: 'data/influx-backups',
 };
 
 function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): MockedFetch {

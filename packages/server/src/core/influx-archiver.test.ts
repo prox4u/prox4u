@@ -2,6 +2,7 @@ import { mkdtempSync, existsSync, readFileSync, rmSync, mkdirSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AppContext } from './poller.js';
 import type { SqlRow } from './influx.js';
@@ -17,6 +18,8 @@ const STATE_FILE = path.join(repoRoot, 'data/archive-state.json');
 function makeCtx(
   archiveDir: string,
   querySqlChunked: (db: string, buildSql: (f: string, t: string) => string, from: number, to: number, opts?: { chunkDays?: number }) => Promise<SqlRow[]>,
+  extraInflux: Record<string, unknown> = {},
+  backupDir?: string,
 ): AppContext {
   return {
     config: {
@@ -25,6 +28,7 @@ function makeCtx(
         archiveIntervalMs: 6 * 3_600_000,
         archiveAgeMs: 90 * 86_400_000,
         archiveDir,
+        backupDir: backupDir ?? path.join(archiveDir, 'backups'),
       },
     },
     logger,
@@ -32,6 +36,7 @@ function makeCtx(
       enabled: true,
       aggDb: 'consolidated',
       querySqlChunked,
+      ...extraInflux,
     },
   } as unknown as AppContext;
 }
@@ -63,7 +68,7 @@ describe('InfluxArchiver', () => {
     const archiver = new InfluxArchiver(
       makeCtx(dir, async (_db, buildSql) => {
         const sql = buildSql('x', 'y');
-        if (sql.includes('FROM node_metrics')) return rows;
+        if (sql.includes('"node_metrics"')) return rows;
         return []; // autres tables : vides
       }),
     );
@@ -88,7 +93,7 @@ describe('InfluxArchiver', () => {
     const archiver = new InfluxArchiver(
       makeCtx(dir, async (_db, buildSql) => {
         const sql = buildSql('x', 'y');
-        if (sql.includes('FROM node_metrics')) {
+        if (sql.includes('"node_metrics"')) {
           throw new Error('InfluxDB query_sql consolidated → HTTP 400: cannot find table node_metrics');
         }
         return [{ time: now - 100 * 86_400, f: 1 }];
@@ -124,5 +129,81 @@ describe('InfluxArchiver', () => {
     );
     await (archiver as unknown as { run: () => Promise<void> }).run();
     expect(called).toBe(0);
+  });
+
+  // ---------- Sauvegarde / restauration ----------
+
+  it('backupDatabase : ZIP (1 CSV/table + manifest.json) dans backupDir', async () => {
+    const t0 = 1767225600; // 2026-01-01T00:00:00Z
+    const iso = (ts: number) => new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
+    const rows: SqlRow[] = [
+      { time: iso(t0), node: 'n1', usage: 1.5, label: 'a,b' },
+      { time: iso(t0 + 300), node: 'n1', usage: 2.5, label: null },
+    ];
+    const backupDir = path.join(dir, 'backups');
+    const archiver = new InfluxArchiver(
+      makeCtx(
+        dir,
+        async (_db, buildSql) => (buildSql('x', 'y').includes('"cpu"') ? rows : []),
+        {
+          listTables: async () => ['cpu', 'empty_t'],
+          tableSchema: async (_db: string, table: string) =>
+            table === 'cpu'
+              ? { time: 'time', tags: ['node'], fields: [{ name: 'usage', type: 'float64' }, { name: 'label', type: 'utf8' }] }
+              : { time: 'time', tags: [], fields: [{ name: 'f', type: 'float64' }] },
+          querySql: async (_db: string, sql: string) =>
+            sql.includes('"cpu"') ? [{ min: rows[0].time, max: rows[1].time }] : [{ min: null, max: null }],
+          getServerInfo: async () => ({ version: '3.11.5', raw: {} }),
+        },
+        backupDir,
+      ),
+    );
+    const r = await archiver.backupDatabase('raw');
+    expect(r.tables).toEqual([
+      { table: 'cpu', rows: 2 },
+      { table: 'empty_t', rows: 0 }, // table vide : dans le manifeste, sans CSV
+    ]);
+    expect(r.totalRows).toBe(2);
+    expect(r.file).toMatch(/^backup-raw-\d{4}-\d{2}-\d{2}-\d{6}\.zip$/);
+    const full = path.join(backupDir, r.file);
+    expect(existsSync(full)).toBe(true);
+    const zip = unzipSync(readFileSync(full));
+    expect(Object.keys(zip).sort()).toEqual(['cpu.csv', 'manifest.json']); // empty_t sans CSV
+    const m = JSON.parse(strFromU8(zip['manifest.json'])) as {
+      db: string;
+      influxVersion: string | null;
+      tables: Array<{ name: string; rows: number; time: string; tags: string[]; fields: unknown[] }>;
+    };
+    expect(m.db).toBe('raw');
+    expect(m.influxVersion).toBe('3.11.5');
+    expect(m.tables).toEqual([
+      { name: 'cpu', rows: 2, time: 'time', tags: ['node'], fields: [{ name: 'usage', type: 'float64' }, { name: 'label', type: 'utf8' }] },
+      { name: 'empty_t', rows: 0, time: 'time', tags: [], fields: [{ name: 'f', type: 'float64' }] },
+    ]);
+    const csv = strFromU8(zip['cpu.csv']);
+    expect(csv.split('\n')[0]).toBe('time,node,usage,label');
+    expect(csv.split('\n')[1]).toContain('"a,b"'); // échappement CSV (virgule)
+    expect(csv.split('\n')[2]).toBe(`${iso(t0 + 300)},n1,2.5,`); // label null → vide
+  });
+
+  it('listBackups : manifestes lus + tri décroissant + non-backup ignoré', async () => {
+    const backupDir = path.join(dir, 'backups');
+    mkdirSync(backupDir, { recursive: true });
+    const mk = (file: string, db: string, createdAt: string, rows: number) => {
+      const manifest = { db, createdAt, influxVersion: null, tables: [{ name: 't', rows, time: 'time', tags: [], fields: [] }] };
+      writeFileSync(path.join(backupDir, file), Buffer.from(zipSync({ 'manifest.json': strToU8(JSON.stringify(manifest)) })));
+    };
+    mk('backup-raw-2026-11-25-190000.zip', 'raw', '2026-11-25T19:00:00.000Z', 10);
+    mk('backup-raw-2026-11-24-100000.zip', 'raw', '2026-11-24T10:00:00.000Z', 5);
+    writeFileSync(path.join(backupDir, 'export-x.zip'), 'pas une sauvegarde');
+    const archiver = new InfluxArchiver(makeCtx(dir, async () => [], {}, backupDir));
+    const list = archiver.listBackups();
+    expect(list.map((b) => b.file)).toEqual(['backup-raw-2026-11-25-190000.zip', 'backup-raw-2026-11-24-100000.zip']);
+    expect(list[0]).toMatchObject({ db: 'raw', tables: 1, rows: 10 });
+  });
+
+  it('listBackups : dossier absent → []', async () => {
+    const archiver = new InfluxArchiver(makeCtx(dir, async () => [], {}, path.join(dir, 'absent')));
+    expect(archiver.listBackups()).toEqual([]);
   });
 });

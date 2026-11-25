@@ -36,6 +36,16 @@ interface MockOpts {
   role?: Role;
   /** dossier d'archivage (route download) */
   archiveDir?: string;
+  /** dossier de sauvegardes (routes backup/restore/download) */
+  backupDir?: string;
+  /** résultat de archiver.backupDatabase (mock) */
+  backupResult?: { file: string; tables: Array<{ table: string; rows: number }>; totalRows: number };
+  /** sauvegardes renvoyées par archiver.listBackups (mock) */
+  backups?: Array<{ file: string; db: string; createdAt: string; size: number; tables: number; rows: number }>;
+  /** résultat de archiver.restoreBackup (mock) */
+  restoreResult?: { db: string; tables: Array<{ table: string; rows: number; written: number; skipped: number }> };
+  /** erreur levée par archiver.restoreBackup (mock) */
+  restoreError?: Error;
 }
 
 function makeCtx(over: MockOpts = {}): AppContext {
@@ -47,7 +57,10 @@ function makeCtx(over: MockOpts = {}): AppContext {
   const ctx = {
     config: {
       influxActionGroups: ['Administrateurs', 'Exploitations'],
-      influx: { archiveDir: over.archiveDir ?? '/tmp/prox4u-influx-test' },
+      influx: {
+        archiveDir: over.archiveDir ?? '/tmp/prox4u-influx-test',
+        backupDir: over.backupDir ?? '/tmp/prox4u-influx-backup-test',
+      },
     } as AppContext['config'],
     endpoints: [],
     logger,
@@ -82,6 +95,12 @@ function makeCtx(over: MockOpts = {}): AppContext {
         exports: tables.map((t) => ({ table: t, rows: 5 })),
       })),
       getState: () => ({ lastArchivedTs: 1000, archiveDir: '/tmp/arch', fileCount: 3, totalBytes: 1234 }),
+      backupDatabase: vi.fn(async () => over.backupResult ?? { file: 'backup-raw-2026-11-25-190000.zip', tables: [{ table: 'node_metrics', rows: 5 }], totalRows: 5 }),
+      listBackups: () => over.backups ?? [],
+      restoreBackup: vi.fn(async () => {
+        if (over.restoreError) throw over.restoreError;
+        return over.restoreResult ?? { db: 'raw', tables: [{ table: 'node_metrics', rows: 5, written: 5, skipped: 0 }] };
+      }),
     } as unknown as AppContext['archiver'],
     auth: {
       store: {
@@ -273,6 +292,38 @@ describe('GET /api/influxdb/tables', () => {
     const res = await app.inject({ method: 'GET', url: '/api/influxdb/tables' });
     expect(res.statusCode).toBe(404);
     expect(res.json().code).toBe('influx-disabled');
+    await app.close();
+  });
+});
+
+describe('GET /api/influxdb/backups', () => {
+  it('liste des sauvegardes (manifestes) — ouverte à toute session', async () => {
+    const backups = [
+      { file: 'backup-raw-2026-11-25-190000.zip', db: 'raw', createdAt: '2026-11-25T19:00:00.000Z', size: 1234, tables: 2, rows: 10 },
+      { file: 'backup-consolidated-2026-11-24-100000.zip', db: 'consolidated', createdAt: '2026-11-24T10:00:00.000Z', size: 999, tables: 1, rows: 5 },
+    ];
+    const app = await boot(makeCtx({ backups }), undefined); // sans session : lecture ouverte
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/backups' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ backups });
+    await app.close();
+  });
+
+  it('aucune sauvegarde → []', async () => {
+    const app = await boot(makeCtx(), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/backups' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ backups: [] });
+    await app.close();
+  });
+
+  it('archiver absent → 503 archiver-missing', async () => {
+    const ctx = makeCtx();
+    delete (ctx as { archiver?: unknown }).archiver;
+    const app = await boot(ctx, admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/backups' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().code).toBe('archiver-missing');
     await app.close();
   });
 });
@@ -484,12 +535,12 @@ describe('POST /api/influxdb/actions/*', () => {
     await app.close();
   });
 
-  it('database/drop : ok + audit', async () => {
+  it('database/drop : ok + audit (backup=null sans option)', async () => {
     const ctx = makeCtx();
     const app = await boot(ctx, admin);
     const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/drop', payload: { db: 'raw' } });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, db: 'raw' });
+    expect(res.json()).toEqual({ ok: true, db: 'raw', backup: null });
     const drop = (ctx.influx as unknown as { dropDatabase: ReturnType<typeof vi.fn> }).dropDatabase;
     expect(drop).toHaveBeenCalledWith('raw');
     await app.close();
@@ -500,6 +551,80 @@ describe('POST /api/influxdb/actions/*', () => {
     const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/drop', payload: { db: 'raw; DROP' } });
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe('bad-db');
+    await app.close();
+  });
+
+  it('database/drop : backup=true → sauvegarde préalable (avant drop) + backup dans la réponse', async () => {
+    const ctx = makeCtx();
+    const app = await boot(ctx, admin);
+    const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/drop', payload: { db: 'raw', backup: true } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, db: 'raw', backup: 'backup-raw-2026-11-25-190000.zip' });
+    const backup = (ctx.archiver as unknown as { backupDatabase: ReturnType<typeof vi.fn> }).backupDatabase;
+    const drop = (ctx.influx as unknown as { dropDatabase: ReturnType<typeof vi.fn> }).dropDatabase;
+    expect(backup).toHaveBeenCalledWith('raw');
+    expect(drop).toHaveBeenCalledWith('raw');
+    // la sauvegarde précède le drop
+    expect(backup.mock.invocationCallOrder[0]).toBeLessThan(drop.mock.invocationCallOrder[0]);
+    await app.close();
+  });
+
+  it('database/drop : backup=true + sauvegarde en échec → drop non exécuté', async () => {
+    const ctx = makeCtx();
+    (ctx.archiver as unknown as { backupDatabase: ReturnType<typeof vi.fn> }).backupDatabase = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    const app = await boot(ctx, admin);
+    const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/drop', payload: { db: 'raw', backup: true } });
+    expect(res.statusCode).toBe(500);
+    const drop = (ctx.influx as unknown as { dropDatabase: ReturnType<typeof vi.fn> }).dropDatabase;
+    expect(drop).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('database/backup : ok + file/dir/tables/totalRows + audit', async () => {
+    const ctx = makeCtx();
+    const app = await boot(ctx, admin);
+    const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/backup', payload: { db: 'raw' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      db: 'raw',
+      file: 'backup-raw-2026-11-25-190000.zip',
+      dir: '/tmp/prox4u-influx-backup-test',
+      tables: [{ table: 'node_metrics', rows: 5 }],
+      totalRows: 5,
+    });
+    const backup = (ctx.archiver as unknown as { backupDatabase: ReturnType<typeof vi.fn> }).backupDatabase;
+    expect(backup).toHaveBeenCalledWith('raw');
+    expect((ctx.auth.audit.append as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      { id: 'u1', username: 'tester' }, 'influxdb.action', 'database/backup',
+      { db: 'raw', file: 'backup-raw-2026-11-25-190000.zip', tables: 1, rows: 5 },
+    );
+    await app.close();
+  });
+
+  it('database/backup : db invalide → 400 bad-db', async () => {
+    const app = await boot(makeCtx(), admin);
+    const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/backup', payload: { db: 'raw; DROP' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-db');
+    await app.close();
+  });
+
+  it('database/backup : base inexistante → 404 db-not-found', async () => {
+    const app = await boot(makeCtx(), admin);
+    const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/backup', payload: { db: 'nope' } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('db-not-found');
+    await app.close();
+  });
+
+  it('database/backup : InfluxDB désactivé → 404', async () => {
+    const app = await boot(makeCtx({ enabled: false }), admin);
+    const res = await app.inject({ method: 'POST', url: '/api/influxdb/actions/database/backup', payload: { db: 'raw' } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('influx-disabled');
     await app.close();
   });
 
@@ -596,6 +721,35 @@ describe('GET /api/influxdb/actions/download', () => {
     const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=export-a_b.zip' });
     expect(res.statusCode).toBe(503);
     expect(res.json().code).toBe('archiver-missing');
+    await app.close();
+  });
+
+  it('ZIP de sauvegarde valide → 200 (dossier de sauvegardes)', async () => {
+    const backupDir = '/tmp/prox4u-influx-backup-download-test';
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(path.join(backupDir, 'backup-raw-2026-11-25-190000.zip'), 'BACKUPZIP');
+    const app = await boot(makeCtx({ archiveDir: dir, backupDir }), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=backup-raw-2026-11-25-190000.zip' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/zip');
+    expect(res.headers['content-disposition']).toBe('attachment; filename="backup-raw-2026-11-25-190000.zip"');
+    expect(res.payload).toBe('BACKUPZIP');
+    await app.close();
+  });
+
+  it('sauvegarde .csv (pattern zip uniquement) → 400 bad-file', async () => {
+    const app = await boot(makeCtx({ archiveDir: dir }), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=backup-raw.csv' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-file');
+    await app.close();
+  });
+
+  it('sauvegarde absente → 404 file-not-found', async () => {
+    const app = await boot(makeCtx({ archiveDir: dir }), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/actions/download?file=backup-raw-2020-01-01-000000.zip' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('file-not-found');
     await app.close();
   });
 });
