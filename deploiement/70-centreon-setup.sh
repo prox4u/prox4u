@@ -383,13 +383,16 @@ try:
         a=(u.get('contact_alias') or u.get('alias') or '').lower()
         if a=='$MON_USER_LOGIN': print('1'); break
 except Exception: pass" 2>/dev/null || true)
+  local add_resp=""
   if [[ "$exists" == "1" ]]; then
     ok "compte ${MON_USER_LOGIN} existe"
   else
     # ADD: name;alias;email;password;admin;gui_access;lang;authtype (admin=0 = NON-admin).
-    clapi CONTACT add "NOC;${MON_USER_LOGIN};${MON_USER_EMAIL};${MON_USER_PASS};0;1;fr;local" >/dev/null \
-      || die "création du compte ${MON_USER_LOGIN} échouée (mot de passe conforme à la politique Centreon ?)"
-    ok "compte ${MON_USER_LOGIN} créé (${MON_USER_EMAIL})"
+    # La réponse CLAPI est CAPTURÉE : curl renvoie 0 même si CLAPI REFUSE (l'erreur
+    # est dans le body JSON) → sans ça, l'échec est silencieux (compte pas créé).
+    add_resp=$(clapi CONTACT add "NOC;${MON_USER_LOGIN};${MON_USER_EMAIL};${MON_USER_PASS};0;1;fr;local" 2>&1) \
+      || die "CLAPI « CONTACT add » ${MON_USER_LOGIN} : erreur HTTP/réseau"
+    ok "compte ${MON_USER_LOGIN} : CLAPI add exécuté"
   fi
   # NON-ADMIN garanti (idempotent, les 2 branches).
   clapi CONTACT setparam "${MON_USER_LOGIN};admin;0" >/dev/null 2>&1 \
@@ -399,7 +402,9 @@ except Exception: pass" 2>/dev/null || true)
   gid=$(db "SELECT acl_group_id FROM acl_groups WHERE acl_group_name='${MON_GROUP}' LIMIT 1" || true)
   [[ -n "$gid" ]] || die "groupe ACL '${MON_GROUP}' introuvable (acl_groups) — vérifier le nom (groupe par défaut Centreon : ALL)"
   uid=$(db "SELECT contact_id FROM contact WHERE contact_alias='${MON_USER_LOGIN}' LIMIT 1" || true)
-  [[ -n "$uid" ]] || die "compte ${MON_USER_LOGIN} introuvable en base (contact) — création échouée ?"
+  if [[ -z "$uid" ]]; then
+    die "compte ${MON_USER_LOGIN} introuvable en base après le CLAPI add — création REFUSÉE par Centreon. Réponse CLAPI : ${add_resp:-<aucune>:0:240} (vérifier la politique de mot de passe : longueur/complexité)"
+  fi
   topo_id=$({ db "INSERT INTO acl_topology (acl_topo_name, acl_topo_alias, acl_comments, acl_topo_activate)
 SELECT '${MON_TOPO_NAME}','${MON_TOPO_NAME}','Menu Monitoring (vision, lecture seule)','1'
 WHERE NOT EXISTS (SELECT 1 FROM acl_topology WHERE acl_topo_name='${MON_TOPO_NAME}');
