@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui
 import { Button } from '../../../components/ui/button';
 import { Input, Select } from '../../../components/ui/input';
 import { Dialog } from '../../../components/ui/dialog';
-import { postInfluxAction } from '../../../core/api/apiClient';
+import { fetchInfluxTables, postInfluxAction } from '../../../core/api/apiClient';
 
 /**
  * Panneau « Actions » InfluxDB — visible seulement si `canAct` (admin ou groupe
@@ -33,6 +33,10 @@ export function InfluxActionsPanel({
   const [retention, setRetention] = useState('');
   const [expFrom, setExpFrom] = useState('');
   const [expTo, setExpTo] = useState('');
+  // Export multi-tables : liste dynamique (GET /api/influxdb/tables) + sélection.
+  const [expTables, setExpTables] = useState<string[]>([]);
+  const [expTablesLoading, setExpTablesLoading] = useState(false);
+  const [expSelected, setExpSelected] = useState<Set<string>>(new Set());
 
   if (!canAct) return null;
 
@@ -69,8 +73,8 @@ export function InfluxActionsPanel({
     } else if (dialog === 'export') {
       const from = Math.floor(new Date(expFrom).getTime() / 1000);
       const to = Math.floor(new Date(expTo).getTime() / 1000);
-      if (Number.isFinite(from) && Number.isFinite(to) && from < to) {
-        void run('export', { table, from, to });
+      if (Number.isFinite(from) && Number.isFinite(to) && from < to && expSelected.size > 0) {
+        void run('export', { tables: [...expSelected], from, to });
       }
     }
     setDialog(null);
@@ -83,9 +87,36 @@ export function InfluxActionsPanel({
       `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     setExpFrom(local(new Date(Date.now() - 7 * 86_400_000)));
     setExpTo(local(new Date()));
+    setExpSelected(new Set());
     setResult(null);
     setDialog('export');
+    void loadExpTables();
   };
+
+  const loadExpTables = async () => {
+    setExpTablesLoading(true);
+    try {
+      const r = await fetchInfluxTables();
+      setExpTables(r.tables);
+    } catch {
+      setExpTables([]);
+    } finally {
+      setExpTablesLoading(false);
+    }
+  };
+
+  const toggleTable = (tbl: string) => {
+    setExpSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(tbl)) next.delete(tbl);
+      else next.add(tbl);
+      return next;
+    });
+  };
+
+  const allSelected = expTables.length > 0 && expSelected.size === expTables.length;
+  const someSelected = expSelected.size > 0 && !allSelected;
+  const toggleAll = () => setExpSelected(allSelected ? new Set() : new Set(expTables));
 
   return (
     <Card className="border">
@@ -216,14 +247,46 @@ export function InfluxActionsPanel({
           </div>
         </Dialog>
 
-        {/* Dialog export CSV ad-hoc (non destructif) */}
+        {/* Dialog export CSV ad-hoc multi-tables (non destructif) — 1 CSV/table → ZIP */}
         <Dialog open={dialog === 'export'} onClose={() => setDialog(null)} title={t('influxdb.actions.export')}>
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">{t('influxdb.actions.export.confirm')}</p>
-            <label className="block space-y-1 text-sm">
-              <span className="text-muted-foreground">{t('influxdb.actions.table')}</span>
-              <Input value={table} onChange={(e) => setTable(e.target.value)} placeholder="node_metrics" />
-            </label>
+            <div className="space-y-1">
+              <span className="text-sm text-muted-foreground">{t('influxdb.actions.tables')}</span>
+              {expTablesLoading ? (
+                <p className="text-xs text-muted-foreground">{t('influxdb.actions.tablesLoading')}</p>
+              ) : expTables.length === 0 ? (
+                <p className="text-xs text-muted-foreground">{t('influxdb.actions.tablesEmpty')}</p>
+              ) : (
+                <div className="max-h-48 space-y-0.5 overflow-y-auto rounded-md border p-2">
+                  <label className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-secondary/50">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSelected;
+                      }}
+                      onChange={toggleAll}
+                      className="h-3.5 w-3.5"
+                    />
+                    <span className="font-medium">{t('influxdb.actions.tablesAll')}</span>
+                  </label>
+                  <div className="my-1 border-t" />
+                  {expTables.map((tbl) => (
+                    <label key={tbl} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-secondary/50">
+                      <input
+                        type="checkbox"
+                        checked={expSelected.has(tbl)}
+                        onChange={() => toggleTable(tbl)}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span className="font-mono text-xs">{tbl}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <span className="text-xs text-muted-foreground">{t('influxdb.actions.tablesHint')}</span>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <label className="block space-y-1 text-sm">
                 <span className="text-muted-foreground">{t('influxdb.actions.from')}</span>
@@ -238,7 +301,7 @@ export function InfluxActionsPanel({
               <Button variant="outline" size="sm" onClick={() => setDialog(null)}>
                 {t('common.cancel')}
               </Button>
-              <Button size="sm" disabled={!table || !expFrom || !expTo || busy !== null} onClick={confirm}>
+              <Button size="sm" disabled={expSelected.size === 0 || !expFrom || !expTo || busy !== null || expTablesLoading} onClick={confirm}>
                 {t('common.confirm')}
               </Button>
             </div>

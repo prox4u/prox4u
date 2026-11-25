@@ -196,6 +196,11 @@ export function fetchInfluxHistory(range: '24h' | '7d' | '30d' = '24h'): Promise
   return getJson<InfluxHistoryResponse>(`/api/influxdb/history?range=${range}`);
 }
 
+/** Tables d'une base InfluxDB (défaut consolidated) — liste dynamique, cache serveur 5 min. */
+export function fetchInfluxTables(db?: string): Promise<{ db: string; tables: string[] }> {
+  return getJson<{ db: string; tables: string[] }>(`/api/influxdb/tables${db ? `?db=${encodeURIComponent(db)}` : ''}`);
+}
+
 /**
  * Lance une action InfluxDB (POST /api/influxdb/actions/<action>).
  * `action` ∈ flush | archive/run | archive/reset | export | database/recreate |

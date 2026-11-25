@@ -12,12 +12,17 @@ import { influxTsToUnix, type InfluxQueryStats, type InfluxWriteStats } from '..
  *  - GET /api/influxdb/history  : série temporelle (file, abandons, latence, enfilement)
  *                                 depuis influxdb_self (base raw), buckets adaptatifs,
  *                                 cache 5 min.
+ *  - GET /api/influxdb/tables   : liste des tables d'une base (défaut consolidated)
+ *                                 via information_schema (filtre schema iox), cache 5 min.
  *
  * ACTIONS (guard : rôle admin OU membre d'un groupe INFLUX_ACTION_GROUPS) :
  *  - POST /api/influxdb/actions/flush               : flush immédiat de la file.
  *  - POST /api/influxdb/actions/archive/run         : cycle d'archivage immédiat.
  *  - POST /api/influxdb/actions/archive/reset       : réinitialise l'état d'archivage.
- *  - POST /api/influxdb/actions/export              : export CSV ad-hoc (table + range).
+ *  - POST /api/influxdb/actions/export              : export CSV ad-hoc multi-tables
+ *                                                     (tables[] + range → 1 ZIP,
+ *                                                     1 CSV par table ; repli table
+ *                                                     single → [table]).
  *  - POST /api/influxdb/actions/database/recreate   : drop + create (rétention).
  *  - POST /api/influxdb/actions/database/drop       : supprime une base (destructif).
  *  - POST /api/influxdb/actions/table/drop          : supprime une table (destructif).
@@ -98,6 +103,7 @@ function num(v: string | number | null | undefined): number {
 
 export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): void {
   const historyCache = new Map<string, { at: number; value: InfluxHistoryResponse }>();
+  const tablesCache = new Map<string, { at: number; value: string[] }>();
 
   // ---------- LECTURE ----------
 
@@ -176,6 +182,18 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
     return value;
   });
 
+  app.get('/api/influxdb/tables', async (req, reply) => {
+    if (!influxReady(ctx)) return reply.code(404).send({ error: 'not-found', code: 'influx-disabled' });
+    const db = (req.query as { db?: string }).db ?? ctx.influx.aggDb;
+    if (!validName(db)) return reply.code(400).send({ error: 'invalid', code: 'bad-db' });
+    const cached = tablesCache.get(db);
+    if (cached && Date.now() - cached.at < HISTORY_CACHE_TTL_MS) return { db, tables: cached.value };
+    // Défensif : InfluxDB indispo en cours de requête → [] (pas de crash de la route).
+    const tables = await ctx.influx.listTables(db);
+    tablesCache.set(db, { at: Date.now(), value: tables });
+    return { db, tables };
+  });
+
   // ---------- ACTIONS (guard : admin ou groupe configuré) ----------
 
   app.post('/api/influxdb/actions/flush', async (req, reply) => {
@@ -202,16 +220,24 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
 
   app.post('/api/influxdb/actions/export', async (req, reply) => {
     if (!ctx.archiver) return reply.code(503).send({ error: 'unavailable', code: 'archiver-missing' });
-    const body = (req.body ?? {}) as { table?: string; from?: number; to?: number };
-    if (!validName(body.table)) return reply.code(400).send({ error: 'invalid', code: 'bad-table' });
+    const body = (req.body ?? {}) as { tables?: string[]; table?: string; from?: number; to?: number };
+    // tables[] (multi-export → ZIP) ; repli legacy table (string) → [table].
+    const tables =
+      Array.isArray(body.tables) && body.tables.length > 0
+        ? [...new Set(body.tables)]
+        : validName(body.table)
+          ? [body.table]
+          : null;
+    if (!tables) return reply.code(400).send({ error: 'invalid', code: 'bad-table' });
+    if (!tables.every((t) => validName(t))) return reply.code(400).send({ error: 'invalid', code: 'bad-table' });
     const from = Number(body.from);
     const to = Number(body.to);
     if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0 || from >= to) {
       return reply.code(400).send({ error: 'invalid', code: 'bad-range' });
     }
-    const { file, rows } = await ctx.archiver.exportTable(body.table, from, to);
-    auditAction(ctx, req, 'export', { table: body.table, from, to, rows });
-    return { ok: true, file, rows };
+    const { file, exports } = await ctx.archiver.exportTablesZip(tables, from, to);
+    auditAction(ctx, req, 'export', { tables, from, to, rows: exports.reduce((s, e) => s + e.rows, 0) });
+    return { ok: true, file, exports };
   });
 
   app.post('/api/influxdb/actions/database/recreate', async (req, reply) => {

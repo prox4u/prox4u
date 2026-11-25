@@ -48,7 +48,7 @@ Le panneau **Actions** n'est visible que si votre compte est **admin** ou membre
    - **Forcer un flush** : vide immédiatement la file d'écriture ;
    - **Archiver maintenant** : déclenche un cycle d'archivage ;
    - **Réinitialiser l'archivage** : relance l'archivage depuis le début ;
-   - **Exporter (CSV)** : exporte une table de la base `consolidated` sur une période (base, table, **Du**, **Au**) vers le dossier d'archivage.
+   - **Exporter (CSV)** : exporte **une ou plusieurs tables** de la base `consolidated` sur une période (**Du**, **Au**) — une **liste de tables** (choix multiple + **Toutes**) ; le résultat est **1 fichier ZIP contenant 1 CSV par table** déposé dans le dossier d'archivage.
 2. **Actions destructives** (dialogue de confirmation) :
    - **Recréer une base** : supprime puis recrée la base (données perdues), avec une **rétention** optionnelle (ex. `2y`, `365d` — vide = infinie) ;
    - **Supprimer une base** : supprime définitivement la base et toutes ses tables ;
@@ -97,7 +97,7 @@ Prox4u écrit en continu les métriques Proxmox dans InfluxDB 3 Core, puis les c
 - **Version « — »** : certaines versions d'InfluxDB 3 Core ne renvoient pas la version (`/api/v3/server-info` en 404) → affichée « — ».
 - **Rétention immuable** : en Core, la rétention d'une base existante ne peut pas être modifiée — pour la changer, il faut **recréer** la base (données perdues).
 - **Actions restreintes** : sans rôle admin ni groupe autorisé, le panneau **Actions** est masqué (403 côté API).
-- **Export CSV uniquement** : l'export ad-hoc produit un CSV (pas de Parquet) déposé dans le dossier d'archivage.
+- **Export CSV (ZIP)** : l'export ad-hoc produit **1 CSV par table, regroupés dans un fichier ZIP** (pas de Parquet), déposé dans le dossier d'archivage.
 
 ---
 
@@ -116,7 +116,7 @@ Les requêtes long terme s'approchent de la limite de fichiers InfluxDB 3 Core. 
 Votre compte n'est ni **admin** ni membre d'un des groupes de `INFLUX_ACTION_GROUPS`. Demandez à un admin de vous ajouter au groupe (défaut : **Administrateurs**, **Exploitations**).
 
 **Comment exporter un historique précis ?**
-**Exporter (CSV)** : choisissez la **table** (base `consolidated`), la période **Du / Au**, et validez. Le CSV est déposé dans le dossier d'archivage.
+**Exporter (CSV)** : cochez les **tables** voulues dans la liste (base `consolidated` — choix multiple ou **Toutes**), la période **Du / Au**, et validez. Le **ZIP** (1 CSV par table) est déposé dans le dossier d'archivage.
 
 **Comment changer la rétention d'une base ?**
 En Core la rétention est immuable : utilisez **Recréer une base** avec la nouvelle **rétention** (ex. `2y`, `365d`). La base est supprimée puis recréée — les données existantes sont perdues.

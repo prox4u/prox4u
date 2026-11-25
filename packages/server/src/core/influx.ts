@@ -493,6 +493,27 @@ export class InfluxClient {
     }
   }
 
+  /**
+   * Liste les tables d'une base (P5) via information_schema (DuckDB).
+   * Filtre `table_schema = 'iox'` : seules les tables réelles de la base
+   * (BASE TABLE) — exclut les vues information_schema/* et les tables system
+   * (caches, parquet_files, processing_engine_*, …). Défensif : [] en cas
+   * d'erreur (base absente, InfluxDB indispo).
+   */
+  async listTables(db: string): Promise<string[]> {
+    try {
+      const rows = await this.querySql<{ table_name: string }>(
+        db,
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'iox' AND table_type = 'BASE TABLE' ORDER BY table_name",
+      );
+      return rows
+        .map((r) => (typeof r.table_name === 'string' ? r.table_name : ''))
+        .filter((n) => n.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
   private logDrop(msg: string): void {
     const now = Date.now();
     if (now - this.lastDropLog > 60_000) {

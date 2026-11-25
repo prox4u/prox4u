@@ -1181,5 +1181,10 @@ export const fr: Record<string, string> = {
   'influxdb.actions.recreate.confirm': 'Supprime puis recrée la base (données perdues). La rétention est immuable en Core — c’est l’op manuelle de DEPLOY.md.',
   'influxdb.actions.dropDb.confirm': 'Supprime définitivement la base et toutes ses tables. Action irréversible.',
   'influxdb.actions.dropTable.confirm': 'Supprime définitivement la table dans la base choisie. Action irréversible.',
-  'influxdb.actions.export.confirm': 'Exporte la table (base consolidated) sur la période vers un CSV dans le dossier d’archivage.',
+  'influxdb.actions.export.confirm': 'Exporte les tables choisies (base consolidated) sur la période — 1 CSV par table, regroupés dans un fichier ZIP dans le dossier d’archivage.',
+  'influxdb.actions.tables': 'Tables',
+  'influxdb.actions.tablesAll': 'Toutes',
+  'influxdb.actions.tablesHint': 'Liste dynamique (base consolidated). 1 CSV par table, regroupés dans un fichier ZIP.',
+  'influxdb.actions.tablesLoading': 'Chargement des tables…',
+  'influxdb.actions.tablesEmpty': 'Aucune table trouvée dans la base.',
 };

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { strToU8, zipSync } from 'fflate';
 import { influxTsToUnix, type SqlRow } from './influx.js';
 import type { AppContext } from './poller.js';
 
@@ -17,7 +18,8 @@ import type { AppContext } from './poller.js';
  *   sont archivées avec succès ;
  * - requêtes chunkées (30 j) → toujours sous --query-file-limit ;
  * - table absente / champ absent → ignorée (pas d'échec) ;
- * - zéro dépendance : CSV (pas de writer Parquet binaire).
+ * - CSV (pas de writer Parquet binaire) ; seule dep : `fflate` (zéro dep
+ *   transitive) pour l'export ad-hoc multi-tables → ZIP.
  */
 
 /** Tables écrites par le consolidateur dans `consolidated` (liste de référence). */
@@ -187,13 +189,12 @@ export class InfluxArchiver {
   }
 
   /**
-   * Export ad-hoc d'une table de `consolidated` sur [from, to) vers un CSV
-   * (POST /api/influxdb/actions/export). Renvoie le chemin du fichier + nb de lignes
-   * (file='' si aucune ligne). `table` est validée par le caller.
+   * Requiert [from, to) d'une table de `consolidated` (chunké 30 j) et construit
+   * le CSV en mémoire (entête + lignes, `\n` final). Table absente → 0 ligne
+   * (querySqlChunked ignore « cannot find table »). `table` est validée par le caller.
    */
-  async exportTable(table: string, from: number, to: number): Promise<{ file: string; rows: number }> {
+  private async tableCsv(table: string, from: number, to: number): Promise<{ csv: string; rows: number }> {
     const influx = this.ctx.influx;
-    mkdirSync(this.ctx.config.influx.archiveDir, { recursive: true });
     const rows = await influx.querySqlChunked<SqlRow>(
       influx.aggDb,
       (_f, _t) => `SELECT * FROM ${table} WHERE time >= '${_f}' AND time < '${_t}' ORDER BY time`,
@@ -201,14 +202,52 @@ export class InfluxArchiver {
       to,
       { chunkDays: ARCHIVE_CHUNK_DAYS },
     );
-    if (rows.length === 0) return { file: '', rows: 0 };
+    if (rows.length === 0) return { csv: '', rows: 0 };
     const columns = Object.keys(rows[0]);
     const lines = [columns.join(',')];
     for (const r of rows) lines.push(columns.map((c) => csvEscape(r[c])).join(','));
+    return { csv: lines.join('\n') + '\n', rows: rows.length };
+  }
+
+  /**
+   * Export ad-hoc d'une table de `consolidated` sur [from, to) vers un CSV
+   * (POST /api/influxdb/actions/export, repli single-table). Renvoie le chemin du
+   * fichier + nb de lignes (file='' si aucune ligne).
+   */
+  async exportTable(table: string, from: number, to: number): Promise<{ file: string; rows: number }> {
+    mkdirSync(this.ctx.config.influx.archiveDir, { recursive: true });
+    const { csv, rows } = await this.tableCsv(table, from, to);
+    if (rows === 0) return { file: '', rows: 0 };
     const day = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
     const file = path.join(this.ctx.config.influx.archiveDir, `export-${table}-${day(from)}_${day(to)}.csv`);
-    writeFileSync(file, lines.join('\n') + '\n');
-    return { file, rows: rows.length };
+    writeFileSync(file, csv);
+    return { file, rows };
+  }
+
+  /**
+   * Export ad-hoc MULTI-tables (POST /api/influxdb/actions/export avec `tables[]`) :
+   * 1 CSV par table, regroupés dans un UNIQUE ZIP dans `archiveDir`
+   * (`export-<from>_<to>-<hhmmss>.zip`). Les tables sans ligne sont exclues du ZIP
+   * (rows: 0 dans la réponse). Renvoie le chemin du ZIP + le détail par table.
+   */
+  async exportTablesZip(
+    tables: string[],
+    from: number,
+    to: number,
+  ): Promise<{ file: string; exports: Array<{ table: string; rows: number }> }> {
+    const files: Record<string, Uint8Array> = {};
+    const exports: Array<{ table: string; rows: number }> = [];
+    for (const table of tables) {
+      const { csv, rows } = await this.tableCsv(table, from, to);
+      exports.push({ table, rows });
+      if (rows > 0) files[`${table}.csv`] = strToU8(csv);
+    }
+    mkdirSync(this.ctx.config.influx.archiveDir, { recursive: true });
+    const day = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
+    const hhmmss = new Date().toISOString().slice(11, 19).replace(/:/g, '');
+    const file = path.join(this.ctx.config.influx.archiveDir, `export-${day(from)}_${day(to)}-${hhmmss}.zip`);
+    writeFileSync(file, Buffer.from(zipSync(files, { level: 6 })));
+    return { file, exports };
   }
 
   /** Archive [from, to) de `consolidated` vers CSV (1 fichier / table / jour). */

@@ -24,6 +24,8 @@ interface MockOpts {
   ping?: boolean;
   version?: string | null;
   databases?: Array<{ name: string; retention: string | null }>;
+  /** tables renvoyées par listTables */
+  tables?: string[];
   /** lignes renvoyées par querySql (history) */
   historyRows?: Array<Record<string, string | number | null>>;
   historyError?: Error;
@@ -50,6 +52,7 @@ function makeCtx(over: MockOpts = {}): AppContext {
       ping: async () => over.ping ?? true,
       getServerInfo: async () => ({ version: over.version ?? '3.11.5', raw: {} }),
       listDatabases: async () => over.databases ?? [{ name: 'raw', retention: '31d' }, { name: 'consolidated', retention: null }],
+      listTables: vi.fn(async () => over.tables ?? []),
       querySql,
       flush: vi.fn(async () => undefined),
       dropDatabase: vi.fn(async () => undefined),
@@ -62,6 +65,10 @@ function makeCtx(over: MockOpts = {}): AppContext {
       runNow: async () => ({ from: 1, to: 2 }),
       resetState: () => 123,
       exportTable: async (table: string) => ({ file: `/tmp/${table}.csv`, rows: 5 }),
+      exportTablesZip: async (tables: string[]) => ({
+        file: '/tmp/export.zip',
+        exports: tables.map((t) => ({ table: t, rows: 5 })),
+      }),
       getState: () => ({ lastArchivedTs: 1000, archiveDir: '/tmp/arch', fileCount: 3, totalBytes: 1234 }),
     } as unknown as AppContext['archiver'],
     auth: {
@@ -218,6 +225,46 @@ describe('GET /api/influxdb/history', () => {
   });
 });
 
+describe('GET /api/influxdb/tables', () => {
+  it('défaut : base consolidated + tables listées', async () => {
+    const ctx = makeCtx({ tables: ['node_metrics', 'vm_metrics'] });
+    const app = await boot(ctx, admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/tables' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ db: 'consolidated', tables: ['node_metrics', 'vm_metrics'] });
+    const lt = (ctx.influx as unknown as { listTables: ReturnType<typeof vi.fn> }).listTables;
+    expect(lt).toHaveBeenCalledWith('consolidated');
+    await app.close();
+  });
+
+  it('db explicite + cache 5 min : la 2ᵉ requête ne re-query pas', async () => {
+    const ctx = makeCtx({ tables: ['a'] });
+    const app = await boot(ctx, admin);
+    await app.inject({ method: 'GET', url: '/api/influxdb/tables?db=raw' });
+    await app.inject({ method: 'GET', url: '/api/influxdb/tables?db=raw' });
+    const lt = (ctx.influx as unknown as { listTables: ReturnType<typeof vi.fn> }).listTables;
+    expect(lt).toHaveBeenCalledTimes(1);
+    expect(lt).toHaveBeenCalledWith('raw');
+    await app.close();
+  });
+
+  it('db invalide → 400 bad-db', async () => {
+    const app = await boot(makeCtx(), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/tables?db=raw; DROP' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-db');
+    await app.close();
+  });
+
+  it('InfluxDB désactivé → 404 influx-disabled', async () => {
+    const app = await boot(makeCtx({ enabled: false }), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/tables' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('influx-disabled');
+    await app.close();
+  });
+});
+
 describe('POST /api/influxdb/actions/*', () => {
   it('flush : ok + audit', async () => {
     const ctx = makeCtx();
@@ -260,19 +307,67 @@ describe('POST /api/influxdb/actions/*', () => {
     await app.close();
   });
 
-  it('export : table valide + range → file/rows + audit', async () => {
+  it('export : tables[] multi → ZIP + exports + audit (rows cumulées)', async () => {
     const ctx = makeCtx();
     const app = await boot(ctx, admin);
+    const res = await app.inject({
+      method: 'POST', url: '/api/influxdb/actions/export',
+      payload: { tables: ['node_metrics', 'vm_metrics'], from: 1000, to: 2000 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      file: '/tmp/export.zip',
+      exports: [
+        { table: 'node_metrics', rows: 5 },
+        { table: 'vm_metrics', rows: 5 },
+      ],
+    });
+    expect((ctx.auth.audit.append as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      { id: 'u1', username: 'tester' }, 'influxdb.action', 'export',
+      { tables: ['node_metrics', 'vm_metrics'], from: 1000, to: 2000, rows: 10 },
+    );
+    await app.close();
+  });
+
+  it('export : repli legacy table (string) → [table]', async () => {
+    const app = await boot(makeCtx(), admin);
     const res = await app.inject({
       method: 'POST', url: '/api/influxdb/actions/export',
       payload: { table: 'node_metrics', from: 1000, to: 2000 },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, file: '/tmp/node_metrics.csv', rows: 5 });
+    expect(res.json()).toEqual({
+      ok: true,
+      file: '/tmp/export.zip',
+      exports: [{ table: 'node_metrics', rows: 5 }],
+    });
     await app.close();
   });
 
-  it('export : table invalide → 400 bad-table', async () => {
+  it('export : tables vide → 400 bad-table', async () => {
+    const app = await boot(makeCtx(), admin);
+    const res = await app.inject({
+      method: 'POST', url: '/api/influxdb/actions/export',
+      payload: { tables: [], from: 1000, to: 2000 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-table');
+    await app.close();
+  });
+
+  it('export : nom invalide dans tables → 400 bad-table', async () => {
+    const app = await boot(makeCtx(), admin);
+    const res = await app.inject({
+      method: 'POST', url: '/api/influxdb/actions/export',
+      payload: { tables: ['ok_table', 'bad name!'], from: 1000, to: 2000 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-table');
+    await app.close();
+  });
+
+  it('export : table invalide (legacy) → 400 bad-table', async () => {
     const app = await boot(makeCtx(), admin);
     const res = await app.inject({
       method: 'POST', url: '/api/influxdb/actions/export',

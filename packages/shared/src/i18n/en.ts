@@ -1181,5 +1181,10 @@ export const en: Record<string, string> = {
   'influxdb.actions.recreate.confirm': 'Drops then recreates the database (data lost). Retention is immutable in Core — this is the manual DEPLOY.md operation.',
   'influxdb.actions.dropDb.confirm': 'Permanently drops the database and all its tables. Irreversible.',
   'influxdb.actions.dropTable.confirm': 'Permanently drops the table in the chosen database. Irreversible.',
-  'influxdb.actions.export.confirm': 'Exports the table (consolidated db) over the period to a CSV in the archive directory.',
+  'influxdb.actions.export.confirm': 'Exports the selected tables (consolidated db) over the period — one CSV per table, bundled in a ZIP file in the archive directory.',
+  'influxdb.actions.tables': 'Tables',
+  'influxdb.actions.tablesAll': 'All',
+  'influxdb.actions.tablesHint': 'Dynamic list (consolidated db). One CSV per table, bundled in a ZIP file.',
+  'influxdb.actions.tablesLoading': 'Loading tables…',
+  'influxdb.actions.tablesEmpty': 'No table found in the database.',
 };
