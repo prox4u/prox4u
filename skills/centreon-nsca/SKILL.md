@@ -79,10 +79,24 @@ Paramètres du service passif (les deux transports) : `passive_checks_enabled=1`
 
 **Enchaînement imposé** : création du service → génération de config → déploiement (`POLLERGENERATE`/`CFGMOVE` ou `config/generate`+`config/move`). Un service passif ne reçoit des trames NSCA qu'après déploiement.
 
-**User Centreon de monitoring (non-admin) — procédure validée 26.10** (débogage E2E 25/11, compte de test) : pour qu'un user voie les hosts/services dans la console **sans être admin** :
+**User Centreon de monitoring (non-admin) — procédure validée 26.10** (débogage E2E 25/11, compte de test) : pour qu'un user voie les hosts/services dans la console **sans être admin**, le groupe ACL doit avoir **3 dimensions** : **ressources** (quels hosts/services), **actions** (ce qu'on peut faire), **topologies** (quelles pages de menu). L'une des trois manquante = accès incomplet :
 1. **Créer le user AVEC mot de passe** (UI : Administration → Users → Add). ⚠️ Un user sans ligne `contact_password` (créé sans mdp, ou avec seulement une autologin key) → **500 au login** (pas un 401) : `password_verify($mdp, null)` / `str_starts_with(null, …)` lève une exception PHP 8 dans `centreonAuth.class.php`, attrapée par le `catch (\Throwable)` du use case `Login` → `ErrorResponse`. Diagnostic : `SELECT * FROM contact_password WHERE contact_id=<id>;` (vide = cause). Correction : `INSERT INTO contact_password (password, contact_id, creation_date) VALUES ('<php -r "echo password_hash(…)">', <id>, UNIX_TIMESTAMP());`
-2. **Rattacher à un access group** avec ressource + action : le groupe **ALL** (id 1) existe par défaut avec ressource `All Resources` (`all_hosts=1`, `all_hostgroups=1`) + action **Simple User** (vision monitoring hosts+services) — c'est le rattachement « vision sur tout, pas admin » (`contact_admin` reste 0 ; un admin bypass les ACL).
-3. **Recalcul des ACL** : `php /usr/share/centreon/cron/centAcl.php` (ou attendre le cron) — sinon le cache ACL est stale (les compteurs du haut peuvent afficher des données mais la liste Ressources reste « Vous n'avez pas la permission de voir cette page »).
+2. **Ressources + actions** : le groupe **ALL** (id 1) existe par défaut avec ressource `All Resources` (`all_hosts=1`, `all_hostgroups=1`) + action **Simple User** (vision monitoring hosts+services) — c'est le rattachement « vision sur tout, pas admin » (`contact_admin` reste 0 ; un admin bypass les ACL).
+3. **Topologies (accès menu) — LA pièce souvent manquante** : sans topologie rattachée au groupe, le menu de l'user est vide (`centreon_topology&action=navigationList` = `null`) → **toutes les pages** affichent « Perdu(e) dans l'espace ? Vous n'avez pas la permission de voir cette page » (les compteurs du haut, eux, marchent car `top_counter` est une permission séparée). En 26.10 les tables `acl_topology` / `acl_topology_relations` / `acl_group_topology_relations` sont **vides par défaut** (aucun groupe de menu pré-créé). UI : Access Groups → groupe → onglet **Topologies** → créer/sélectionner « Monitoring » (lecture seule). Équivalent SQL (validé) :
+   ```sql
+   INSERT INTO acl_topology (acl_topo_name, acl_topo_alias, acl_comments, acl_topo_activate)
+   SELECT 'Monitoring','Monitoring','Menu Monitoring (vision, lecture seule)','1'
+   WHERE NOT EXISTS (SELECT 1 FROM acl_topology WHERE acl_topo_name='Monitoring');
+   SET @topo_id=(SELECT acl_topo_id FROM acl_topology WHERE acl_topo_name='Monitoring');
+   INSERT INTO acl_topology_relations (acl_topo_id, topology_topology_id, access_right)
+   SELECT @topo_id, topology_id, 2 FROM topology WHERE topology_page LIKE '2%'
+     AND topology_id NOT IN (SELECT topology_topology_id FROM acl_topology_relations WHERE acl_topo_id=@topo_id);
+   INSERT INTO acl_group_topology_relations (acl_group_id, acl_topology_id)
+   SELECT 1, @topo_id WHERE NOT EXISTS (SELECT 1 FROM acl_group_topology_relations
+     WHERE acl_group_id=1 AND acl_topology_id=@topo_id);
+   ```
+   (`topology_page LIKE '2%'` = tout l'arbo du menu Monitoring — Resources Status `/monitoring/resources` (page `200`), Hosts, Services, Downtimes, Comments… ; `access_right` : 1=lecture/écriture, 2=**lecture seule**.)
+4. **Recalcul des ACL** : `php /usr/share/centreon/cron/centAcl.php` (ou attendre le cron) — sinon le cache ACL est stale.
 
 > ⚠️ **Pas d'API pour rattacher un user à un access group en 26.10** (vérifié dans le source du tag `release-onprem-20261001-26.10`) : la nouvelle API n'expose que `GET /configuration/access-groups` (lecture seule, 1 controller `FindLocalUserAccessGroups`) ; l'objet CLAPI `ACL` ne garde que `reload`/`lastreload` (le `setparam` contacts est retiré) ; l'API legacy `/api/restapi` est supprimée. → **UI legacy** (Administration → Users → onglet Access Groups) ou **SQL** : `INSERT INTO acl_group_contacts_relations (contact_contact_id, acl_group_id) VALUES (<id>, 1); UPDATE acl_groups SET acl_group_changed=1 WHERE acl_group_id=1;` puis `centAcl.php`.
 >
