@@ -2718,6 +2718,50 @@ Le seuil de `sensor_temp_c` est le **seuil effectif** (perso ≤ firmware, ongle
 
 ---
 
+## ✅ Fait — Validation E2E du module « Alarmes & Centreon » sur central réel (clôturé 2026-11-27)
+
+> **2026-11-27** — GitHub issue **#1** (label `validation`) : validation E2E du module
+> `centreon-nsca` sur le central Centreon réel (192.168.1.130, Centreon 26.10, poller 1).
+> Le périmètre (~80 %) avait déjà été validé par les E2E de #4 (règles capteurs) et #5
+> (moteur v2) ; le delta de #1 = **passe UI Playwright** + **check sécurité** + doc/clôture.
+> **Pas de CLAPI** (décision user) — le transport REST est le transport validé ; CLAPI reste
+> « testé en code seulement » (séquence `clapiProvisionCommands` unitaire).
+
+- **Périmètre validé** (cumul #4/#5/#1, central 192.168.1.130) : NSCA central (192.168.1.130:5668,
+  encrypt) + `send_nsca` (binaire + `send_nsca.cfg` auto-généré) · transport **REST v1**
+  (`/api/latest/` + `X-AUTH-TOKEN`) : provisioning idempotent (hôte auto-créé si absent, commande
+  `check_dummy`, service passif) + `generate`/`reload` poller · poller + hôtes (poller 1) · onglet
+  admin « Centreon (NSCA) » · création règle → provisioning · trame réelle visible dans Centreon
+  (API monitoring : hôte/service/state/output) · cycle complet alarme→récupération (hystérésis,
+  suppression, ack — #5) · trame de test (`POST /test`) · check hôte (`PROCESS_HOST_CHECK_RESULT`)
+  · heartbeat OK · tableau des règles (activer/désactiver, Tester, Reprovisionner, supprimer).
+- **Passe UI Playwright (#1, 13/13 checks)** — session test-admin, Chromium headless :
+  - Login → `/admin` onglet « Centreon (NSCA) » : config affichée, **secrets masqués**
+    (2 hints « Fourni via .env »).
+  - `/alarms` : tableau des 4 règles réelles.
+  - `/alarms/new` : création règle temporaire « UI E2E test » (cible capteur `smart_temp_c`,
+    nœud proxmox, disque nvme0n1, > 100, WARNING, hôte proxmox, service auto
+    `Prox4u-Alarm-SMART-TEMP-UI_E2E_test`) → **provisioning OK** (récap « Service créé et
+    configuré, configuration déployée sur le poller »).
+  - Actions tableau sur la règle temporaire : **Tester** (trame envoyée, return code 0 —
+    **vérifiée dans Centreon** : hôte proxmox, state OK, output « Prox4u — trame de test
+    (check passif NSCA) », last_check frais), **Reprovisionner** (réussi), **Désactiver**
+    (active=false via API), **Activer** (active=true), **Supprimer** (règle retirée, dialogue
+    confirm).
+- **Check sécurité (#1)** : mot de passe NSCA + token REST = **0 occurrence** dans
+  `logs/server.log` ; `GET /api/alarms` (session admin) : `clapiPassword` / `restToken` /
+  `nsca.password` = `••••••` (masqués), `envSecrets` = booléens (pas de valeurs), aucune valeur
+  de secret dans la réponse brute.
+- **Nettoyage** : règle « UI E2E test » supprimée (UI) + service Centreon orphelin
+  `Prox4u-Alarm-SMART-TEMP-UI_E2E_test` supprimé (REST DELETE + `GET /configuration/
+  monitoring-servers/1/generate` + `/reload`) — les 4 règles/services réels intacts
+  (CPU_ia-u24 OK, CPU-test WARNING, IP-ia-u24 CRITICAL, RAM_test WARNING).
+- **Écart préexistant (non traité, hors périmètre #1)** : la route DELETE ne retire pas le
+  service Centreon (seul `store.deleteRule` — cf. #5) → le service orphelin est supprimé
+  manuellement via REST.
+
+---
+
 ## ⏳ Suivi des tâches (GitHub)
 
 Le **backlog et le suivi des tâches** sont désormais dans les **issues GitHub**
@@ -2726,7 +2770,7 @@ Les sections « ✅ Fait » ci-dessus conservent l'historique des livraisons ; l
 de référence (ProxMenux, Telegraf) est dans les skills (`monitoring-proxmenux`, `audit`,
 `node-sensors`, `centreon-nsca`).
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · **#4 P0 règles d'alarme capteurs (clôturée 2026-11-27 — SMART / température / systemd / ZFS, seuil effectif perso ≤ firmware)** · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — **#1 Alarmes & Centreon (validation) (clôturée 2026-11-27 — E2E central réel : passe UI Playwright 13/13 + check sécurité, sans CLAPI)** · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · **#4 P0 règles d'alarme capteurs (clôturée 2026-11-27 — SMART / température / systemd / ZFS, seuil effectif perso ≤ firmware)** · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
 
 ---
 
