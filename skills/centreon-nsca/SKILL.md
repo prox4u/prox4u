@@ -1,6 +1,6 @@
 ---
 name: centreon-nsca
-description: Plugin « Alarmes & Centreon » (famille centreon-nsca) — règles de surveillance sur VMs/nœuds/clusters Proxmox (dont quorum cluster via métrique cluster_quorum + Qdevice via cluster_qdevice + cible kind=cluster), engine d'évaluation (tick 15 s), provisioning du service passif Centreon via CLAPI (SSH/local) ou API REST v1, envoi des trames send_nsca, **trames périodiques : heartbeat OK services (okHeartbeatSeconds, code 0 pour les règles saines) + check hôte PROCESS_HOST_CHECK_RESULT (hostCheckSeconds, état dérivé de Proxmox — sort les hôtes/services de `Pending`)**, mapping VM→hôte Centreon (ajout manuel), pollers avec IP (destination NSCA), page de config admin, et **procédure user Centreon de monitoring non-admin validée 26.10** (§4.2 : mdp / ressources+actions / **topologies menu** / centAcl.php — gotchas : 500 login si contact_password NULL, pas d'API access groups). Use when working on the centreon-nsca plugin, /api/alarms/*, the alarm engine, NSCA frames, the OK heartbeat / host check periodic frames, Centreon provisioning, the /alarms pages, the cluster quorum/qdevice alarm, the « Centreon (NSCA) » admin tab, or creating a non-admin Centreon monitoring user.
+description: Plugin « Alarmes & Centreon » (famille centreon-nsca) — règles de surveillance sur VMs/nœuds/clusters Proxmox (dont quorum cluster via métrique cluster_quorum + Qdevice via cluster_qdevice + cible kind=cluster), **engine d'évaluation v2 (tick 15 s) : hystérésis (seuil de récupération distinct → zone morte anti-flapping) + durée minimale de firing (suppression) + ack (marqueur, ne coupe pas les trames) + auto-résolution (récup clear l'ack) — GitHub #5**, provisioning du service passif Centreon via CLAPI (SSH/local) ou API REST v1, envoi des trames send_nsca (toujours aux transitions réelles + heartbeat), **trames périodiques : heartbeat OK services (okHeartbeatSeconds, code 0 pour les règles saines) + check hôte PROCESS_HOST_CHECK_RESULT (hostCheckSeconds, état dérivé de Proxmox — sort les hôtes/services de `Pending`)**, mapping VM→hôte Centreon (ajout manuel), pollers avec IP (destination NSCA), page de config admin, et **procédure user Centreon de monitoring non-admin validée 26.10** (§4.2 : mdp / ressources+actions / **topologies menu** / centAcl.php — gotchas : 500 login si contact_password NULL, pas d'API access groups). Use when working on the centreon-nsca plugin, /api/alarms/*, the alarm engine (v2 hysteresis/suppression/ack), NSCA frames, the OK heartbeat / host check periodic frames, Centreon provisioning, the /alarms pages, the cluster quorum/qdevice alarm, the « Centreon (NSCA) » admin tab, or creating a non-admin Centreon monitoring user.
 ---
 
 # Centreon NSCA — Alarmes & Centreon
@@ -28,7 +28,7 @@ Feature flag : `VITE_USE_PLUGIN_CENTREON_NSCA` (défaut ON, opt-out). Famille `c
 
 ```
 packages/shared/src/centreon-nsca.ts         # types + fonctions pures (testées)
-packages/shared/src/centreon-nsca.test.ts    # 32 tests (échappement, trame service+hôte, évaluation…)
+packages/shared/src/centreon-nsca.test.ts    # 42 tests (échappement, trame service+hôte, évaluation, hystérésis v2…)
 packages/server/src/modules/centreonnsca/
   index.ts     # registerAlarmNsca (store + engine + routes)
   store.ts     # NscaStore — data/centreon-nsca.json (seed, CRUD, stats)
@@ -36,8 +36,8 @@ packages/server/src/modules/centreonnsca/
   engine.ts    # AlarmEngine — tick 15 s, machine à états, envoi NSCA
   nsca.ts      # send_nsca (cfg généré, spawn, timeout, jamais de mdp loggué)
   provision.ts # CLAPI (ssh/local) + REST v1 (création service + déploiement)
-  routes.ts    # /api/alarms/* (règles, cibles, config, test, provisioning)
-  store.test.ts routes.test.ts               # 20 tests serveur
+  routes.ts    # /api/alarms/* (règles, cibles, config, test, provisioning, ack/unack v2)
+  store.test.ts routes.test.ts engine.test.ts # 38 tests serveur (dont engine v2)
 packages/web/src/plugins/centreon-nsca/
   index.ts     # manifest (3 routes + 1 menu, icône Siren, order 60)
   lib/nsca-api.ts   # client API /api/alarms/*
@@ -108,8 +108,15 @@ Paramètres du service passif (les deux transports) : `passive_checks_enabled=1`
 >
 > **Vérification sans UI** : `GET /api/latest/monitoring/hosts` + `/monitoring/services` (token `X-AUTH-TOKEN`) → `state` 0=OK/UP, 1=WARNING, 2=CRITICAL, 4=Pending ; `state_type` 1=hard.
 
-### 4.3 Engine — machine à états + trames périodiques
-Tick 15 s, pour chaque règle active (module actif) : échantillonner la métrique → `evaluateAlarm` (la condition doit tenir sur **toute** la fenêtre de confirmation) → transitions **ok⇄firing** → trame à chaque transition (alarme = code sévérité, récupération = 0). L'état bascule **avant** l'envoi (transition consommée même si `send_nsca` échoue → pas de boucle). Échec = `lastSendState=error` + message, **aucun crash**.
+### 4.3 Engine — machine à états v2 (hystérésis / suppression / ack) + trames périodiques
+Tick 15 s, pour chaque règle active (module actif) : échantillonner la métrique → `evaluateAlarmHysteresis` (moteur v2, GitHub #5) → transitions **ok⇄firing** → trame à chaque transition (alarme = code sévérité, récupération = 0). L'état bascule **avant** l'envoi (transition consommée même si `send_nsca` échoue → pas de boucle). Échec = `lastSendState=error` + message, **aucun crash**.
+
+**Moteur v2 (GitHub #5)** — les trames coulent **TOUJOURS** aux transitions réelles + heartbeat (Centreon reflète l'état réel OK/critique) ; l'anti-flapping est au niveau de la machine à états, pas en coupant les trames :
+- **Hystérésis** : `AlarmRule.recoveryThreshold: number | null` (null = seuil de déclenchement, rétrocompatible). `evaluateAlarmHysteresis()` (shared) → `{ trigger, recover, value }` : `trigger` = fenêtre entière au-dessus du seuil de déclenchement ; `recover` = fenêtre entière repassée du côté **sûr** du seuil de récupération → **zone morte** anti-flapping (ex. op « > » seuil 90 / récup 80 : déclenche >90 soutenu, récupère ≤80 soutenu, entre 80 et 90 = aucun basculement). Validation serveur : pour « > » `rec < threshold`, pour « < » `rec > threshold` (sinon 400 `bad-recovery-threshold` / `fields`).
+- **Suppression = durée minimale de firing** : `AlarmRule.suppressSeconds` (0 = off). Une fois en alarme, la règle ne récupère qu'après `now − lastAlarmAt ≥ suppressSeconds` (helper `minFiringElapsed`) — casse la boucle alarme→récup→alarme.
+- **Ack = marqueur (ne coupe pas les trames) + auto-résolution** : `acknowledgedAt`/`acknowledgedBy` posés par `POST /api/alarms/rules/:id/ack` (username via `req.authUser` + `auth.store.userById`), retirés par `/unack`. **La récupération (firing→ok, trame code 0) réinitialise l'ack** (`sendAndRecord` + patch extra). `registerAlarmRoutes` reçoit `auth: AuthContext` (index.ts passe `ctx.auth`).
+- **Migration store** : `init()` complète les champs v2 absents sur les règles existantes (défauts `recoveryThreshold null` / `suppressSeconds 0` / ack null) + persist si modifié.
+- `tick()` rendu **public** (tests) ; tests engine avec `vi.useFakeTimers` + `vi.setSystemTime` + mock `./nsca.js`.
 
 **Trames périodiques** (config `okHeartbeatSeconds` / `hostCheckSeconds`, défauts 300/60, `0` = off) — ajoutées pour que les checks passifs Centreon ne restent pas à l'état `Pending` (un check passif n'a pas de check actif qui le rafraîchit) :
 - **Heartbeat OK services** : pour chaque règle active dans l'état `ok`, une trame **OK (code 0)** est envoyée toutes les `okHeartbeatSeconds`. **Jamais envoyé si `state ≠ ok`** (ne masque pas une alerte en cours) — c'est la « règle saine » : une règle qui n'alerte jamais émet un code 0 périodique. La trame de **récupération** pose aussi `lastOkSendAt` (elle EST une trame OK → pas de double envoi au même tick). Suivi par règle : champ `AlarmRule.lastOkSendAt` (persisté). Log `alarm : OK heartbeat « … »`.
@@ -128,19 +135,21 @@ Tick 15 s, pour chaque règle active (module actif) : échantillonner la métriq
 - **Source des métriques = snapshot poller** (ring-buffer mémoire), pas InfluxDB : fonctionne en mock et en réel, sans dépendance, et la fenêtre de confirmation est évaluée sur les échantillons réels.
 - **Mapping VM→hôte Centreon** : table configurable (auto-suggestion `suggestCenteronHost` = hostname→nom de VM, override manuel), upsertée à la création d'une règle.
 - **Page 3 = onglet admin** « Centreon (NSCA) » (à côté de Catalogue/Groupes/Users), pas une route publique.
+- **Moteur v2 : les trames coulent TOUJOURS** (GitHub #5) — ni l'ack ni la suppression ne coupent les trames NSCA : Centreon reflète l'état réel (OK ou critique) à chaque transition + heartbeat. L'anti-flapping est au niveau de la **machine à états** (hystérésis = zone morte + durée minimale de firing), pas en filtrant les trames. L'ack est un **marqueur** (UI : qui/quand) réinitialisé par l'auto-résolution (récupération).
 
 ## 7. Pièges
 - **Transport REST = nouvelle API** : la nouvelle API Centreon est servie sur `/api/latest/` (pas `/api/restapi/`, qui renvoie le fallback SPA 404) et s'authentifie par l'en-tête **`X-AUTH-TOKEN`** (pas Basic auth user:token). Les ressources sont `/configuration/hosts`, `/configuration/services`, `/configuration/pollers`, `/configuration/commands` (pas `/host`, `/service`, `/instance/poller`). Le token est stocké dans `security_token` + `security_authentication_tokens` (schéma 21.10+), pas dans l'ancienne table `token`. ⚠ Le `provision.ts` actuel cible encore l'ancien contrat → **à refondre** avant d'activer le transport REST en réel.
 - **send_nsca absent** → le binaire doit être installé sur le serveur Prox4u (`apt install nsca-client` / `nsca`), sinon `send_nsca indisponible`. Le fichier `send_nsca.cfg` est généré automatiquement par l'app.
 - **Service non déployé** → les trames sont rejetées par le daemon NSCA si le service n'a pas été `CFGMOVE`'d. Toujours enchaîner génération+déploiement.
 - **`check_dummy!0`** est une commande factice (jamais exécutée, passive pur) — ne pas la remplacer par un vrai check.
-- **Fenêtre de confirmation** : `evaluateAlarm` ne déclenche que si **tous** les échantillons de la fenêtre dépassent le seuil ; une fenêtre vide (pas de données) ne déclenche pas (la valeur passe en null).
+- **Fenêtre de confirmation** : `evaluateAlarmHysteresis` (v2) ne déclenche (`trigger`) que si **tous** les échantillons de la fenêtre dépassent le seuil de déclenchement, et ne récupère (`recover`) que si **tous** repassent du côté sûr du seuil de récupération ; une fenêtre vide (pas de données) ne déclenche NI ne récupère (la valeur passe en null). `evaluateAlarm` (v1) reste exportée (rétrocompat) mais l'engine utilise la v2.
 - **Échappement** : `escapeNscaField` échappe d'abord les `\` puis `;`/`\n` — ne pas réordonner (sinon double-échappement).
 
 ## 8. Tests
-- `packages/shared/src/centreon-nsca.test.ts` (32) : `nscaReturnCode`, `escapeNscaField` (`;`/`\n`/tab), `buildNscaFrame` (trame service 4 champs), `buildNscaHostFrame` (trame hôte 3 champs, sans service), `renderOutput`, `defaultServiceName`, `suggestCenteronHost`, `conditionMet`, `evaluateAlarm` (fenêtre), `nscaCfgContent`, `clapiProvisionCommands` (séquence exacte), `clapiDeleteCommand`.
-- `packages/server/src/modules/centreonnsca/store.test.ts` (13) : seed, persistance, CRUD règles (dont `lastOkSendAt`), setConfig (normalisation `okHeartbeatSeconds`/`hostCheckSeconds`), setPollers (slug+dédup), upsertMapping, stats 24 h.
-- `packages/server/src/modules/centreonnsca/routes.test.ts` (10) : GET/POST/PATCH/DELETE règles, validation 400, nom en double 409, test, provision, PUT config (masquage mdp + « inchangé »).
+- `packages/shared/src/centreon-nsca.test.ts` (42) : `nscaReturnCode`, `escapeNscaField` (`;`/`\n`/tab), `buildNscaFrame` (trame service 4 champs), `buildNscaHostFrame` (trame hôte 3 champs, sans service), `renderOutput`, `defaultServiceName`, `suggestCenteronHost`, `conditionMet`, `evaluateAlarm` (fenêtre), `evaluateAlarmHysteresis` (v2 : trigger/recover, zone morte, rétrocompat null, op « < » symétrique, **anti-flapping** oscillation → 1 trigger/0 recover), `nscaCfgContent`, `clapiProvisionCommands` (séquence exacte), `clapiDeleteCommand`.
+- `packages/server/src/modules/centreonnsca/store.test.ts` (14) : seed, persistance, CRUD règles (dont `lastOkSendAt`), setConfig (normalisation `okHeartbeatSeconds`/`hostCheckSeconds`), setPollers (slug+dédup), upsertMapping, stats 24 h, **migration v2** (règle sans champs hystérésis/suppression/ack → défauts).
+- `packages/server/src/modules/centreonnsca/routes.test.ts` (18) : GET/POST/PATCH/DELETE règles, validation 400, nom en double 409, test, provision, PUT config (masquage mdp + « inchangé »), **v2** : create hystérésis/suppression, 400 `bad-recovery-threshold`, 400 `suppressSeconds` négatif, PATCH `recoveryThreshold null`, **`/ack`** (`acknowledgedBy` user session) + **`/unack`** + 404.
+- `packages/server/src/modules/centreonnsca/engine.test.ts` (6, **nouveau v2**) : machine à états — **anti-flapping** (oscillation → 1 trame code 2, critère d'acceptation), récupération hystérésis (zone morte → rien, ≤ seuil récup → code 0), boucle sans hystérésis (3 trames), `suppressSeconds` (pas de récup avant la durée), **auto-résolution** (récup clear l'ack), VM absente → pas de transition. `vi.useFakeTimers` + `vi.setSystemTime` + mock `./nsca.js`.
 - `packages/server/src/modules/centreonnsca/provision.test.ts` (10) : séquence CLAPI + REST v1.
 
 ## 9. Exemples de trame & commande (livrable)

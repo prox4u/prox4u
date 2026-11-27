@@ -14,7 +14,7 @@
 - App en **HTTPS** (cert auto-signé, SAN localhost + IP VM) ; InfluxDB en HTTPS sur 8181 ; **Explorer** (UI InfluxDB 3) en HTTPS sur 8888
 - Logs / pid : `logs/` (à la racine du projet, rien dans /tmp)
 - Cron : `@reboot` + keepalive minute par minute sur `server.sh start` (idempotent) ; le conteneur InfluxDB se relance seul au boot (`restart: unless-stopped`)
-- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (825 tests : 444 shared + 381 server)
+- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (850 tests : 454 shared + 396 server)
 
 ---
 
@@ -2612,6 +2612,45 @@ par tick ; config requête **indépendante du parc** ; `flushMaxLines = max(1000
 
 ---
 
+## ✅ Fait — Moteur d'alarmes v2 (hystérésis / suppression / ack) (livré, validé prod, clôturé 2026-11-27)
+
+> **2026-11-27** — GitHub issue **#5** (commit `9daa31c`) : les 3 items restants (le 4ᵉ, « seuils
+> Health Score externalisés », l'était déjà — `health.json`, `f3c2aae`). Validé en prod (E2E API)
+> puis clôturé sur GitHub avec commentaire précis. 850 tests verts (454 shared + 396 server).
+
+**Contrainte utilisateur (clé)** : « si alarmes ou ok il faut alimenter centreon de trame si ok ou
+critique » → les trames NSCA coulent **toujours** aux transitions réelles + heartbeat (Centreon
+reflète l'état réel OK/critique). L'anti-flapping est au niveau de la **machine à états**, pas en
+coupant les trames.
+
+- **Hystérésis** : `AlarmRule.recoveryThreshold: number | null` (null = seuil de déclenchement,
+  rétrocompatible) + `evaluateAlarmHysteresis()` (shared) → `{ trigger, recover, value }` :
+  `trigger` = fenêtre entière au-dessus du seuil, `recover` = fenêtre entière repassée du côté
+  **sûr** du seuil de récupération → **zone morte** anti-flapping. Validation serveur : pour « > »
+  `rec < threshold`, pour « < » `rec > threshold` (sinon 400 `bad-recovery-threshold`).
+- **Suppression = durée minimale de firing** : `AlarmRule.suppressSeconds` (0 = off) — une fois en
+  alarme, la règle ne récupère qu'après `now − lastAlarmAt ≥ suppressSeconds` (`minFiringElapsed`).
+- **Ack = marqueur (ne coupe pas les trames) + auto-résolution** : `acknowledgedAt`/`acknowledgedBy`
+  posés par `POST /api/alarms/rules/:id/ack` (username via `req.authUser`), retirés par `/unack` ;
+  **la récupération (firing→ok, trame code 0) réinitialise l'ack**. `registerAlarmRoutes` reçoit
+  `auth: AuthContext` (index.ts passe `ctx.auth`).
+- **Store** : migration v2 dans `init()` (règles existantes → défauts `recoveryThreshold null` /
+  `suppressSeconds 0` / ack null + persistance si modifié).
+- **Web** : colonne « Alarme » (badge état + badge « ✓ user » si ack, tri par sévérité), cellule
+  seuil « · récup X », bouton Ack/Undo2 ; formulaire + champs « Seuil de récupération (hystérésis) »
+  et « Durée minimale d'alarme » (minutes) ; i18n fr/en.
+- **Tests** : +25 (10 shared `evaluateAlarmHysteresis` dont anti-flapping, 6 engine nouveaux —
+  machine à états, 8 routes, 1 store migration). **Total 850** (454 shared + 396 server).
+- **Validation prod** (E2E API test-admin) : migration appliquée aux 4 règles existantes, création
+  règle hystérésis 90/80 + suppress 300 s, 400 `bad-recovery-threshold`, `/ack`
+  (`acknowledgedBy=test-admin`) + `/unack`, engine démarré (tick 15 s, heartbeat + check hôte OK,
+  zéro erreur).
+- **Écart préexistant (non traité, hors périmètre #5)** : la route DELETE ne retire pas le service
+  Centreon (seul `store.deleteRule`) → un service orphelin peut rester sur Centreon après
+  suppression d'une règle (comportement antérieur à la v2).
+
+---
+
 ## ⏳ Suivi des tâches (GitHub)
 
 Le **backlog et le suivi des tâches** sont désormais dans les **issues GitHub**
@@ -2620,7 +2659,7 @@ Les sections « ✅ Fait » ci-dessus conservent l'historique des livraisons ; l
 de référence (ProxMenux, Telegraf) est dans les skills (`monitoring-proxmenux`, `audit`,
 `node-sensors`, `centreon-nsca`).
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
 
 ---
 
