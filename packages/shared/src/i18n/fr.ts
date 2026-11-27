@@ -1154,7 +1154,7 @@ export const fr: Record<string, string> = {
   'influxdb.databases.title': 'Bases',
   'influxdb.databases.name': 'Base',
   'influxdb.databases.retention': 'Rétention',
-  'influxdb.databases.retention.infinite': 'infinie',
+  'influxdb.databases.retention.unknown': '—',
   'influxdb.databases.empty': 'Aucune base (InfluxDB désactivé ou injoignable)',
   'influxdb.archive.title': 'Archivage (consolidated → CSV)',
   'influxdb.archive.unavailable': 'Archivage non disponible',

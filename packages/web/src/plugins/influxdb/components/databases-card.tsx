@@ -30,10 +30,13 @@ export function InfluxDatabasesCard({ databases, enabled }: { databases: Array<{
                 <TableRow key={d.name}>
                   <TableCell className="font-mono text-sm">{d.name}</TableCell>
                   <TableCell>
+                    {/* L'API GET /api/v3/configure/database ne renvoie pas la rétention
+                        (limite InfluxDB 3 Core) → « — » (inconnu) plutôt que « infinie »
+                        (faux : ex. raw = 31 j) — GitHub #16. */}
                     {d.retention ? (
                       <span className="font-mono text-sm">{d.retention}</span>
                     ) : (
-                      <span className="text-sm text-muted-foreground">{t('influxdb.databases.retention.infinite')}</span>
+                      <span className="text-sm text-muted-foreground">{t('influxdb.databases.retention.unknown')}</span>
                     )}
                   </TableCell>
                 </TableRow>

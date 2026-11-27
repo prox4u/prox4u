@@ -34,7 +34,7 @@ Monitors the **health** of the **InfluxDB 3 Core** metrics database that powers 
 
 ### 3. Check the databases and the archive
 
-1. The **Databases** card lists each InfluxDB database and its **retention** ("infinite" if none).
+1. The **Databases** card lists each InfluxDB database and its **retention** ("—" if unknown — the InfluxDB 3 Core API doesn't expose it).
 2. The **Archive (consolidated → CSV)** card displays:
    - the **Last archived bound**;
    - the number of **Files** and their total size;

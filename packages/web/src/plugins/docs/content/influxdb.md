@@ -34,7 +34,7 @@ Surveille la **santé** de la base de métriques **InfluxDB 3 Core** qui aliment
 
 ### 3. Consulter les bases et l'archivage
 
-1. La carte **Bases** liste chaque base InfluxDB et sa **rétention** (« infinie » si aucune).
+1. La carte **Bases** liste chaque base InfluxDB et sa **rétention** (« — » si inconnue — l'API InfluxDB 3 Core ne l'expose pas).
 2. La carte **Archivage (consolidated → CSV)** affiche :
    - la **Dernière borne archivée** ;
    - le nombre de **Fichiers** et leur taille totale ;
