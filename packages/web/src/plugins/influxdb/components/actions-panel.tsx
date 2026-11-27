@@ -84,6 +84,8 @@ export function InfluxActionsPanel({
   const [expTables, setExpTables] = useState<string[]>([]);
   const [expTablesLoading, setExpTablesLoading] = useState(false);
   const [expSelected, setExpSelected] = useState<Set<string>>(new Set());
+  // Format d'export (GitHub #15) : CSV (défaut) ou Parquet (1 fichier/tranche de 30 j).
+  const [expFormat, setExpFormat] = useState<'csv' | 'parquet'>('csv');
   // Étape de validation avant exécution (toutes les actions).
   const [pending, setPending] = useState<PendingAction | null>(null);
 
@@ -98,8 +100,16 @@ export function InfluxActionsPanel({
     try {
       if (action === 'export') {
         // Téléchargement direct : le ZIP part en mémoire → navigateur (aucun fichier serveur).
-        const s = await downloadInfluxExport(body as { tables: string[]; from: number; to: number });
-        setResult({ ok: true, msg: t('influxdb.actions.export.result', { tables: s.tables, rows: s.rows, file: s.file }) });
+        const s = await downloadInfluxExport(body as { tables: string[]; from: number; to: number; format?: 'csv' | 'parquet' });
+        // Parquet : le nb de lignes n'est pas compté (binaire, pas de lib de lecture)
+        // → message dédié (honnête) au lieu de « 0 ligne(s) ».
+        setResult({
+          ok: true,
+          msg:
+            s.format === 'parquet'
+              ? t('influxdb.actions.export.result.parquet', { tables: s.tables, file: s.file })
+              : t('influxdb.actions.export.result', { tables: s.tables, rows: s.rows, file: s.file }),
+        });
       } else {
         const r = await postInfluxAction(action, body);
         if (action === 'database/backup') {
@@ -248,12 +258,13 @@ export function InfluxActionsPanel({
       if (Number.isFinite(from) && Number.isFinite(to) && from < to && expSelected.size > 0) {
         requestAction(
           'export',
-          { tables: [...expSelected], from, to },
+          { tables: [...expSelected], from, to, format: expFormat },
           [
             { k: t('influxdb.actions.tables'), v: String(expSelected.size) },
             { k: t('influxdb.actions.period'), v: `${expFrom} → ${expTo}` },
+            { k: t('influxdb.actions.export.format'), v: t(`influxdb.actions.export.format.${expFormat}`) },
           ],
-          { tables: expSelected.size, from: expFrom, to: expTo },
+          { tables: expSelected.size, from: expFrom, to: expTo, format: expFormat },
         );
       }
     }
@@ -268,6 +279,7 @@ export function InfluxActionsPanel({
     setExpFrom(local(new Date(Date.now() - 7 * 86_400_000)));
     setExpTo(local(new Date()));
     setExpSelected(new Set());
+    setExpFormat('csv');
     setResult(null);
     setDialog('export');
     void loadExpTables();
@@ -554,6 +566,30 @@ export function InfluxActionsPanel({
                 <span className="text-muted-foreground">{t('influxdb.actions.to')}</span>
                 <Input type="datetime-local" value={expTo} onChange={(e) => setExpTo(e.target.value)} />
               </label>
+            </div>
+            {/* Format d'export (GitHub #15) : CSV (défaut) ou Parquet. */}
+            <div className="space-y-1">
+              <span className="text-sm text-muted-foreground">{t('influxdb.actions.export.format')}</span>
+              <div className="flex gap-2">
+                {(['csv', 'parquet'] as const).map((f) => (
+                  <label
+                    key={f}
+                    className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                      expFormat === f ? 'border-primary bg-primary/10' : 'hover:bg-secondary/50'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="expFormat"
+                      checked={expFormat === f}
+                      onChange={() => setExpFormat(f)}
+                      className="h-3.5 w-3.5"
+                    />
+                    <span className="font-medium">{t(`influxdb.actions.export.format.${f}`)}</span>
+                  </label>
+                ))}
+              </div>
+              <span className="text-xs text-muted-foreground">{t('influxdb.actions.export.format.hint')}</span>
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setDialog(null)}>

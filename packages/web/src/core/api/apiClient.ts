@@ -223,7 +223,8 @@ export async function downloadInfluxExport(body: {
   tables: string[];
   from: number;
   to: number;
-}): Promise<{ tables: number; rows: number; file: string }> {
+  format?: 'csv' | 'parquet';
+}): Promise<{ tables: number; rows: number; format?: 'csv' | 'parquet'; file: string }> {
   const res = await fetch('/api/influxdb/actions/export?download=1', {
     method: 'POST',
     headers: { Accept: 'application/zip', 'Content-Type': 'application/json' },
@@ -239,6 +240,7 @@ export async function downloadInfluxExport(body: {
   const summary = JSON.parse(res.headers.get('X-Export-Summary') ?? '{}') as {
     tables: number;
     rows: number;
+    format?: 'csv' | 'parquet';
     file: string;
   };
   const blob = await res.blob();

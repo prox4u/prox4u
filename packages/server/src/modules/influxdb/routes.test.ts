@@ -388,7 +388,7 @@ describe('POST /api/influxdb/actions/*', () => {
     });
     expect((ctx.auth.audit.append as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
       { id: 'u1', username: 'tester' }, 'influxdb.action', 'export',
-      { tables: ['node_metrics', 'vm_metrics'], from: 1000, to: 2000, rows: 10 },
+      { tables: ['node_metrics', 'vm_metrics'], from: 1000, to: 2000, rows: 10, format: 'csv' },
     );
     await app.close();
   });
@@ -453,11 +453,38 @@ describe('POST /api/influxdb/actions/*', () => {
     expect(res.headers['content-disposition']).toBe('attachment; filename="export-2026-01-01_2026-01-02-000000.zip"');
     expect(typeof res.headers['x-export-summary']).toBe('string');
     expect(JSON.parse(res.headers['x-export-summary'] as string)).toEqual({
-      tables: 2, rows: 10, file: 'export-2026-01-01_2026-01-02-000000.zip',
+      tables: 2, rows: 10, format: 'csv', file: 'export-2026-01-01_2026-01-02-000000.zip',
     });
     expect(res.payload).toBe('ZIPDATA');
     const build = (ctx.archiver as unknown as { buildTablesZip: ReturnType<typeof vi.fn> }).buildTablesZip;
-    expect(build).toHaveBeenCalledWith(['node_metrics', 'vm_metrics'], 1000, 2000);
+    expect(build).toHaveBeenCalledWith(['node_metrics', 'vm_metrics'], 1000, 2000, 'csv');
+    await app.close();
+  });
+
+  it('export?download=1 format=parquet : ZIP + Summary avec format (buildTablesZip "parquet")', async () => {
+    const ctx = makeCtx();
+    const app = await boot(ctx, admin);
+    const res = await app.inject({
+      method: 'POST', url: '/api/influxdb/actions/export?download=1',
+      payload: { tables: ['node_metrics'], from: 1000, to: 2000, format: 'parquet' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('application/zip');
+    const summary = JSON.parse(res.headers['x-export-summary'] as string);
+    expect(summary.format).toBe('parquet');
+    const build = (ctx.archiver as unknown as { buildTablesZip: ReturnType<typeof vi.fn> }).buildTablesZip;
+    expect(build).toHaveBeenCalledWith(['node_metrics'], 1000, 2000, 'parquet');
+    await app.close();
+  });
+
+  it('export : format invalide → 400 bad-format', async () => {
+    const app = await boot(makeCtx(), admin);
+    const res = await app.inject({
+      method: 'POST', url: '/api/influxdb/actions/export',
+      payload: { tables: ['node_metrics'], from: 1000, to: 2000, format: 'xlsx' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-format');
     await app.close();
   });
 

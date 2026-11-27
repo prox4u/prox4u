@@ -61,8 +61,9 @@ WAL buffer → 429 en pic d'écriture (3.12+) · OOM sur requêtes longues si po
 dimensionnés.
 
 ## Consignes (non négociables)
-1. **Zéro nouvelle dépendance** Node (on reste sur `undici` + stdlib ; l'export P5 est CSV,
-   pas Parquet, pour éviter un writer binaire).
+1. **Zéro nouvelle dépendance** Node (on reste sur `undici` + stdlib ; l'export P5 est CSV
+   **ou Parquet** — le Parquet est généré par l'API InfluxDB via le header
+   `Accept: application/vnd.apache.parquet`, pas par un writer binaire Node).
 2. **Le poller ne doit jamais bloquer** sur InfluxDB (file non bloquante, repli RRD intact).
 3. **Rétrocompatibilité** : les changements d'API `InfluxClient` restent optionnels
    (défauts = comportement actuel ou strictement meilleur) ; pas de rupture des routes existantes.
@@ -164,7 +165,8 @@ manuellement).
   `INFLUX_ARCHIVE_DIR` (défaut `data/influx-archive/`), **1 fichier / table / jour**
   (`<table>-<YYYY-MM-DD>.csv`). État = `lastArchivedTs` (n'avance que si succès → reprise).
 - **Format CSV** : en-tête `time,<tags>…,<fields>…`, une ligne par point. Lisible par
-  DuckDB/Excel/`csvtool`, interrogeable hors InfluxDB. (Pas de Parquet → zéro dépendance.)
+  DuckDB/Excel/`csvtool`, interrogeable hors InfluxDB. (L'archivage périodique reste CSV ;
+  le **Parquet** est disponible sur l'export ad-hoc — GitHub #15.)
 - **Stratégie de rétention documentée** (DEPLOY.md) :
   - `raw` : 31 j (auto-purge native),
   - `consolidated` : ∞ (surveillé via P4 `fileEstimate`) — si la croissance devient un
@@ -237,6 +239,7 @@ manuellement).
   → **FAIT** (module `/influxdb` — itération `plan-module-influxdb.md`, 2026-11-23).
 - **Migration vers InfluxDB 3 Enterprise** (compaction, HA, rétention mutable) : décision
   stratégique si le single-node / la croissance de `consolidated` deviennent critiques. → **GitHub #14**
-- **Export Parquet** (au lieu de CSV) : nécessite un writer binaire (dépendance) — CSV
-  choisi pour rester zéro-dépendance. → **GitHub #15**
+- **Export Parquet** (en option, en plus du CSV) : généré par l'API InfluxDB (header
+  `Accept: application/vnd.apache.parquet`), zéro dépendance — 1 fichier/tranche de 30 j.
+  → **FAIT** (GitHub #15, 2026-11-27).
 - **Sharding multi-InfluxDB** par endpoint (si un seul nœud ne suffit plus). → **GitHub #18**

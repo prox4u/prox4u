@@ -304,4 +304,76 @@ describe('InfluxArchiver', () => {
     const archiver = new InfluxArchiver(makeCtx(dir, async () => [], {}, path.join(dir, 'backups')));
     await expect(archiver.restoreBackup('backup-x.zip')).rejects.toThrow(/backup not found/);
   });
+
+  // ---------- Export Parquet (GitHub #15) ----------
+
+  it('tableParquet : 1 tranche → <table>.parquet (octets bruts API)', async () => {
+    const pq = strToU8('PAR1node');
+    const archiver = new InfluxArchiver(
+      makeCtx(dir, async () => [], {
+        querySqlChunkedRaw: async (_db: string, _b: (f: string, t: string) => string, from: number, to: number) => [
+          { from, to, data: pq },
+        ],
+      }),
+    );
+    const from = 1767225600; // 2026-01-01
+    const r = await archiver.tableParquet('consolidated', 'node_metrics', from, from + 86_400);
+    expect(r.files).toHaveLength(1);
+    expect(r.files[0].name).toBe('node_metrics.parquet');
+    expect(r.files[0].data).toEqual(pq);
+  });
+
+  it('tableParquet : N tranches → <table>-<from>_<to>.parquet par tranche', async () => {
+    const from = 1767225600; // 2026-01-01
+    const d30 = 30 * 86_400;
+    const to = from + 61 * 86_400; // 61 j → 2 tranches (30 j + 31 j)
+    const archiver = new InfluxArchiver(
+      makeCtx(dir, async () => [], {
+        querySqlChunkedRaw: async () => [
+          { from, to: from + d30, data: strToU8('PAR1a') },
+          { from: from + d30, to, data: strToU8('PAR1b') },
+        ],
+      }),
+    );
+    const r = await archiver.tableParquet('consolidated', 'node_metrics', from, to);
+    expect(r.files).toHaveLength(2);
+    const day = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
+    expect(r.files[0].name).toBe(`node_metrics-${day(from)}_${day(from + d30)}.parquet`);
+    expect(r.files[1].name).toBe(`node_metrics-${day(from + d30)}_${day(to)}.parquet`);
+  });
+
+  it('tableParquet : table absente (0 tranche) → 0 fichier', async () => {
+    const archiver = new InfluxArchiver(
+      makeCtx(dir, async () => [], { querySqlChunkedRaw: async () => [] }),
+    );
+    const r = await archiver.tableParquet('consolidated', 'node_metrics', 1000, 2000);
+    expect(r.files).toEqual([]);
+  });
+
+  it('buildTablesZip format=parquet : ZIP avec .parquet + exports rows:null / files', async () => {
+    const from = 1767225600;
+    const archiver = new InfluxArchiver(
+      makeCtx(dir, async () => [], {
+        querySqlChunkedRaw: async (_db: string, _b: (f: string, t: string) => string, f: number, t: number) => [
+          { from: f, to: t, data: strToU8('PAR1node') },
+        ],
+      }),
+    );
+    const r = await archiver.buildTablesZip(['node_metrics'], from, from + 86_400, 'parquet');
+    expect(r.exports).toEqual([{ table: 'node_metrics', rows: null, files: 1 }]);
+    const zip = unzipSync(Buffer.from(r.data));
+    expect(Object.keys(zip)).toEqual(['node_metrics.parquet']);
+    expect(strFromU8(zip['node_metrics.parquet'])).toBe('PAR1node');
+  });
+
+  it('buildTablesZip format=csv (défaut) : exports rows:number / files (comportement inchangé)', async () => {
+    const from = 1767225600;
+    const archiver = new InfluxArchiver(
+      makeCtx(dir, async () => [{ time: '2026-01-01T00:00:00Z', cpu: 1 }]),
+    );
+    const r = await archiver.buildTablesZip(['node_metrics'], from, from + 86_400);
+    expect(r.exports).toEqual([{ table: 'node_metrics', rows: 1, files: 1 }]);
+    const zip = unzipSync(Buffer.from(r.data));
+    expect(Object.keys(zip)).toEqual(['node_metrics.csv']);
+  });
 });

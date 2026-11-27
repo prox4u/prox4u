@@ -73,6 +73,13 @@ export function buildLine(
 const FLUSH_DELAY_MS = 25;
 /** délai de retry après un lot en échec (sans attendre un nouveau tick) */
 const FLUSH_RETRY_MS = 1_000;
+/**
+ * Erreur de planification DuckDB « table / champ absent » — ignorée par les
+ * requêtes chunkées (une tranche sur une table pas encore écrite est vide, pas
+ * une erreur). Couvre les messages réels : « cannot find table », « does not
+ * exist », « table '…' not found », « No field named ».
+ */
+const TABLE_ABSENT_RE = /cannot find table|does not exist|not found|No field named/i;
 
 /** Compteurs d'écriture (P1 backpressure) — exposés via getStats(). */
 export interface InfluxWriteStats {
@@ -337,7 +344,67 @@ export class InfluxClient {
         const chunk = await this.querySql<T>(db, buildSql(iso(cursor), iso(end)));
         for (const row of chunk) out.push(row);
       } catch (err) {
-        if (!/cannot find table|does not exist|No field named/i.test((err as Error).message ?? '')) {
+        if (!TABLE_ABSENT_RE.test((err as Error).message ?? '')) {
+          throw err;
+        }
+      }
+      cursor = end;
+    }
+    return out;
+  }
+
+  /**
+   * Requête SQL renvoyant les octets bruts de la réponse (export Parquet,
+   * GitHub #15). Le format est demandé via le header `Accept` (l'API InfluxDB 3
+   * Core ignore le paramètre `format`) : `application/vnd.apache.parquet`,
+   * `text/csv`, `application/json`. Fenêtre sans données → 200 avec 0 octet.
+   * Zéro dépendance : c'est l'API qui génère le Parquet.
+   */
+  async querySqlRaw(db: string, sql: string, accept: string): Promise<Uint8Array> {
+    const res = await fetch(`${this.cfg.url}/api/v3/query_sql`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.cfg.token}`,
+        'Content-Type': 'application/json',
+        Accept: accept,
+      },
+      body: JSON.stringify({ db, q: sql }),
+      signal: AbortSignal.timeout(10_000),
+      dispatcher: this.dispatcher,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`InfluxDB query_sql ${db} → HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  /**
+   * Requête SQL chunkée (P2) en octets bruts (export Parquet, GitHub #15) :
+   * découpe [from, to) en tranches de `chunkDays` et renvoie un fichier par
+   * tranche non vide (l'API renvoie un Parquet par requête — impossible de
+   * concaténer des Parquet sans lib, d'où 1 fichier/tranche). Une tranche
+   * « table absente / champ absent » est ignorée (TABLE_ABSENT_RE).
+   */
+  async querySqlChunkedRaw(
+    db: string,
+    buildSql: (fromIso: string, toIso: string) => string,
+    from: number,
+    to: number,
+    opts?: { chunkDays?: number },
+    accept = 'application/vnd.apache.parquet',
+  ): Promise<Array<{ from: number; to: number; data: Uint8Array }>> {
+    const chunkSec = (opts?.chunkDays ?? this.cfg.queryChunkDays) * 86_400;
+    const iso = (ts: number) => new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
+    const out: Array<{ from: number; to: number; data: Uint8Array }> = [];
+    let cursor = from;
+    while (cursor < to) {
+      const end = Math.min(cursor + chunkSec, to);
+      try {
+        const data = await this.querySqlRaw(db, buildSql(iso(cursor), iso(end)), accept);
+        if (data.length > 0) out.push({ from: cursor, to: end, data });
+      } catch (err) {
+        if (!TABLE_ABSENT_RE.test((err as Error).message ?? '')) {
           throw err;
         }
       }

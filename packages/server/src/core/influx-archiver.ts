@@ -275,6 +275,38 @@ export class InfluxArchiver {
   }
 
   /**
+   * Requiert [from, to) d'une table (chunké 30 j) et renvoie les fichiers
+   * Parquet (1 par tranche non vide, générés par l'API InfluxDB — header
+   * `Accept: application/vnd.apache.parquet`, zéro dépendance — GitHub #15).
+   * Impossible de concaténer des Parquet sans lib → 1 fichier/tranche.
+   * Nommage : 1 tranche → `<table>.parquet` ; N tranches →
+   * `<table>-<from>_<to>.parquet` par tranche. Table absente → 0 fichier.
+   * Le nb de lignes est inconnu sans lib de lecture (rows: null côté caller).
+   */
+  async tableParquet(
+    db: string,
+    table: string,
+    from: number,
+    to: number,
+  ): Promise<{ files: Array<{ name: string; data: Uint8Array }> }> {
+    const influx = this.ctx.influx;
+    const chunks = await influx.querySqlChunkedRaw(
+      db,
+      (_f, _t) => `SELECT * FROM ${quoteIdent(table)} WHERE time >= '${_f}' AND time < '${_t}' ORDER BY time`,
+      from,
+      to,
+      { chunkDays: ARCHIVE_CHUNK_DAYS },
+    );
+    if (chunks.length === 0) return { files: [] };
+    const day = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
+    const files = chunks.map((c) => ({
+      name: chunks.length === 1 ? `${table}.parquet` : `${table}-${day(c.from)}_${day(c.to)}.parquet`,
+      data: c.data,
+    }));
+    return { files };
+  }
+
+  /**
    * Export ad-hoc d'une table de `consolidated` sur [from, to) vers un CSV
    * (POST /api/influxdb/actions/export, repli single-table). Renvoie le chemin du
    * fichier + nb de lignes (file='' si aucune ligne).
@@ -291,22 +323,35 @@ export class InfluxArchiver {
 
   /**
    * Construit le ZIP d'export MULTI-tables EN MÉMOIRE (sans écriture disque) :
-   * 1 CSV par table (`export-<from>_<to>-<hhmmss>.zip`). Les tables sans ligne
-   * sont exclues du ZIP (rows: 0). Renvoie le nom de fichier + les bytes du ZIP
-   * + le détail par table. Sert le téléchargement direct (?download=1) et
-   * exportTablesZip (mode disque).
+   * 1 CSV par table (format 'csv', défaut) ou 1+ Parquet par table (format
+   * 'parquet' — 1 fichier/tranche de 30 j, GitHub #15). `export-<from>_<to>-<hhmmss>.zip`.
+   * Les tables vides sont exclues du ZIP. Renvoie le nom de fichier + les bytes
+   * du ZIP + le détail par table (rows: null pour Parquet — inconnu sans lib de
+   * lecture ; files = nb de fichiers dans le ZIP). Sert le téléchargement direct
+   * (?download=1) et exportTablesZip (mode disque).
    */
   async buildTablesZip(
     tables: string[],
     from: number,
     to: number,
-  ): Promise<{ filename: string; data: Uint8Array; exports: Array<{ table: string; rows: number }> }> {
+    format: 'csv' | 'parquet' = 'csv',
+  ): Promise<{
+    filename: string;
+    data: Uint8Array;
+    exports: Array<{ table: string; rows: number | null; files: number }>;
+  }> {
     const files: Record<string, Uint8Array> = {};
-    const exports: Array<{ table: string; rows: number }> = [];
+    const exports: Array<{ table: string; rows: number | null; files: number }> = [];
     for (const table of tables) {
-      const { csv, rows } = await this.tableCsv(this.ctx.influx.aggDb, table, from, to);
-      exports.push({ table, rows });
-      if (rows > 0) files[`${table}.csv`] = strToU8(csv);
+      if (format === 'parquet') {
+        const { files: pqFiles } = await this.tableParquet(this.ctx.influx.aggDb, table, from, to);
+        exports.push({ table, rows: null, files: pqFiles.length });
+        for (const f of pqFiles) files[f.name] = f.data;
+      } else {
+        const { csv, rows } = await this.tableCsv(this.ctx.influx.aggDb, table, from, to);
+        exports.push({ table, rows, files: rows > 0 ? 1 : 0 });
+        if (rows > 0) files[`${table}.csv`] = strToU8(csv);
+      }
     }
     const day = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
     const hhmmss = new Date().toISOString().slice(11, 19).replace(/:/g, '');
@@ -323,8 +368,9 @@ export class InfluxArchiver {
     tables: string[],
     from: number,
     to: number,
-  ): Promise<{ file: string; exports: Array<{ table: string; rows: number }> }> {
-    const { filename, data, exports } = await this.buildTablesZip(tables, from, to);
+    format: 'csv' | 'parquet' = 'csv',
+  ): Promise<{ file: string; exports: Array<{ table: string; rows: number | null; files: number }> }> {
+    const { filename, data, exports } = await this.buildTablesZip(tables, from, to, format);
     mkdirSync(this.ctx.config.influx.archiveDir, { recursive: true });
     const file = path.join(this.ctx.config.influx.archiveDir, filename);
     writeFileSync(file, Buffer.from(data));

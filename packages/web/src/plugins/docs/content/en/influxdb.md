@@ -48,7 +48,7 @@ The **Actions** panel is only visible if your account is an **admin** or a membe
 2. **Safe actions** (🟢):
    - **Force flush**: empties the write queue immediately;
    - **Archive now**: triggers an archiving cycle;
-   - **Export (CSV)**: exports **one or more tables** from the `consolidated` database over a period (**From**, **To**) — a **table list** (multi-select + **All**) replaces the text field; the **ZIP** (one CSV per table) is generated in memory and **downloaded automatically** to the browser's downloads folder — **no file is kept on the server**. The action **result** shows the number of exported tables/rows.
+   - **Export**: exports **one or more tables** from the `consolidated` database over a period (**From**, **To**), in **CSV or Parquet format** — a **table list** (multi-select + **All**) replaces the text field; the **ZIP** (CSV: one file per table; Parquet: one file per 30-day chunk) is generated in memory and **downloaded automatically** to the browser's downloads folder — **no file is kept on the server**. The action **result** shows the number of exported tables (and rows for CSV).
    - **Backup a database**: creates a **full backup** of a database (all tables, full history) — a **persistent ZIP** (one CSV per table + manifest) is kept **on the server** (backup directory). The **result** shows the file name + a **Download** link (optional) to fetch it in the browser.
 3. **Caution actions** (🟠):
    - **Reset archive**: restarts the archiving from the beginning (next cycle will take longer);
@@ -102,7 +102,7 @@ Prox4u continuously writes Proxmox metrics into InfluxDB 3 Core, then consolidat
 - **Version "—"**: some versions of InfluxDB 3 Core do not return the version (`/api/v3/server-info` returns 404) → displayed as "—".
 - **Immutable retention**: in Core, the retention of an existing database cannot be changed — to change it, you must **recreate** the database (data lost).
 - **Restricted actions**: without the admin role or an authorized group, the **Actions** panel is hidden (403 on the API side).
-- **CSV export (ZIP)**: the ad-hoc export produces **one CSV per table, bundled in a ZIP file** (no Parquet), **downloaded directly** in the browser — no file kept on the server.
+- **CSV/Parquet export (ZIP)**: the ad-hoc export produces, in **CSV** (one file per table) or **Parquet** (one file per 30-day chunk, ~×3 more compact, analytical reading DuckDB/Excel) format, a **ZIP file** **downloaded directly** in the browser — no file kept on the server.
 
 ---
 
@@ -121,7 +121,7 @@ Long-term queries are approaching the InfluxDB 3 Core file limit. Reduce the cha
 Your account is neither an **admin** nor a member of one of the groups in `INFLUX_ACTION_GROUPS`. Ask an admin to add you to a group (default: **Administrateurs**, **Exploitations**).
 
 **How do I export a precise history?**
-**Export (CSV)**: tick the wanted **tables** in the list (`consolidated` database — multi-select or **All**), the **From / To** period, and confirm. The **ZIP** (one CSV per table) is **downloaded automatically** to the browser's downloads folder (no file kept on the server).
+**Export**: tick the wanted **tables** in the list (`consolidated` database — multi-select or **All**), the **From / To** period, the **format** (CSV or Parquet), and confirm. The **ZIP** is **downloaded automatically** to the browser's downloads folder (no file kept on the server).
 
 **How do I change a database's retention?**
 In Core the retention is immutable: use **Recreate database** with the new **retention** (e.g. `2y`, `365d`). The database is dropped then recreated — the existing data is lost.

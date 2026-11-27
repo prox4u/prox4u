@@ -385,6 +385,85 @@ describe('InfluxClient P2 — querySqlChunked', () => {
   });
 });
 
+describe('InfluxClient P2 — querySqlRaw / querySqlChunkedRaw (Parquet, GitHub #15)', () => {
+  const PQ = (s: string) => new TextEncoder().encode(s);
+
+  it('querySqlRaw : renvoie les octets bruts + header Accept transmis', async () => {
+    const pq = PQ('PAR1data');
+    mockFetch((url, init) => {
+      expect(String(url)).toContain('/api/v3/query_sql');
+      expect((init?.headers as Record<string, string>)['Accept']).toBe('application/vnd.apache.parquet');
+      return new Response(pq, { status: 200, headers: { 'Content-Type': 'application/vnd.apache.parquet' } });
+    });
+    const data = await new InfluxClient(cfg).querySqlRaw('consolidated', 'SELECT * FROM m', 'application/vnd.apache.parquet');
+    expect(data).toEqual(pq);
+  });
+
+  it('querySqlRaw : fenêtre sans données → 200 + 0 octet', async () => {
+    mockFetch(() => new Response(new Uint8Array(0), { status: 200 }));
+    const data = await new InfluxClient(cfg).querySqlRaw('consolidated', 'SELECT * FROM m', 'application/vnd.apache.parquet');
+    expect(data.length).toBe(0);
+  });
+
+  it('querySqlRaw : erreur HTTP → throw (message tronqué)', async () => {
+    mockFetch(() => new Response("Error during planning: table 'x' not found", { status: 400 }));
+    await expect(
+      new InfluxClient(cfg).querySqlRaw('consolidated', 'SELECT * FROM m', 'application/vnd.apache.parquet'),
+    ).rejects.toThrow(/not found/);
+  });
+
+  it('querySqlChunkedRaw : 1 fichier/tranche non vide, tranches vides ignorées', async () => {
+    let call = 0;
+    mockFetch(() => {
+      call++;
+      if (call === 2) return new Response(new Uint8Array(0), { status: 200 }); // tranche 2 vide
+      return new Response(PQ(`PAR1${call}`), { status: 200 });
+    });
+    const from = 1_700_000_000;
+    const to = from + 90 * 86_400; // 3 tranches de 30 j
+    const chunks = await new InfluxClient(cfg).querySqlChunkedRaw(
+      'consolidated',
+      (f, t) => `SELECT * FROM m WHERE time >= '${f}' AND time < '${t}'`,
+      from,
+      to,
+      { chunkDays: 30 },
+    );
+    expect(chunks.length).toBe(2); // tranches 1 et 3 (la 2 vide)
+    expect(chunks[0].data).toEqual(PQ('PAR11'));
+    expect(chunks[1].data).toEqual(PQ('PAR13'));
+    // bornes : 1ʳᵉ [from, from+30j) ; 3ᵉ [from+60j, to)
+    expect(chunks[0].from).toBe(from);
+    expect(chunks[0].to).toBe(from + 30 * 86_400);
+    expect(chunks[1].from).toBe(from + 60 * 86_400);
+    expect(chunks[1].to).toBe(to);
+  });
+
+  it('querySqlChunkedRaw : tranche « table absente » (not found) ignorée', async () => {
+    let call = 0;
+    mockFetch(() => {
+      call++;
+      if (call === 2) return new Response("Error during planning: table 'm' not found", { status: 400 });
+      return new Response(PQ(`PAR1${call}`), { status: 200 });
+    });
+    const from = 1_700_000_000;
+    const chunks = await new InfluxClient(cfg).querySqlChunkedRaw(
+      'consolidated',
+      (f, t) => `SELECT * FROM m WHERE time >= '${f}' AND time < '${t}'`,
+      from,
+      from + 90 * 86_400,
+      { chunkDays: 30 },
+    );
+    expect(chunks.length).toBe(2); // tranches 1 et 3, la 2 (not found) ignorée
+  });
+
+  it('querySqlChunkedRaw : autre erreur (500) → throw', async () => {
+    mockFetch(() => new Response('boom', { status: 500 }));
+    await expect(
+      new InfluxClient(cfg).querySqlChunkedRaw('consolidated', (f, t) => `... ${f} ${t}`, 1000, 2000, { chunkDays: 30 }),
+    ).rejects.toThrow(/500/);
+  });
+});
+
 describe('InfluxClient P4 — getServerInfo', () => {
   it('renvoie la version si présente', async () => {
     mockFetch(() => Response.json({ version: '3.11.5' }));

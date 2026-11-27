@@ -249,7 +249,13 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
 
   app.post('/api/influxdb/actions/export', async (req, reply) => {
     if (!ctx.archiver) return reply.code(503).send({ error: 'unavailable', code: 'archiver-missing' });
-    const body = (req.body ?? {}) as { tables?: string[]; table?: string; from?: number; to?: number };
+    const body = (req.body ?? {}) as {
+      tables?: string[];
+      table?: string;
+      from?: number;
+      to?: number;
+      format?: 'csv' | 'parquet';
+    };
     // tables[] (multi-export → ZIP) ; repli legacy table (string) → [table].
     const tables =
       Array.isArray(body.tables) && body.tables.length > 0
@@ -264,19 +270,30 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
     if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0 || from >= to) {
       return reply.code(400).send({ error: 'invalid', code: 'bad-range' });
     }
+    // format (GitHub #15) : 'csv' (défaut) ou 'parquet' (1 fichier/tranche de 30 j).
+    const format: 'csv' | 'parquet' = body.format ?? 'csv';
+    if (format !== 'csv' && format !== 'parquet') {
+      return reply.code(400).send({ error: 'invalid', code: 'bad-format' });
+    }
     // ?download=1 : téléchargement direct — ZIP en mémoire → réponse binaire,
     // aucune écriture disque. Résumé dans X-Export-Summary (JSON).
     if ((req.query as { download?: string }).download === '1') {
-      const { filename, data, exports } = await ctx.archiver.buildTablesZip(tables, from, to);
-      const rows = exports.reduce((s, e) => s + e.rows, 0);
-      auditAction(ctx, req, 'export', { tables, from, to, rows, mode: 'download' });
+      const { filename, data, exports } = await ctx.archiver.buildTablesZip(tables, from, to, format);
+      const rows = exports.reduce((s, e) => s + (e.rows ?? 0), 0);
+      auditAction(ctx, req, 'export', { tables, from, to, rows, format, mode: 'download' });
       reply.header('Content-Type', 'application/zip');
       reply.header('Content-Disposition', `attachment; filename="${filename}"`);
-      reply.header('X-Export-Summary', JSON.stringify({ tables: exports.length, rows, file: filename }));
+      reply.header('X-Export-Summary', JSON.stringify({ tables: exports.length, rows, format, file: filename }));
       return reply.send(Buffer.from(data));
     }
-    const { file, exports } = await ctx.archiver.exportTablesZip(tables, from, to);
-    auditAction(ctx, req, 'export', { tables, from, to, rows: exports.reduce((s, e) => s + e.rows, 0) });
+    const { file, exports } = await ctx.archiver.exportTablesZip(tables, from, to, format);
+    auditAction(ctx, req, 'export', {
+      tables,
+      from,
+      to,
+      rows: exports.reduce((s, e) => s + (e.rows ?? 0), 0),
+      format,
+    });
     return { ok: true, file, exports };
   });
 
