@@ -3,13 +3,18 @@ import {
   buildNscaFrame,
   buildNscaHostFrame,
   evaluateAlarmHysteresis,
+  isSensorMetric,
   nscaReturnCode,
   renderOutput,
+  resolveSensorThresholds,
+  sensorMetricValue,
   type AlarmRule,
   type AlarmTarget,
   type CentreonConfig,
   type MetricSample,
   type MultiDashboardSnapshot,
+  type SensorAlarmData,
+  type SensorThresholds,
 } from '@prox4u/shared';
 import type { Poller } from '../../core/poller.js';
 import { clusterMetricValue, nodeMetricValue, vmMetricValue } from './metrics.js';
@@ -41,6 +46,14 @@ import type { NscaStore } from './store.js';
  *  6. robuste : valeur null (pas de données) → pas de transition ; échec
  *     send_nsca → la règle reste, lastSendState=error + message, aucun crash.
  *
+ * MÉTRIQUES CAPTEURS (GitHub #4) : smart_temp_c / smart_health /
+ * sensor_temp_c / systemd_unit_failed / zfs_pool_state — source InfluxDB raw
+ * (module node-sensors, `sensorData` injecté), PAS le snapshot poller. Une
+ * seule lecture par tick (cache 60 s, partagée entre toutes les règles
+ * capteurs). Le seuil de `sensor_temp_c` est le seuil EFFECTIF (perso ≤
+ * firmware, `sensorThresholds` injecté) — la règle suit l'onglet admin « Seuils
+ * capteurs » (repli : seuil de la règle si aucun seuil défini).
+ *
  * Les trames coulent TOUJOURS aux transitions réelles + heartbeat : Centreon
  * reflète l'état réel (OK ou critique). L'anti-flapping se fait au niveau de la
  * machine à états (hystérésis + durée minimale), pas en coupant les trames.
@@ -68,6 +81,10 @@ export class AlarmEngine {
     private dataDir: string,
     private logger: Pick<Console, 'info' | 'warn' | 'error'>,
     private intervalMs = 15_000,
+    /** Données capteurs (GitHub #4) — null si InfluxDB indisponible. Optionnel (mocks). */
+    private sensorData?: () => Promise<SensorAlarmData | null>,
+    /** Seuils capteurs personnalisés (perso ≤ firmware). Optionnel (mocks). */
+    private sensorThresholds?: () => SensorThresholds,
   ) {}
 
   start(): void {
@@ -93,14 +110,26 @@ export class AlarmEngine {
       const cfg = this.store.getConfig();
       if (!cfg.enabled) return; // module désactivé → aucun envoi
       const multi = this.poller.getMulti();
-      if (!multi) return; // pas encore de snapshot
       const now = Date.now();
-      for (const rule of this.store.listRules()) {
+      const rules = this.store.listRules();
+      // Métriques capteurs (GitHub #4) : si au moins une règle capteur active,
+      // UNE lecture InfluxDB par tick (cache 60 s, partagée entre toutes les
+      // règles capteurs). Indépendante du snapshot poller (endpoint PVE peut
+      // être down — l'agent Telegraf continue de reporter).
+      let sensorData: SensorAlarmData | null = null;
+      if (rules.some((r) => r.active && isSensorMetric(r.metric)) && this.sensorData) {
+        try {
+          sensorData = await this.sensorData();
+        } catch (err) {
+          this.logger.warn(`alarm-engine : données capteurs indisponibles (${(err as Error).message})`);
+        }
+      }
+      for (const rule of rules) {
         if (!rule.active) continue;
-        await this.processRule(rule, cfg, multi, now);
+        await this.processRule(rule, cfg, multi, now, sensorData);
       }
       // Check hôte (PROCESS_HOST_CHECK_RESULT) — indépendant des règles.
-      await this.sendHostChecks(cfg, multi, now);
+      if (multi) await this.sendHostChecks(cfg, multi, now);
     } catch (err) {
       this.logger.error(`alarm-engine : tick en échec : ${(err as Error).message}`);
     } finally {
@@ -109,13 +138,25 @@ export class AlarmEngine {
   }
 
   /** Évalue UNE règle et envoie la trame de transition si nécessaire. */
-  private async processRule(rule: AlarmRule, cfg: CentreonConfig, multi: MultiDashboardSnapshot, now: number): Promise<void> {
-    const ep = multi.endpoints.find((e) => e.id === rule.target.endpointId);
+  private async processRule(rule: AlarmRule, cfg: CentreonConfig, multi: MultiDashboardSnapshot | null, now: number, sensorData: SensorAlarmData | null): Promise<void> {
+    const ep = multi?.endpoints.find((e) => e.id === rule.target.endpointId);
     const snap = ep?.snapshot;
-    if (!snap) return; // endpoint indisponible → pas d'échantillon
 
     let value: number | null = null;
-    if (rule.target.kind === 'vm') {
+    // Seuils EFFECTIFS (GitHub #4) : pour sensor_temp_c, le seuil perso ≤
+    // firmware prime sur le seuil de la règle (repli si aucun seuil défini).
+    let threshold = rule.threshold;
+    let recoveryThreshold = rule.recoveryThreshold ?? null;
+    if (isSensorMetric(rule.metric)) {
+      // Métrique capteur : source InfluxDB raw (node-sensors), PAS le snapshot
+      // poller — la règle fonctionne même si l'endpoint PVE est down.
+      if (sensorData) value = sensorMetricValue(rule.metric, rule.target, sensorData);
+      const t = resolveSensorThresholds(rule.metric, rule.target, sensorData, this.sensorThresholds?.() ?? {}, rule);
+      threshold = t.threshold;
+      recoveryThreshold = t.recoveryThreshold;
+    } else if (!snap) {
+      return; // endpoint indisponible → pas d'échantillon
+    } else if (rule.target.kind === 'vm') {
       const vm = snap.vms.find((v) => v.vmid === rule.target.vmid);
       if (vm) value = vmMetricValue(rule.metric, vm);
     } else if (rule.target.kind === 'node') {
@@ -136,8 +177,8 @@ export class AlarmEngine {
 
     const { trigger, recover, value: latest } = evaluateAlarmHysteresis(
       rule.operator,
-      rule.threshold,
-      rule.recoveryThreshold ?? null,
+      threshold,
+      recoveryThreshold,
       rule.confirmSeconds,
       buf,
       now,
@@ -155,7 +196,7 @@ export class AlarmEngine {
         vm: rule.target.label,
         metric: rule.metric,
         value: latest,
-        threshold: rule.threshold,
+        threshold,
       });
       const frame = buildNscaFrame(rule.centreonHost, rule.centreonService, nscaReturnCode(rule.severity), output);
       const send = await this.sendAndRecord(rule, cfg, frame, output, now);
@@ -169,7 +210,7 @@ export class AlarmEngine {
         vm: rule.target.label,
         metric: rule.metric,
         value: latest,
-        threshold: rule.threshold,
+        threshold,
       })}`;
       const frame = buildNscaFrame(rule.centreonHost, rule.centreonService, 0, output);
       const send = await this.sendAndRecord(rule, cfg, frame, output, now, {
@@ -186,7 +227,7 @@ export class AlarmEngine {
     // cours). Sort le service de `Pending` et le garde à jour (services volatiles).
     const hb = cfg.okHeartbeatSeconds;
     if (hb > 0 && state === 'ok' && now - lastOkSendAt >= hb * 1000) {
-      const output = `OK — ${rule.name} : ${rule.metric}=${latest} (seuil ${rule.operator}${rule.threshold}) — heartbeat Prox4u`;
+      const output = `OK — ${rule.name} : ${rule.metric}=${latest} (seuil ${rule.operator}${threshold}) — heartbeat Prox4u`;
       const frame = buildNscaFrame(rule.centreonHost, rule.centreonService, 0, output);
       const send = await this.sendOkHeartbeat(rule, cfg, frame, output, now);
       this.logger.info(`alarm : OK heartbeat « ${rule.name} » → ${rule.centreonHost}/${rule.centreonService} (${send.ok ? 'envoyée' : 'ÉCHEC : ' + send.message})`);

@@ -3,8 +3,12 @@ import type {
   AlarmStats,
   CentreonConfig,
   CentreonPoller,
+  FailedUnit,
   MetricId,
+  SensorReading,
+  SmartDevice,
   VmMapping,
+  ZfsStatus,
 } from '@prox4u/shared';
 
 /**
@@ -56,11 +60,60 @@ export interface TargetCluster {
   endpointId: string;
   name: string;
 }
+/**
+ * Cibles capteurs (GitHub #4) — source InfluxDB raw (agent Telegraf).
+ * Alimente les sélecteurs du formulaire pour les règles capteurs
+ * (SMART / température / unité systemd / pool ZFS). `null` si InfluxDB
+ * indisponible ou agent non déployé.
+ */
+export interface AlarmSensorTargets {
+  /** Disques SMART (node + device + model). */
+  smart: SmartDevice[];
+  /** Capteurs lm-sensors (node + chip + feature + tempCrit). */
+  sensors: SensorReading[];
+  /** TOUTES les unités systemd (node + name) — pas seulement les échouées. */
+  units: FailedUnit[];
+  /** Pools ZFS (node + poolName + poolState). */
+  pools: ZfsStatus[];
+}
 export interface AlarmTargets {
   vms: TargetVm[];
   nodes: TargetNode[];
   clusters: TargetCluster[];
   mappings: { key: string; host: string }[];
+  /** Cibles capteurs (GitHub #4) — `null` si InfluxDB indisponible. */
+  sensors: AlarmSensorTargets | null;
+}
+
+/**
+ * Identifiant lisible du capteur ciblé (pour le `label` de la règle) :
+ * `node / <identifiant>`. Vide si aucune métrique capteur (label = nœud).
+ */
+export function sensorTargetIdentifier(target: { device?: string; chip?: string; feature?: string; unit?: string; pool?: string }): string {
+  if (target.device) return target.device;
+  if (target.chip && target.feature) return `${target.chip}/${target.feature}`;
+  if (target.unit) return target.unit;
+  if (target.pool) return target.pool;
+  return '';
+}
+
+/**
+ * Construit la cible NŒUD du payload (GitHub #4) : nœud + identifiant capteur
+ * (device / chip+feature / unit / pool) + label lisible `node / <id>`. Les
+ * champs capteurs vides ne sont pas émis (cible propre pour la validation).
+ */
+export function buildNodeTarget(values: { endpointId: string; node: string; device?: string; chip?: string; feature?: string; unit?: string; pool?: string }) {
+  const id = sensorTargetIdentifier(values);
+  return {
+    kind: 'node' as const,
+    endpointId: values.endpointId,
+    node: values.node,
+    label: id ? `${values.node} / ${id}` : values.node,
+    ...(values.device ? { device: values.device } : {}),
+    ...(values.chip ? { chip: values.chip, feature: values.feature } : {}),
+    ...(values.unit ? { unit: values.unit } : {}),
+    ...(values.pool ? { pool: values.pool } : {}),
+  };
 }
 
 /** Quels secrets Centreon sont fournis par le .env du serveur (CENTREON_*). */

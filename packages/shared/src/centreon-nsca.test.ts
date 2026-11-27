@@ -9,14 +9,21 @@ import {
   escapeNscaField,
   evaluateAlarm,
   evaluateAlarmHysteresis,
+  isSensorMetric,
   METRIC_IDS,
   nscaCfgContent,
   nscaReturnCode,
   renderOutput,
+  resolveSensorThresholds,
+  SENSOR_METRICS,
+  sensorMetricValue,
+  sensorTargetFields,
   shellQuote,
   suggestCenteronHost,
+  type AlarmTarget,
   type MetricSample,
 } from './centreon-nsca.js';
+import type { FailedUnit, SensorAlarmData, SensorReading, SmartDevice, ZfsStatus } from './node-sensors.js';
 
 describe('nscaReturnCode', () => {
   it('mappe sévérité → return code NSCA', () => {
@@ -104,6 +111,9 @@ describe('METRIC_IDS', () => {
   });
   it('inclut cluster_qdevice (cible cluster)', () => {
     expect(METRIC_IDS).toContain('cluster_qdevice');
+  });
+  it('inclut les 5 métriques capteurs (GitHub #4)', () => {
+    for (const m of SENSOR_METRICS) expect(METRIC_IDS).toContain(m);
   });
 });
 
@@ -304,5 +314,201 @@ describe('clapiDeleteCommand', () => {
     expect(clapiDeleteCommand('vm-1', 'Prox4u-Alarm-CPU')).toBe(
       "SERVICE -a del -v 'vm-1;Prox4u-Alarm-CPU'",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Métriques capteurs (source InfluxDB raw — module node-sensors, GitHub #4)
+// ---------------------------------------------------------------------------
+
+function smartDevice(over: Partial<SmartDevice> = {}): SmartDevice {
+  return {
+    node: 'proxmox1',
+    device: '/dev/sda',
+    model: 'WDC WDS500G2B0A',
+    serialNo: 'SN123',
+    healthOk: true,
+    tempC: 35,
+    powerOnHours: 1000,
+    powerCycleCount: 10,
+    reallocatedSectors: 0,
+    pendingSectors: 0,
+    uncorrectableSectors: 0,
+    udmaCrcErrors: 0,
+    percentageUsed: null,
+    availableSpare: null,
+    criticalWarning: null,
+    lastSeen: 1_700_000_000,
+    ...over,
+  };
+}
+
+function sensorReading(over: Partial<SensorReading> = {}): SensorReading {
+  return {
+    node: 'proxmox1',
+    chip: 'amdgpu-pci-2300',
+    feature: 'mem',
+    tempInput: 70,
+    tempCrit: 110,
+    fanInput: null,
+    inInput: null,
+    lastSeen: 1_700_000_000,
+    ...over,
+  };
+}
+
+function failedUnit(over: Partial<FailedUnit> = {}): FailedUnit {
+  return {
+    node: 'proxmox1',
+    name: 'pve-firewall.service',
+    active: 'failed',
+    sub: 'failed',
+    load: 'loaded',
+    lastSeen: 1_700_000_000,
+    ...over,
+  };
+}
+
+function zfsPool(over: Partial<ZfsStatus> = {}): ZfsStatus {
+  return {
+    node: 'proxmox1',
+    arcHits: null,
+    arcMisses: null,
+    arcSize: null,
+    arcCacheSize: null,
+    poolName: 'rpool',
+    poolState: 'ONLINE',
+    poolSize: null,
+    poolAllocated: null,
+    poolFree: null,
+    lastSeen: 1_700_000_000,
+    ...over,
+  };
+}
+
+function sensorData(over: Partial<SensorAlarmData> = {}): SensorAlarmData {
+  return {
+    smart: [smartDevice()],
+    sensors: [sensorReading()],
+    zfs: [],
+    zfsPools: [zfsPool()],
+    failedUnits: [],
+    units: [failedUnit({ active: 'active', sub: 'running' })],
+    ...over,
+  };
+}
+
+const nodeTarget = (over: Partial<AlarmTarget> = {}): AlarmTarget => ({
+  kind: 'node',
+  endpointId: 'e1',
+  node: 'proxmox1',
+  label: 'proxmox1',
+  ...over,
+});
+
+describe('isSensorMetric / sensorTargetFields', () => {
+  it('identifie les 5 métriques capteurs', () => {
+    for (const m of SENSOR_METRICS) expect(isSensorMetric(m)).toBe(true);
+    expect(isSensorMetric('cpu_pct')).toBe(false);
+    expect(isSensorMetric('node_cpu_pct')).toBe(false);
+    expect(isSensorMetric('cluster_quorum')).toBe(false);
+  });
+  it('liste les champs de cible requis par métrique', () => {
+    expect(sensorTargetFields('smart_temp_c')).toEqual(['device']);
+    expect(sensorTargetFields('smart_health')).toEqual(['device']);
+    expect(sensorTargetFields('sensor_temp_c')).toEqual(['chip', 'feature']);
+    expect(sensorTargetFields('systemd_unit_failed')).toEqual(['unit']);
+    expect(sensorTargetFields('zfs_pool_state')).toEqual(['pool']);
+    expect(sensorTargetFields('cpu_pct')).toEqual([]);
+    expect(sensorTargetFields('node_online')).toEqual([]);
+  });
+});
+
+describe('sensorMetricValue', () => {
+  it('smart_temp_c : température du disque ciblé', () => {
+    expect(sensorMetricValue('smart_temp_c', nodeTarget({ device: '/dev/sda' }), sensorData())).toBe(35);
+  });
+  it('smart_temp_c : 0 °C = pas de capteur → null (pas d\'échantillon)', () => {
+    expect(sensorMetricValue('smart_temp_c', nodeTarget({ device: '/dev/sda' }), sensorData({ smart: [smartDevice({ tempC: 0 })] }))).toBeNull();
+  });
+  it('smart_temp_c : disque inconnu → null', () => {
+    expect(sensorMetricValue('smart_temp_c', nodeTarget({ device: '/dev/sdb' }), sensorData())).toBeNull();
+  });
+  it('smart_health : 1 = PASSED, 0 = FAILED, null = inconnue (pas un échec)', () => {
+    expect(sensorMetricValue('smart_health', nodeTarget({ device: '/dev/sda' }), sensorData())).toBe(1);
+    expect(sensorMetricValue('smart_health', nodeTarget({ device: '/dev/sda' }), sensorData({ smart: [smartDevice({ healthOk: false })] }))).toBe(0);
+    expect(sensorMetricValue('smart_health', nodeTarget({ device: '/dev/sda' }), sensorData({ smart: [smartDevice({ healthOk: null })] }))).toBeNull();
+  });
+  it('sensor_temp_c : température du capteur ciblé', () => {
+    expect(sensorMetricValue('sensor_temp_c', nodeTarget({ chip: 'amdgpu-pci-2300', feature: 'mem' }), sensorData())).toBe(70);
+  });
+  it('sensor_temp_c : capteur inconnu ou sans lecture → null', () => {
+    expect(sensorMetricValue('sensor_temp_c', nodeTarget({ chip: 'cpu-vid', feature: 'edge' }), sensorData())).toBeNull();
+    expect(sensorMetricValue('sensor_temp_c', nodeTarget({ chip: 'amdgpu-pci-2300', feature: 'mem' }), sensorData({ sensors: [sensorReading({ tempInput: null })] }))).toBeNull();
+  });
+  it('systemd_unit_failed : 1 = saine (connue, non échouée)', () => {
+    expect(sensorMetricValue('systemd_unit_failed', nodeTarget({ unit: 'pve-firewall.service' }), sensorData())).toBe(1);
+  });
+  it('systemd_unit_failed : 0 = échouée (présente dans failedUnits)', () => {
+    const data = sensorData({ failedUnits: [failedUnit()] });
+    expect(sensorMetricValue('systemd_unit_failed', nodeTarget({ unit: 'pve-firewall.service' }), data)).toBe(0);
+  });
+  it('systemd_unit_failed : unité inconnue → null (pas de faux OK — agent down / mauvais nom)', () => {
+    expect(sensorMetricValue('systemd_unit_failed', nodeTarget({ unit: 'inconnue.service' }), sensorData())).toBeNull();
+    // agent down : aucune unité connue
+    expect(sensorMetricValue('systemd_unit_failed', nodeTarget({ unit: 'pve-firewall.service' }), sensorData({ units: [] }))).toBeNull();
+  });
+  it('zfs_pool_state : 1 = ONLINE, 0 = DEGRADED/OFFLINE, null = pool inconnue', () => {
+    expect(sensorMetricValue('zfs_pool_state', nodeTarget({ pool: 'rpool' }), sensorData())).toBe(1);
+    expect(sensorMetricValue('zfs_pool_state', nodeTarget({ pool: 'rpool' }), sensorData({ zfsPools: [zfsPool({ poolState: 'DEGRADED' })] }))).toBe(0);
+    expect(sensorMetricValue('zfs_pool_state', nodeTarget({ pool: 'rpool' }), sensorData({ zfsPools: [zfsPool({ poolState: 'OFFLINE' })] }))).toBe(0);
+    expect(sensorMetricValue('zfs_pool_state', nodeTarget({ pool: 'tank' }), sensorData())).toBeNull();
+  });
+  it('métrique non capteur → null (source snapshot, pas node-sensors)', () => {
+    expect(sensorMetricValue('cpu_pct', nodeTarget({ device: '/dev/sda' }), sensorData())).toBeNull();
+  });
+});
+
+describe('resolveSensorThresholds', () => {
+  const target = nodeTarget({ chip: 'amdgpu-pci-2300', feature: 'mem' });
+  it('sensor_temp_c : le seuil perso (≤ firmware) prime sur le seuil de la règle', () => {
+    const data = sensorData(); // firmware 110
+    const r = resolveSensorThresholds('sensor_temp_c', target, data, { 'proxmox1/amdgpu-pci-2300/mem': 85 }, { threshold: 100, recoveryThreshold: null, operator: '>' });
+    expect(r.threshold).toBe(85);
+  });
+  it('sensor_temp_c : sans seuil perso → seuil firmware', () => {
+    const data = sensorData(); // firmware 110
+    const r = resolveSensorThresholds('sensor_temp_c', target, data, {}, { threshold: 100, recoveryThreshold: null, operator: '>' });
+    expect(r.threshold).toBe(110);
+  });
+  it('sensor_temp_c : ni perso ni firmware (ni données) → seuil de la règle (repli)', () => {
+    expect(resolveSensorThresholds('sensor_temp_c', target, null, {}, { threshold: 80, recoveryThreshold: null, operator: '>' }).threshold).toBe(80);
+    expect(resolveSensorThresholds('sensor_temp_c', target, sensorData({ sensors: [] }), {}, { threshold: 80, recoveryThreshold: null, operator: '>' }).threshold).toBe(80);
+    expect(resolveSensorThresholds('sensor_temp_c', target, sensorData({ sensors: [sensorReading({ tempCrit: null })] }), {}, { threshold: 80, recoveryThreshold: null, operator: '>' }).threshold).toBe(80);
+  });
+  it('les autres métriques capteurs : seuil de la règle inchangé', () => {
+    const data = sensorData();
+    expect(resolveSensorThresholds('smart_temp_c', nodeTarget({ device: '/dev/sda' }), data, { 'proxmox1/amdgpu-pci-2300/mem': 85 }, { threshold: 50, recoveryThreshold: null, operator: '>' }).threshold).toBe(50);
+    expect(resolveSensorThresholds('systemd_unit_failed', nodeTarget({ unit: 'x.service' }), data, {}, { threshold: 0, recoveryThreshold: null, operator: '=' }).threshold).toBe(0);
+  });
+  it('cohérence hystérésis : récupération du mauvais côté du seuil effectif → repli sur le seuil de déclenchement', () => {
+    // règle créée avec seuil 100 / récup 90 ; le seuil perso passe à 85 →
+    // 90 ≥ 85 : la zone morte s\'inverserait → repli (pas de zone morte).
+    const data = sensorData();
+    const r = resolveSensorThresholds('sensor_temp_c', target, data, { 'proxmox1/amdgpu-pci-2300/mem': 85 }, { threshold: 100, recoveryThreshold: 90, operator: '>' });
+    expect(r).toEqual({ threshold: 85, recoveryThreshold: 85 });
+  });
+  it('cohérence hystérésis : récupération cohérente → conservée (op « > »)', () => {
+    const data = sensorData();
+    const r = resolveSensorThresholds('sensor_temp_c', target, data, { 'proxmox1/amdgpu-pci-2300/mem': 85 }, { threshold: 100, recoveryThreshold: 75, operator: '>' });
+    expect(r).toEqual({ threshold: 85, recoveryThreshold: 75 });
+  });
+  it('cohérence hystérésis : op « < » symétrique (récup doit être > seuil)', () => {
+    // déclenche <1, récupère ≥2 → cohérent → conservée
+    const ok = resolveSensorThresholds('smart_health', nodeTarget({ device: '/dev/sda' }), null, {}, { threshold: 1, recoveryThreshold: 2, operator: '<' });
+    expect(ok.recoveryThreshold).toBe(2);
+    // 0 ≤ 1 → du mauvais côté → repli sur le seuil de déclenchement
+    const bad = resolveSensorThresholds('smart_health', nodeTarget({ device: '/dev/sda' }), null, {}, { threshold: 1, recoveryThreshold: 0, operator: '<' });
+    expect(bad.recoveryThreshold).toBe(1);
   });
 });

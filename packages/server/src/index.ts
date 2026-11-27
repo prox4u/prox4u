@@ -18,6 +18,7 @@ import { AdminAuditStore } from './modules/auth/admin-audit.js';
 import { hashPassword } from './modules/auth/password.js';
 import { LocalProvider } from './modules/auth/providers.js';
 import { UserConfigStore } from './modules/userconfig/store.js';
+import { SensorThresholdStore } from './modules/nodesensors/thresholds.js';
 import { parseCookies, SessionStore, SESSION_COOKIE } from './modules/auth/session.js';
 import { AuthStore } from './modules/auth/store.js';
 import { modules } from './modules/index.js';
@@ -115,6 +116,10 @@ async function main(): Promise<void> {
   // contexte pour être partagée par le module userconfig ET l'import/export admin.
   const userConfig = new UserConfigStore(path.join(path.dirname(config.authFile), 'user-configs'), logger);
   userConfig.init();
+  // Seuils capteurs personnalisés (data/sensor-thresholds.json) — partagé entre
+  // le module node-sensors (onglet admin) et le moteur d'alarmes (GitHub #4).
+  const sensorThresholds = new SensorThresholdStore(path.join(path.dirname(config.authFile), 'sensor-thresholds.json'), logger);
+  sensorThresholds.init();
   const ctx: AppContext = {
     config,
     endpoints,
@@ -123,6 +128,7 @@ async function main(): Promise<void> {
     auth: { store: authStore, sessions, provider: new LocalProvider(authStore), audit },
     userConfig,
     hub,
+    sensorThresholds,
   };
   const poller = new Poller(ctx, hub);
   const consolidator = new InfluxConsolidator(ctx);

@@ -152,6 +152,26 @@ export interface SmartHistoryResponse {
   source: 'influx' | 'empty';
 }
 
+/**
+ * Données capteurs pour le MOTEUR D'ALARMES (GitHub #4) — même source que
+ * GET /api/node-sensors (InfluxDB raw, dernier point par cible) + les TOUTES
+ * les unités systemd (pas seulement les échouées — permet de distinguer
+ * « unité saine » de « unité inconnue ») + les pools ZFS (table `zpool`).
+ * `null`/vide si InfluxDB indisponible ou agent Telegraf non déployé.
+ */
+export interface SensorAlarmData {
+  smart: SmartDevice[];
+  sensors: SensorReading[];
+  /** ZFS ARC (une entrée par nœud). */
+  zfs: ZfsStatus[];
+  /** Pools ZFS (une entrée par nœud/pool — poolName + poolState). */
+  zfsPools: ZfsStatus[];
+  /** Unités en échec (active='failed' ou load='error', fenêtre 1 h). */
+  failedUnits: FailedUnit[];
+  /** TOUTES les unités (dernier état par nœud/unité) — pas seulement les échouées. */
+  units: FailedUnit[];
+}
+
 /** Clé d'identification d'un capteur : `node/chip/feature` (aucun `/` à l'intérieur). */
 export function sensorKey(r: { node: string; chip: string; feature: string }): string {
   return `${r.node}/${r.chip}/${r.feature}`;

@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import type { AlarmRule, CentreonPoller, MetricId } from '@prox4u/shared';
 import { Card, CardContent } from '../../../components/ui/card';
 import { Skeleton } from '../../../components/ui/skeleton';
-import { alarmsApi, type AlarmTargets, type ProvisionOutcome } from '../lib/nsca-api';
+import { alarmsApi, buildNodeTarget, type AlarmTargets, type ProvisionOutcome } from '../lib/nsca-api';
 import type { MetricIdList } from '../lib/types';
 import { RuleForm, type RuleFormValues } from '../components/rule-form';
 
@@ -61,7 +61,7 @@ export function CreateRulePage() {
       target: values.kind === 'vm'
         ? { kind: 'vm' as const, endpointId: values.endpointId, vmid: values.vmid ?? undefined, label: targets?.vms.find((v) => v.vmid === values.vmid)?.name ?? '' }
         : values.kind === 'node'
-          ? { kind: 'node' as const, endpointId: values.endpointId, node: values.node, label: values.node }
+          ? buildNodeTarget(values)
           : { kind: 'cluster' as const, endpointId: values.endpointId, label: targets?.clusters.find((c) => c.endpointId === values.endpointId)?.name ?? values.endpointId },
       metric: values.metric as MetricId,
       operator: values.operator,
@@ -152,6 +152,7 @@ export function CreateRulePage() {
               metricsVm={metrics.vm}
               metricsNode={metrics.node}
               metricsCluster={metrics.cluster}
+              sensorTargets={targets?.sensors ?? null}
               onSubmit={onSubmit}
               submitLabel={t('alarm.form.submit')}
             />

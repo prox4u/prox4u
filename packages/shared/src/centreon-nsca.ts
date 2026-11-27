@@ -13,6 +13,12 @@
 // les noms d'hôte/service sont échappés avant insertion dans la trame NSCA.
 // ---------------------------------------------------------------------------
 
+import {
+  effectiveSensorThreshold,
+  type SensorAlarmData,
+  type SensorThresholds,
+} from './node-sensors.js';
+
 /** Sévérités d'une règle — mappées vers le return code NSCA. */
 export type AlarmSeverity = 'ok' | 'warn' | 'crit' | 'unknown';
 
@@ -29,16 +35,33 @@ export interface AlarmTarget {
   vmid?: number;
   /** nom du nœud si kind=node. */
   node?: string;
+  /** Disque SMART (métriques smart_temp_c / smart_health) — ex. `/dev/sda`. */
+  device?: string;
+  /** Capteur lm-sensors (métrique sensor_temp_c) — chip (ex. `amdgpu-pci-2300`). */
+  chip?: string;
+  /** Capteur lm-sensors (métrique sensor_temp_c) — feature (ex. `mem`). */
+  feature?: string;
+  /** Unité systemd (métrique systemd_unit_failed) — ex. `pve-firewall.service`. */
+  unit?: string;
+  /** Pool ZFS (métrique zfs_pool_state) — ex. `rpool`. */
+  pool?: string;
   /** nom lisible (VM, nœud ou cluster) — affichage. */
   label: string;
 }
 
 /**
- * Métriques surveillables. Source : snapshot poller (VmSummary / NodeHealth /
- * cluster). Les métriques de statut sont numérisées (1 = bon état, 0 = mauvais) :
- * vm_status (running=1), node_online (online=1), ip_reachable (1 IP atteignable),
- * cluster_quorum (quorum ok=1, perdu=0 — cible « cluster »),
- * cluster_qdevice (Qdevice up/absent=1, down=0, unknown=null — cible « cluster »).
+ * Métriques surveillables.
+ * - Source snapshot poller (VmSummary / NodeHealth / cluster) : cpu_pct…
+ *   cluster_qdevice. Les métriques de statut sont numérisées (1 = bon état,
+ *   0 = mauvais) : vm_status (running=1), node_online (online=1),
+ *   ip_reachable (1 IP atteignable), cluster_quorum (quorum ok=1, perdu=0 —
+ *   cible « cluster »), cluster_qdevice (Qdevice up/absent=1, down=0,
+ *   unknown=null — cible « cluster »).
+ * - Source capteurs (InfluxDB raw via le module node-sensors, GitHub #4) :
+ *   smart_temp_c / smart_health / sensor_temp_c / systemd_unit_failed /
+ *   zfs_pool_state — cible « nœud » + identifiant du capteur (device,
+ *   chip/feature, unit, pool). Statuts numérisés : 1 = bon état, 0 = mauvais,
+ *   null = inconnu (pas d'échantillon).
  */
 export type MetricId =
   | 'cpu_pct'
@@ -54,7 +77,12 @@ export type MetricId =
   | 'node_disk_pct'
   | 'node_online'
   | 'cluster_quorum'
-  | 'cluster_qdevice';
+  | 'cluster_qdevice'
+  | 'smart_temp_c'
+  | 'smart_health'
+  | 'sensor_temp_c'
+  | 'systemd_unit_failed'
+  | 'zfs_pool_state';
 
 export const METRIC_IDS: MetricId[] = [
   'cpu_pct',
@@ -71,6 +99,11 @@ export const METRIC_IDS: MetricId[] = [
   'node_online',
   'cluster_quorum',
   'cluster_qdevice',
+  'smart_temp_c',
+  'smart_health',
+  'sensor_temp_c',
+  'systemd_unit_failed',
+  'zfs_pool_state',
 ];
 
 /** Poller Centreon cible (liste configurable — page de config du module). */
@@ -325,7 +358,130 @@ const METRIC_SHORT: Record<MetricId, string> = {
   node_online: 'NODE-ONLINE',
   cluster_quorum: 'CLUSTER-QUORUM',
   cluster_qdevice: 'CLUSTER-QDEVICE',
+  smart_temp_c: 'SMART-TEMP',
+  smart_health: 'SMART-HEALTH',
+  sensor_temp_c: 'SENSOR-TEMP',
+  systemd_unit_failed: 'SYSTEMD-UNIT',
+  zfs_pool_state: 'ZFS-POOL',
 };
+
+// ---------------------------------------------------------------------------
+// Métriques capteurs (source InfluxDB raw — module node-sensors, GitHub #4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Métriques capteurs : leur source est InfluxDB raw (agent Telegraf sur le
+ * nœud), PAS le snapshot poller. Toutes ciblent un NŒUD + un identifiant
+ * (device / chip+feature / unit / pool).
+ */
+export const SENSOR_METRICS: MetricId[] = [
+  'smart_temp_c',
+  'smart_health',
+  'sensor_temp_c',
+  'systemd_unit_failed',
+  'zfs_pool_state',
+];
+
+export function isSensorMetric(metric: MetricId): boolean {
+  return (SENSOR_METRICS as MetricId[]).includes(metric);
+}
+
+/**
+ * Champs de cible REQUIS par une métrique capteur (validation serveur +
+ * sélecteurs du formulaire). Toutes les métriques capteurs exigent aussi
+ * `node` (kind=node) — c'est le champ commun, pas dans la liste.
+ */
+export function sensorTargetFields(metric: MetricId): string[] {
+  switch (metric) {
+    case 'smart_temp_c':
+    case 'smart_health':
+      return ['device'];
+    case 'sensor_temp_c':
+      return ['chip', 'feature'];
+    case 'systemd_unit_failed':
+      return ['unit'];
+    case 'zfs_pool_state':
+      return ['pool'];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Valeur NUMÉRIQUE d'une métrique capteur depuis les données node-sensors
+ * (InfluxDB raw — dernier point par cible). Convention statut : 1 = bon état,
+ * 0 = mauvais état, null = inconnu (pas d'échantillon — ni alarme ni récup).
+ *
+ * - smart_temp_c        : température disque (°C) — 0 = pas de capteur → null.
+ * - smart_health        : 1 = PASSED, 0 = FAILED, null = inconnue (pas un échec).
+ * - sensor_temp_c       : température capteur (°C), null si pas de lecture.
+ * - systemd_unit_failed : 1 = saine (unité connue et non échouée), 0 = failed/error ;
+ *                         null si l'unité est INCONNUE (agent down / mauvais nom)
+ *                         — pas de faux OK.
+ * - zfs_pool_state      : 1 = ONLINE, 0 = DEGRADED/OFFLINE, null = pool inconnue.
+ */
+export function sensorMetricValue(metric: MetricId, target: AlarmTarget, data: SensorAlarmData): number | null {
+  switch (metric) {
+    case 'smart_temp_c': {
+      const d = data.smart.find((s) => s.node === target.node && s.device === target.device);
+      if (!d || d.tempC == null || d.tempC === 0) return null; // 0 = pas de capteur
+      return d.tempC;
+    }
+    case 'smart_health': {
+      const d = data.smart.find((s) => s.node === target.node && s.device === target.device);
+      if (!d || d.healthOk == null) return null; // inconnue ≠ échec (RAID, disque virtuel)
+      return d.healthOk ? 1 : 0;
+    }
+    case 'sensor_temp_c': {
+      const r = data.sensors.find((s) => s.node === target.node && s.chip === target.chip && s.feature === target.feature);
+      return r?.tempInput ?? null;
+    }
+    case 'systemd_unit_failed': {
+      const known = data.units.find((u) => u.node === target.node && u.name === target.unit);
+      if (!known) return null; // unité inconnue → pas d'échantillon (pas de faux OK)
+      const failed = data.failedUnits.find((u) => u.node === target.node && u.name === target.unit);
+      return failed ? 0 : 1;
+    }
+    case 'zfs_pool_state': {
+      const z = data.zfsPools.find((p) => p.node === target.node && p.poolName === target.pool);
+      if (!z || z.poolState == null) return null;
+      return z.poolState === 'ONLINE' ? 1 : 0;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Seuils EFFECTIFS d'une règle capteur (GitHub #4) :
+ * - `sensor_temp_c` : le seuil effectif du capteur (perso ≤ firmware, onglet
+ *   admin « Seuils capteurs ») PRIME sur le seuil de la règle — l'alarme suit
+ *   le seuil effectif même après modification. Le seuil de la règle sert de
+ *   REPLI si aucun seuil n'est défini (ni perso ni firmware).
+ * - Cohérence hystérésis : si le seuil de récupération se retrouve du mauvais
+ *   côté du seuil effectif (seuil perso modifié après création de la règle),
+ *   repli sur le seuil de déclenchement (pas de zone morte inversée).
+ */
+export function resolveSensorThresholds(
+  metric: MetricId,
+  target: AlarmTarget,
+  data: SensorAlarmData | null,
+  thresholds: SensorThresholds,
+  rule: { threshold: number; recoveryThreshold: number | null; operator: AlarmOperator },
+): { threshold: number; recoveryThreshold: number | null } {
+  let threshold = rule.threshold;
+  if (metric === 'sensor_temp_c' && data) {
+    const reading = data.sensors.find((s) => s.node === target.node && s.chip === target.chip && s.feature === target.feature);
+    const eff = reading ? effectiveSensorThreshold(reading, thresholds) : null;
+    if (eff !== null) threshold = eff;
+  }
+  let recoveryThreshold = rule.recoveryThreshold;
+  if (recoveryThreshold !== null) {
+    if (rule.operator === '>' && recoveryThreshold >= threshold) recoveryThreshold = threshold;
+    if (rule.operator === '<' && recoveryThreshold <= threshold) recoveryThreshold = threshold;
+  }
+  return { threshold, recoveryThreshold };
+}
 
 /**
  * Nom de service Centreon auto-généré : `Prox4u-Alarm-<METRIQUE>`.

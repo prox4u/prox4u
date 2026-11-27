@@ -44,6 +44,7 @@ import type { InfluxArchiver } from './influx-archiver.js';
 import type { WsHub } from './ws-hub.js';
 import type { AuthContext } from '../modules/auth/runtime.js';
 import type { UserConfigStore } from '../modules/userconfig/store.js';
+import type { SensorThresholdStore } from '../modules/nodesensors/thresholds.js';
 
 /** Endpoint surveillé : config + source de données + topologie (sites). */
 export interface EndpointRuntime {
@@ -73,6 +74,14 @@ export interface AppContext {
   userConfig: UserConfigStore;
   /** hub WebSocket (broadcast snapshots + messages ponctuels) */
   hub: WsHub;
+  /**
+   * Seuils capteurs personnalisés (data/sensor-thresholds.json, GitHub #4) —
+   * partagé entre le module node-sensors (onglet admin « Seuils capteurs »)
+   * et le moteur d'alarmes (seuil effectif perso ≤ firmware des règles
+   * capteurs). Optionnel : absent des mocks de tests (les modules créent
+   * alors leur propre instance).
+   */
+  sensorThresholds?: SensorThresholdStore;
 }
 
 const DAY_MS = 86_400_000;

@@ -5,7 +5,8 @@
 #
 # Rôle : collecter les métriques locales que l'API PVE ne donne pas et les pousser
 # dans l'InfluxDB 3 Core de prox4u (base `raw`) :
-#   smart_device (attributs SMART prédictifs) · sensors (températures) · zfs (ARC/pools)
+#   smart_device (attributs SMART prédictifs) · sensors (températures) · zfs (ARC)
+#   zpool (état des pools — alarme « pool dégradé », GitHub #4)
 #   systemd_units (état des unités) · disk/diskio/mem/cpu/system
 #   dm_names (mapping device-mapper → LV PVE, pour l'I/O disque PAR DISQUE des VM)
 #   net (trafic réseau par interface) + net_if_mac (mapping interface hôte → MAC,
@@ -395,6 +396,44 @@ else
   echo "[dry-run] installerait le script $UPDATES_SCRIPT (mises à jour sécurité en attente)"
 fi
 
+# ── 5h. État des pools ZFS (consommé par le plugin exec) ──
+# `zpool status -p -H -o name,state` : l'état d'un pool (ONLINE / DEGRADED /
+# OFFLINE / FAULTED / UNAVAIL) n'existe que dans zpool — le plugin zfs de
+# Telegraf ne collecte que l'ARC (table `zfs`) et, en option, des counters I/O
+# (table `zfs_pool`, SANS état). Ce script écrit la table `zpool` (tag pool,
+# champ state) pour l'alarme « pool ZFS dégradé » (GitHub #4). prox4u lit le
+# dernier point par (node, pool) sur une fenêtre de 1 h. ZFS non installé →
+# silencieux (pas de ligne) : prox4u traite l'absence comme « pool inconnu »
+# (pas de faux OK).
+ZPOOL_SCRIPT=/usr/local/lib/prox4u-telegraf-zpool.sh
+if [[ $DRY_RUN -eq 0 ]]; then
+  cat > "$ZPOOL_SCRIPT" <<'EOS'
+#!/usr/bin/env bash
+# Prox4u — état des pools ZFS (table zpool pour Telegraf).
+# Exécute `zpool status -p -H -o name,state` et sort le line protocol InfluxDB
+# : une ligne par pool, tag pool=<nom>, champ state=<ONLINE|DEGRADED|...>.
+# Le tag node est ajouté par global_tags. Quasi statique (change au changement
+# d'état d'un pool) ; prox4u lit le dernier point par (node, pool) sur une
+# fenêtre de 1 h pour l'alarme « pool ZFS dégradé » (GitHub #4).
+set -euo pipefail
+
+command -v zpool >/dev/null 2>&1 || exit 0   # ZFS non installé → silencieux
+out="$(zpool status -p -H -o name,state 2>/dev/null)" || exit 0
+[[ -n "$out" ]] || exit 0
+
+while IFS=$'\t' read -r name state; do
+  [[ -n "$name" && -n "$state" ]] || continue
+  # Échappement tag line protocol (, = espace).
+  esc="${name//,/\\,}"; esc="${esc//=/\\=}"; esc="${esc// /\\ }"
+  printf 'zpool,pool=%s state="%s"\n' "$esc" "$state"
+done <<< "$out"
+EOS
+  chmod 755 "$ZPOOL_SCRIPT"
+  ok "script état pools ZFS installé → $ZPOOL_SCRIPT"
+else
+  echo "[dry-run] installerait le script $ZPOOL_SCRIPT (état des pools ZFS : zpool status)"
+fi
+
 if [[ $DRY_RUN -eq 1 ]]; then
   # Aperçu sans écrire (et sans exposer le token en clair sur la console).
   cat <<EOF
@@ -402,7 +441,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   agent         : interval=10s, hostname=$NODE_TAG
   global_tags   : node=$NODE_TAG, node_source=telegraf
   outputs.influxdb_v2 : $INFLUX_URL (bucket=$INFLUX_BUCKET, org=$INFLUX_ORG, insecure_skip_verify=true)
-  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system, net, exec (dm_names, iface_mac, hw_info, quorum, reboot, updates)
+  plugins       : smart, sensors, zfs, systemd_units, ping, disk, diskio, mem, cpu, system, net, exec (dm_names, iface_mac, hw_info, quorum, reboot, updates, zpool)
   (token masqué)
 EOF
 else
@@ -506,6 +545,15 @@ cat > "$CONF" <<EOF
   data_format = "influx"
   timeout = "30s"
 
+# ── État des pools ZFS (table zpool) — alarme « pool dégradé » (GitHub #4) ──
+# zpool status -p -H -o name,state : l'état d'un pool (ONLINE/DEGRADED/…) n'est
+# fourni que par zpool (le plugin zfs ne collecte que l'ARC + counters I/O).
+# Quasi statique ; prox4u lit le dernier point par (node, pool) (fenêtre 1 h).
+[[inputs.exec]]
+  commands = ["/usr/local/lib/prox4u-telegraf-zpool.sh"]
+  data_format = "influx"
+  timeout = "10s"
+
 # ── Réseau : counters par interface (table net) — trafic par NIC ──
 # Toutes les interfaces : NICs physiques, ponts (vmbr*) ET tap des VMs
 # (vnet*/tap*/veth*) — les tap sont la source du trafic PAR INTERFACE de
@@ -567,5 +615,5 @@ echo "→ Prochaine étape (depuis le serveur prox4u) : valider que les mesures 
 echo "    cd prox4u && TOK=\$(grep '^INFLUX_TOKEN=' .env | cut -d= -f2)"
 echo "    curl -sk https://localhost:8181/api/v3/query_sql -H \"Authorization: Bearer \$TOK\" \\"
 echo "      -H 'Content-Type: application/json' \\"
-echo "      -d '{\"db\":\"raw\",\"q\":\"SELECT table_name FROM information_schema.tables WHERE table_name IN ('\''smart_device'\'','\''sensors'\'','\''zfs'\'','\''systemd_units'\'','\''disk'\'','\''diskio'\'','\''cpu'\'','\''mem'\'','\''dm_names'\'','\''net'\'','\''net_if_mac'\'','\''reboot_pending'\'','\''security_updates'\'')\"}'"
+echo "      -d '{\"db\":\"raw\",\"q\":\"SELECT table_name FROM information_schema.tables WHERE table_name IN ('\''smart_device'\'','\''sensors'\'','\''zfs'\'','\''zpool'\'','\''systemd_units'\'','\''disk'\'','\''diskio'\'','\''cpu'\'','\''mem'\'','\''dm_names'\'','\''net'\'','\''net_if_mac'\'','\''reboot_pending'\'','\''security_updates'\'')\"}'"
 [[ $DRY_RUN -eq 1 ]] && echo "(--dry-run : service non démarré, config non écrite)"

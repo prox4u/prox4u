@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import type { AlarmRule, CentreonPoller, MetricId } from '@prox4u/shared';
 import { Card, CardContent } from '../../../components/ui/card';
 import { Skeleton } from '../../../components/ui/skeleton';
-import { alarmsApi, type AlarmTargets } from '../lib/nsca-api';
+import { alarmsApi, buildNodeTarget, type AlarmTargets } from '../lib/nsca-api';
 import type { MetricIdList } from '../lib/types';
 import { RuleForm, type RuleFormValues } from '../components/rule-form';
 
@@ -54,7 +54,7 @@ export function EditRulePage() {
       target: values.kind === 'vm'
         ? { kind: 'vm', endpointId: values.endpointId, vmid: values.vmid ?? undefined, label: targets?.vms.find((v) => v.vmid === values.vmid)?.name ?? '' }
         : values.kind === 'node'
-          ? { kind: 'node', endpointId: values.endpointId, node: values.node, label: values.node }
+          ? buildNodeTarget(values)
           : { kind: 'cluster', endpointId: values.endpointId, label: targets?.clusters.find((c) => c.endpointId === values.endpointId)?.name ?? values.endpointId },
       metric: values.metric as MetricId,
       operator: values.operator,
@@ -106,6 +106,7 @@ export function EditRulePage() {
             metricsVm={metrics.vm}
             metricsNode={metrics.node}
             metricsCluster={metrics.cluster}
+            sensorTargets={targets?.sensors ?? null}
             onSubmit={onSubmit}
             onCancel={() => window.location.assign('/alarms')}
             submitLabel={t('alarm.form.update')}

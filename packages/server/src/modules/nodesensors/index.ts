@@ -24,8 +24,12 @@ import { SensorThresholdStore } from './thresholds.js';
  */
 export function registerNodeSensorsModule(app: FastifyInstance, ctx: AppContext, poller: Poller): void {
   const dataDir = path.dirname(ctx.config.authFile);
-  const store = new SensorThresholdStore(path.join(dataDir, 'sensor-thresholds.json'), ctx.logger);
-  store.init();
+  // Store partagé (créé dans index.ts, posé sur ctx) : l'onglet admin « Seuils
+  // capteurs » ET le moteur d'alarmes (GitHub #4 — seuil effectif perso ≤
+  // firmware des règles capteurs) lisent la MÊME instance (pas de cache
+  // divergent). Repli : instance locale (mocks de tests sans ctx complet).
+  const store = ctx.sensorThresholds ?? new SensorThresholdStore(path.join(dataDir, 'sensor-thresholds.json'), ctx.logger);
+  if (!ctx.sensorThresholds) store.init();
   registerNodeSensors(app, ctx, store);
   registerSensorHistoryRoute(app, ctx, store);
   registerSmartHistoryRoute(app, ctx);

@@ -220,3 +220,120 @@ describe('registerAlarmRoutes', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Métriques capteurs (GitHub #4) — validation des cibles + cibles du formulaire
+// ---------------------------------------------------------------------------
+
+describe('registerAlarmRoutes — règles capteurs (GitHub #4)', () => {
+  let dir: string;
+  let app: FastifyInstance;
+  let store: NscaStore;
+  const sensorData = {
+    smart: [{ node: 'proxmox1', device: '/dev/sda', model: 'WDC', serialNo: null, healthOk: true, tempC: 35, powerOnHours: null, powerCycleCount: null, reallocatedSectors: null, pendingSectors: null, uncorrectableSectors: null, udmaCrcErrors: null, percentageUsed: null, availableSpare: null, criticalWarning: null, lastSeen: 1 }],
+    sensors: [{ node: 'proxmox1', chip: 'amdgpu-pci-2300', feature: 'mem', tempInput: 70, tempCrit: 110, fanInput: null, inInput: null, lastSeen: 1 }],
+    zfs: [],
+    zfsPools: [{ node: 'proxmox1', arcHits: null, arcMisses: null, arcSize: null, arcCacheSize: null, poolName: 'rpool', poolState: 'ONLINE', poolSize: null, poolAllocated: null, poolFree: null, lastSeen: 1 }],
+    failedUnits: [],
+    units: [{ node: 'proxmox1', name: 'pve-firewall.service', active: 'active', sub: 'running', load: 'loaded', lastSeen: 1 }],
+  };
+
+  beforeEach(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'nsca-routes-sensor-'));
+    store = new NscaStore(path.join(dir, 'centreon-nsca.json'), logger);
+    store.init();
+    app = Fastify();
+    app.addHook('onRequest', async (req) => {
+      (req as { authUser?: unknown }).authUser = { id: 'u1', role: 'admin', groupIds: [] };
+    });
+    const { registerAlarmRoutes } = await import('./routes.js');
+    registerAlarmRoutes(app, store, dir, poller, auth, async () => sensorData);
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  function sensorRule(over: Record<string, unknown> = {}) {
+    return {
+      name: 'SMART temp',
+      target: { kind: 'node', endpointId: 'e1', node: 'proxmox1', device: '/dev/sda', label: 'proxmox1 / /dev/sda' },
+      metric: 'smart_temp_c',
+      operator: '>',
+      threshold: 80,
+      confirmSeconds: 300,
+      severity: 'crit',
+      pollerId: 'linux',
+      centreonHost: 'proxmox1',
+      centreonService: 'Prox4u-Alarm-SMART-TEMP',
+      messageTemplate: '{{vm}} SMART {{value}}°C',
+      active: true,
+      ...over,
+    };
+  }
+
+  it('GET /api/alarms → les métriques capteurs sont dans la liste node', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/alarms' });
+    const body = res.json();
+    for (const m of ['smart_temp_c', 'smart_health', 'sensor_temp_c', 'systemd_unit_failed', 'zfs_pool_state']) {
+      expect(body.metrics.node).toContain(m);
+    }
+  });
+
+  it('GET /api/alarms/targets → section sensors (smart/sensors/units/pools)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/alarms/targets' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.sensors.smart).toHaveLength(1);
+    expect(body.sensors.smart[0].device).toBe('/dev/sda');
+    expect(body.sensors.sensors[0].chip).toBe('amdgpu-pci-2300');
+    expect(body.sensors.units[0].name).toBe('pve-firewall.service');
+    expect(body.sensors.pools[0].poolName).toBe('rpool');
+  });
+
+  it('POST règle capteur valide → 201', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: sensorRule() });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().rule.target.device).toBe('/dev/sda');
+  });
+
+  it('POST smart_temp_c sans target.device → 400 (target.device)', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: sensorRule({ target: { kind: 'node', endpointId: 'e1', node: 'proxmox1', label: 'proxmox1' } }) });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().fields).toContain('target.device');
+  });
+
+  it('POST sensor_temp_c sans chip/feature → 400 (chip + feature)', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: sensorRule({ metric: 'sensor_temp_c', target: { kind: 'node', endpointId: 'e1', node: 'proxmox1', label: 'proxmox1' } }) });
+    expect(res.statusCode).toBe(400);
+    const fields = res.json().fields;
+    expect(fields).toContain('target.chip');
+    expect(fields).toContain('target.feature');
+  });
+
+  it('POST systemd_unit_failed sans target.unit → 400', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: sensorRule({ metric: 'systemd_unit_failed', target: { kind: 'node', endpointId: 'e1', node: 'proxmox1', label: 'proxmox1' } }) });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().fields).toContain('target.unit');
+  });
+
+  it('POST métrique capteur avec kind=vm → 400 (target.kind)', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: sensorRule({ target: { kind: 'vm', endpointId: 'e1', vmid: 100, device: '/dev/sda', label: 'vm-100' } }) });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().fields.join(' ')).toContain('target.kind');
+  });
+
+  it('PATCH : changer vers une métrique capteur sans identifiant → 400 bad-sensor-target', async () => {
+    const created = (await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: sensorRule() })).json();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/alarms/rules/${created.rule.id}`,
+      payload: { metric: 'systemd_unit_failed', target: { kind: 'node', endpointId: 'e1', node: 'proxmox1', label: 'proxmox1' } },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('bad-sensor-target');
+    expect(res.json().fields).toContain('target.unit');
+  });
+});

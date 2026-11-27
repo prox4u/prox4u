@@ -2,13 +2,21 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import {
   buildNscaFrame,
+  isSensorMetric,
   NSCA_OK,
+  sensorTargetFields,
   type AlarmOperator,
   type AlarmRule,
+  type AlarmTarget,
   type CentreonConfig,
   type CentreonPoller,
+  type FailedUnit,
   type MetricId,
+  type SensorAlarmData,
+  type SensorReading,
+  type SmartDevice,
   type VmMapping,
+  type ZfsStatus,
 } from '@prox4u/shared';
 import type { Poller } from '../../core/poller.js';
 import type { AuthContext } from '../auth/runtime.js';
@@ -47,6 +55,22 @@ function recoveryThresholdError(operator: AlarmOperator, threshold: number, reco
   return null;
 }
 
+/**
+ * Cohérence des règles capteurs (GitHub #4) : une métrique capteur exige
+ * kind=node + le(s) champ(s) d'identifiant du capteur (device / chip+feature /
+ * unit / pool). Retourne la liste des champs manquants (vide = valide).
+ */
+function sensorTargetErrors(metric: MetricId, target: AlarmTarget): string[] {
+  const missing: string[] = [];
+  if (!isSensorMetric(metric)) return missing;
+  if (target.kind !== 'node') missing.push('target.kind (doit être « node »)');
+  if (!target.node) missing.push('target.node');
+  for (const f of sensorTargetFields(metric)) {
+    if (!target[f as keyof AlarmTarget]) missing.push(`target.${f}`);
+  }
+  return missing;
+}
+
 function maskConfig(cfg: CentreonConfig): Record<string, unknown> {
   // Les mots de passe/token ne sont JAMAIS renvoyés en clair par l'API :
   // un booléen « configuré » suffit à l'UI (pré-remplissage non requis).
@@ -82,6 +106,8 @@ export function registerAlarmRoutes(
   dataDir: string,
   _poller: Poller,
   auth: AuthContext,
+  /** Données capteurs (GitHub #4) — cibles des règles capteurs (sélecteurs du formulaire). Optionnel (mocks). */
+  sensorData?: () => Promise<SensorAlarmData | null>,
 ): void {
   app.get('/api/alarms', async () => {
     return {
@@ -94,7 +120,11 @@ export function registerAlarmRoutes(
     };
   });
 
-  /** Cibles disponibles : VMs (par endpoint) + nœuds + clusters (quorum). */
+  /**
+   * Cibles disponibles : VMs (par endpoint) + nœuds + clusters (quorum)
+   * + cibles capteurs (GitHub #4 : disques SMART, capteurs, unités systemd,
+   * pools ZFS — source InfluxDB raw, cache 60 s ; `null` si indisponible).
+   */
   app.get('/api/alarms/targets', async () => {
     const multi = _poller.getMulti();
     const vms: Array<{ endpointId: string; vmid: number; name: string; node: string }> = [];
@@ -113,7 +143,16 @@ export function registerAlarmRoutes(
         }
       }
     }
-    return { vms, nodes, clusters, mappings: [...mappings.entries()].map(([k, host]) => ({ key: k, host })) };
+    let sensors: { smart: SmartDevice[]; sensors: SensorReading[]; units: FailedUnit[]; pools: ZfsStatus[] } | null = null;
+    if (sensorData) {
+      try {
+        const data = await sensorData();
+        if (data) sensors = { smart: data.smart, sensors: data.sensors, units: data.units, pools: data.zfsPools };
+      } catch {
+        sensors = null; // InfluxDB indisponible → le formulaire l'indique
+      }
+    }
+    return { vms, nodes, clusters, mappings: [...mappings.entries()].map(([k, host]) => ({ key: k, host })), sensors };
   });
 
   /**
@@ -136,6 +175,8 @@ export function registerAlarmRoutes(
     ) {
       missing.push('metric');
     }
+    // Métriques capteurs (GitHub #4) : kind=node + identifiant du capteur requis.
+    if (body.metric && body.target) missing.push(...sensorTargetErrors(body.metric, body.target).filter((f) => !missing.includes(f)));
     if (typeof body.threshold !== 'number') missing.push('threshold');
     if (typeof body.confirmSeconds !== 'number' || body.confirmSeconds < 0) missing.push('confirmSeconds');
     if (!body.pollerId) missing.push('pollerId');
@@ -229,6 +270,12 @@ export function registerAlarmRoutes(
     }
     if (body.suppressSeconds !== undefined && (typeof body.suppressSeconds !== 'number' || !Number.isFinite(body.suppressSeconds) || body.suppressSeconds < 0)) {
       return reply.code(400).send({ error: 'invalid', code: 'bad-suppress-seconds' });
+    }
+    // Métriques capteurs (GitHub #4) : cohérence sur les valeurs EFFECTIVES
+    // (body > règle existante) — kind=node + identifiant du capteur requis.
+    const sensorErrs = sensorTargetErrors(body.metric ?? existing.metric, body.target ?? existing.target);
+    if (sensorErrs.length > 0) {
+      return reply.code(400).send({ error: 'invalid', code: 'bad-sensor-target', fields: sensorErrs });
     }
     try {
       const rule = store.updateRule(id, body);

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   defaultServiceName,
+  sensorTargetFields,
   suggestCenteronHost,
   type AlarmOperator,
   type AlarmRule,
@@ -11,7 +12,7 @@ import {
 } from '@prox4u/shared';
 import { Button } from '../../../components/ui/button';
 import { Input, Select } from '../../../components/ui/input';
-import type { TargetCluster, TargetNode, TargetVm } from '../lib/nsca-api';
+import type { AlarmSensorTargets, TargetCluster, TargetNode, TargetVm } from '../lib/nsca-api';
 import type { MetricIdList } from '../lib/types';
 
 export interface RuleFormValues {
@@ -21,6 +22,15 @@ export interface RuleFormValues {
   vmid: number | null;
   node: string;
   metric: MetricId | '';
+  /** Disque SMART (métriques smart_temp_c / smart_health). */
+  device: string;
+  /** Capteur lm-sensors (métrique sensor_temp_c) — chip + feature. */
+  chip: string;
+  feature: string;
+  /** Unité systemd (métrique systemd_unit_failed). */
+  unit: string;
+  /** Pool ZFS (métrique zfs_pool_state). */
+  pool: string;
   operator: AlarmOperator;
   threshold: string;
   /** Seuil de récupération (hystérésis) — '' = même seuil que le déclenchement. */
@@ -47,6 +57,8 @@ interface Props {
   metricsVm: MetricIdList;
   metricsNode: MetricIdList;
   metricsCluster: MetricIdList;
+  /** Cibles capteurs (GitHub #4) — `null` si InfluxDB indisponible. */
+  sensorTargets?: AlarmSensorTargets | null;
   onSubmit: (values: RuleFormValues) => Promise<void>;
   onCancel?: () => void;
   submitLabel: string;
@@ -61,7 +73,7 @@ const SEVERITIES: AlarmSeverity[] = ['warn', 'crit', 'unknown'];
  * - service Centreon : defaultServiceName(métrique, nom de règle) — recalculé
  *   à chaque changement de métrique/nom, mais reste édit manuellement.
  */
-export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, metricsVm, metricsNode, metricsCluster, onSubmit, onCancel, submitLabel }: Props) {
+export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, metricsVm, metricsNode, metricsCluster, sensorTargets, onSubmit, onCancel, submitLabel }: Props) {
   const { t } = useTranslation();
   const [values, setValues] = useState<RuleFormValues>(() =>
     initial
@@ -72,6 +84,11 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
           vmid: initial.target.vmid ?? null,
           node: initial.target.node ?? '',
           metric: initial.metric,
+          device: initial.target.device ?? '',
+          chip: initial.target.chip ?? '',
+          feature: initial.target.feature ?? '',
+          unit: initial.target.unit ?? '',
+          pool: initial.target.pool ?? '',
           operator: initial.operator,
           threshold: String(initial.threshold),
           recoveryThreshold: initial.recoveryThreshold != null ? String(initial.recoveryThreshold) : '',
@@ -91,6 +108,11 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
           vmid: vms[0]?.vmid ?? null,
           node: nodes[0]?.node ?? '',
           metric: 'cpu_pct',
+          device: '',
+          chip: '',
+          feature: '',
+          unit: '',
+          pool: '',
           operator: '>',
           threshold: '90',
           recoveryThreshold: '',
@@ -117,6 +139,20 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
   const nodesForEndpoint = nodes.filter((n) => n.endpointId === values.endpointId);
   const metrics = values.kind === 'vm' ? metricsVm : values.kind === 'node' ? metricsNode : metricsCluster;
 
+  // Métriques capteurs (GitHub #4) : identifiants requis par la métrique courante
+  // (device / chip+feature / unit / pool) — vide si métrique non capteur.
+  const sensorFields = values.kind === 'node' && values.metric ? sensorTargetFields(values.metric as MetricId) : [];
+  // Cibles capteurs filtrées sur le nœud sélectionné.
+  const smartForNode = useMemo(() => (sensorTargets?.smart ?? []).filter((s) => s.node === values.node), [sensorTargets, values.node]);
+  const sensorsForNode = useMemo(() => (sensorTargets?.sensors ?? []).filter((s) => s.node === values.node), [sensorTargets, values.node]);
+  const unitsForNode = useMemo(() => (sensorTargets?.units ?? []).filter((u) => u.node === values.node).map((u) => u.name).sort(), [sensorTargets, values.node]);
+  const poolsForNode = useMemo(() => (sensorTargets?.pools ?? []).filter((p) => p.node === values.node && p.poolName), [sensorTargets, values.node]);
+  const chipsForNode = useMemo(() => [...new Set(sensorsForNode.map((s) => s.chip))].sort(), [sensorsForNode]);
+  const featuresForChip = useMemo(
+    () => (values.chip ? [...new Set(sensorsForNode.filter((s) => s.chip === values.chip).map((s) => s.feature))].sort() : []),
+    [sensorsForNode, values.chip],
+  );
+
   // Si le type de cible change et que la métrique courante n'est pas applicable
   // à la nouvelle cible, on retombe sur la 1re métrique de la liste.
   useEffect(() => {
@@ -125,6 +161,33 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [values.kind]);
+
+  // Métrique capteur changée → on ne garde que les identifiants requis par la
+  // nouvelle métrique (ex. device → chip/feature).
+  const prevMetric = useRef(values.metric);
+  useEffect(() => {
+    if (prevMetric.current === values.metric) return;
+    prevMetric.current = values.metric;
+    setValues((v) => {
+      const fields = v.kind === 'node' && v.metric ? sensorTargetFields(v.metric as MetricId) : [];
+      return {
+        ...v,
+        device: fields.includes('device') ? v.device : '',
+        chip: fields.includes('chip') ? v.chip : '',
+        feature: fields.includes('feature') ? v.feature : '',
+        unit: fields.includes('unit') ? v.unit : '',
+        pool: fields.includes('pool') ? v.pool : '',
+      };
+    });
+  }, [values.metric]);
+
+  // Nœud changé → les identifiants capteurs appartiennent à l'ancien nœud.
+  const prevNode = useRef(values.node);
+  useEffect(() => {
+    if (prevNode.current === values.node) return;
+    prevNode.current = values.node;
+    setValues((v) => ({ ...v, device: '', chip: '', feature: '', unit: '', pool: '' }));
+  }, [values.node]);
 
   // Auto-suggestion hôte Centreon (mapping → nom VM) tant que non touché.
   useEffect(() => {
@@ -212,6 +275,82 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
             ))}
           </Select>
         </label>
+        {/* Sélecteurs du capteur ciblé (GitHub #4) — affichés si la métrique
+            courante est une métrique capteur (cible nœud + identifiant). */}
+        {sensorFields.length > 0 && (
+          <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+            <p className="mb-2 text-[11px] font-medium text-primary">{t('alarm.form.sensor.hint')}</p>
+            {sensorTargets == null && (
+              <p className="mb-2 text-[11px] text-muted-foreground">{t('alarm.form.sensorTargets.empty')}</p>
+            )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {sensorFields.includes('device') && (
+                <label className="flex flex-col gap-1 text-xs font-medium">
+                  {t('alarm.form.device')}
+                  <Select value={values.device} onChange={(e) => set('device', e.target.value)}>
+                    <option value="">{sensorTargets == null ? '—' : '…'}</option>
+                    {smartForNode.map((d) => (
+                      <option key={d.device} value={d.device}>{d.device}{d.model ? ` (${d.model})` : ''}</option>
+                    ))}
+                  </Select>
+                  <span className="font-normal text-muted-foreground">{t('alarm.form.device.hint')}</span>
+                </label>
+              )}
+              {sensorFields.includes('chip') && (
+                <label className="flex flex-col gap-1 text-xs font-medium">
+                  {t('alarm.form.chip')}
+                  <Select value={values.chip} onChange={(e) => { set('chip', e.target.value); set('feature', ''); }}>
+                    <option value="">{sensorTargets == null ? '—' : '…'}</option>
+                    {chipsForNode.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </Select>
+                </label>
+              )}
+              {sensorFields.includes('feature') && (
+                <label className="flex flex-col gap-1 text-xs font-medium">
+                  {t('alarm.form.feature')}
+                  <Select value={values.feature} onChange={(e) => set('feature', e.target.value)} disabled={!values.chip}>
+                    <option value="">{values.chip ? '…' : '—'}</option>
+                    {featuresForChip.map((f) => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                  </Select>
+                  <span className="font-normal text-muted-foreground">{t('alarm.form.sensor.hint')}</span>
+                </label>
+              )}
+              {sensorFields.includes('unit') && (
+                <label className="flex flex-col gap-1 text-xs font-medium">
+                  {t('alarm.form.unit')}
+                  <Input
+                    value={values.unit}
+                    onChange={(e) => set('unit', e.target.value)}
+                    list="alarm-unit-suggestions"
+                    placeholder="pve-firewall.service"
+                  />
+                  <datalist id="alarm-unit-suggestions">
+                    {unitsForNode.map((u) => (
+                      <option key={u} value={u} />
+                    ))}
+                  </datalist>
+                  <span className="font-normal text-muted-foreground">{t('alarm.form.unit.hint')}</span>
+                </label>
+              )}
+              {sensorFields.includes('pool') && (
+                <label className="flex flex-col gap-1 text-xs font-medium">
+                  {t('alarm.form.pool')}
+                  <Select value={values.pool} onChange={(e) => set('pool', e.target.value)}>
+                    <option value="">{sensorTargets == null ? '—' : '…'}</option>
+                    {poolsForNode.map((p) => (
+                      <option key={p.poolName} value={p.poolName!}>{p.poolName} ({p.poolState ?? '—'})</option>
+                    ))}
+                  </Select>
+                  <span className="font-normal text-muted-foreground">{t('alarm.form.pool.hint')}</span>
+                </label>
+              )}
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1 text-xs font-medium">
             {t('alarm.form.operator')}
@@ -224,6 +363,9 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
           <label className="flex flex-col gap-1 text-xs font-medium">
             {t('alarm.form.threshold')}
             <Input type="number" value={values.threshold} onChange={(e) => set('threshold', e.target.value)} />
+            {values.metric === 'sensor_temp_c' && (
+              <span className="font-normal text-muted-foreground">{t('alarm.form.effectiveThreshold.hint')}</span>
+            )}
           </label>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -263,7 +405,11 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
           <Input
             value={values.centreonHost}
             onChange={(e) => { setHostTouched(true); set('centreonHost', e.target.value); }}
-            placeholder={values.kind === 'vm' && values.vmid !== null ? suggestCenteronHost(vmsForEndpoint.find((v) => v.vmid === values.vmid)?.name ?? '') : ''}
+            placeholder={values.kind === 'vm' && values.vmid !== null
+              ? suggestCenteronHost(vmsForEndpoint.find((v) => v.vmid === values.vmid)?.name ?? '')
+              : values.kind === 'node' && values.node
+                ? suggestCenteronHost(values.node)
+                : ''}
           />
           <span className="font-normal text-muted-foreground">{t('alarm.form.host.hint')}</span>
         </label>

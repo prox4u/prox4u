@@ -104,6 +104,21 @@ export const VM_METRICS: MetricId[] = [
   'net_out_bps',
 ];
 
-export const NODE_METRICS: MetricId[] = ['node_cpu_pct', 'node_ram_pct', 'node_disk_pct', 'node_online'];
+/**
+ * Métriques nœud : snapshot poller (node_cpu_pct…node_online) + métriques
+ * CAPTEURS (GitHub #4, source InfluxDB raw via node-sensors — ciblent un nœud
+ * + un identifiant : device / chip+feature / unit / pool).
+ */
+export const NODE_METRICS: MetricId[] = [
+  'node_cpu_pct',
+  'node_ram_pct',
+  'node_disk_pct',
+  'node_online',
+  'smart_temp_c',
+  'smart_health',
+  'sensor_temp_c',
+  'systemd_unit_failed',
+  'zfs_pool_state',
+];
 
 export const CLUSTER_METRICS: MetricId[] = ['cluster_quorum', 'cluster_qdevice'];
