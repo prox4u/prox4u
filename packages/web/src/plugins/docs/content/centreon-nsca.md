@@ -28,8 +28,8 @@ Transforme des **règles de surveillance** sur vos VMs, nœuds et clusters Proxm
 
 1. Ouvrez **Alarmes & Centreon → Nouvelle règle**.
 2. Choisissez :
-   - la **cible** : une VM, un nœud, ou un cluster (quorum / Qdevice) ;
-   - la **métrique** : CPU, RAM, disque, statut VM, IP joignable, uptime, réseau, en ligne nœud, quorum… ;
+   - la **cible** : une VM, un nœud (y compris les **capteurs** du nœud — voir ci-dessous), ou un cluster (quorum / Qdevice) ;
+   - la **métrique** : CPU, RAM, disque, statut VM, IP joignable, uptime, réseau, en ligne nœud, quorum, **ou une métrique capteur** (température SMART, santé SMART, température capteur, unité systemd, état pool ZFS) ;
    - la **condition** : seuil (ex. CPU > 90 %), sens (supérieur / inférieur), sévérité (WARNING / CRITICAL) ;
    - la **fenêtre de confirmation** : la condition doit tenir sur toute la fenêtre avant d'alerter (évite les à-coups).
 3. Enregistrez : Prox4u **provisionne le service Centreon** (service passif), puis enregistre la règle.
@@ -43,6 +43,28 @@ Dans **Alarmes & Centreon**, le tableau liste toutes les règles avec :
 - actions : **activer / désactiver**, **modifier**, **supprimer**, **Tester** (envoie une trame de test), **Reprovisionner** (recrée le service Centreon).
 
 ![Règles de surveillance actives — tableau des règles](/screenshots/alarms.png)
+
+---
+
+## Règles d'alarme capteurs (SMART / température / systemd / ZFS)
+
+En plus des métriques VM / nœud / cluster (API Proxmox), vous pouvez créer des règles sur les **capteurs locaux des nœuds**, collectés par l'agent **Telegraf** (base InfluxDB) :
+
+| Métrique | Ce qu'elle surveille | Cible (nœud + identifiant) |
+|---|---|---|
+| **Température SMART** (`smart_temp_c`) | température d'un disque (°C) | disque (ex. `nvme0n1`) |
+| **Santé SMART** (`smart_health`) | santé SMART (PASSED / FAILED) | disque |
+| **Température capteur** (`sensor_temp_c`) | température CPU / mémoire (lm-sensors) | puce + feature (ex. `amdgpu-pci-0300` / `junction`) |
+| **Unité systemd** (`systemd_unit_failed`) | unité en échec | unité (ex. `openipmi.service`) |
+| **Pool ZFS** (`zfs_pool_state`) | état d'un pool (ONLINE / DEGRADED…) | pool (ex. `local-zpool`) |
+
+**Comment ça marche** :
+- Ces règles lisent **InfluxDB** (agent Telegraf), **pas** l'API Proxmox → elles fonctionnent **même si l'endpoint Proxmox est injoignable**.
+- **Seuil effectif** : pour la température capteur, le seuil appliqué est le **seuil effectif** (seuil personnalisé ≤ seuil firmware, réglé dans **Administration → Seuils capteurs**) — la règle suit l'onglet admin (le seuil saisi dans la règle n'est utilisé que si aucun seuil n'est défini pour le capteur).
+- **Inconnu ≠ dégradé** : si la cible est inconnue (unité introuvable, pool absent, disque sans SMART), la règle n'alerte **pas** (pas de faux positif).
+- **Pool ZFS** : l'état des pools est fourni par le script Telegraf `prox4u-telegraf-zpool.sh` (déploiement `60-telegraf-nodes.sh`) — **l'agent doit être déployé sur le nœud** pour que la règle pool ZFS fonctionne.
+
+> Exemple : règle « Température SMART » sur le nœud `proxmox`, disque `nvme0n1`, condition `> 45 °C`, sévérité WARNING → alarme Centreon si le disque dépasse 45 °C, récupération quand il repasse en dessous.
 
 ---
 
@@ -62,7 +84,7 @@ Prox4u tourne un **moteur d'alarme** qui, toutes les **15 secondes**, évalue le
 - Le **check hôte** sort l'hôte Centreon de `Pending` **sans commande de check active** (l'état est déduit de Proxmox).
 - `okHeartbeatSeconds` / `hostCheckSeconds` = **0** → désactivé.
 
-**Flux** : snapshot Proxmox (poller) → moteur d'alarme (ring-buffer en mémoire) → `send_nsca` → daemon NSCA du poller → Centreon.
+**Flux** : snapshot Proxmox (poller) → moteur d'alarme (ring-buffer en mémoire) → `send_nsca` → daemon NSCA du poller → Centreon. Pour les **règles capteurs**, la source est InfluxDB (agent Telegraf, lecture 1×/min partagée) au lieu du snapshot Proxmox — le reste du flux est identique.
 
 ---
 
@@ -83,7 +105,7 @@ Prox4u tourne un **moteur d'alarme** qui, toutes les **15 secondes**, évalue le
 
 ## Limites connues
 
-- **Transport REST v1** : le code actuel cible encore l'ancienne API Centreon (`/api/restapi/` + Basic auth), supprimée en 26.10. À refondre sur la nouvelle API (`/api/latest/` + `X-AUTH-TOKEN`) — cf. issue #8. **Utilisez CLAPI en attendant.**
+- **Transport REST v1** : cible la nouvelle API Centreon (`/api/latest/` + `X-AUTH-TOKEN`) — refait en issue #13, validé en conditions réelles. CLAPI reste disponible en alternative.
 - **`send_nsca`** doit être installé sur le serveur Prox4u (`apt install nsca-client`), sinon « send_nsca indisponible ».
 - **Service non déployé** : les trames sont rejetées si le service Centreon n'a pas été déployé (génération + `CFGMOVE`). Le provisioning fait cette étape automatiquement.
 - **Quorum par endpoint** : la règle de quorum est par cluster Proxmox (pas de vmid / nœud).
@@ -107,3 +129,8 @@ La règle affiche son état (ok / alerte) dans le tableau. En cas d'échec d'env
 
 **Comment tester sans attendre une vraie alerte ?**
 Action **Tester** sur une règle : envoie une trame de test vers Centreon.
+
+**Une règle capteur (SMART / température / systemd / ZFS) n'alerte pas ?**
+1. L'**agent Telegraf** est-il déployé sur le nœud (`60-telegraf-nodes.sh`) ? La règle **pool ZFS** exige aussi le script `zpool` (déployé avec l'agent).
+2. La **cible** correspond-elle exactement à l'identifiant (disque `nvme0n1` sans `/dev/`, puce + feature, nom d'unité, nom de pool) ? Une cible inconnue ne déclenche jamais (pas d'erreur, pas de faux positif).
+3. Pour la **température capteur**, le **seuil effectif** (Administration → Seuils capteurs) est-il bien en dessous de la température courante ? C'est lui qui prime sur le seuil saisi dans la règle.

@@ -2658,6 +2658,64 @@ coupant les trames.
   Centreon (seul `store.deleteRule`) → un service orphelin peut rester sur Centreon après
   suppression d'une règle (comportement antérieur à la v2).
 
+## ✅ Fait — Règles d'alarme capteurs (SMART / température / systemd / ZFS) (livré, validé prod, clôturé 2026-11-27)
+
+> **2026-11-27** — GitHub issue **#4** (commit `e8e8cf8`) : le reste du P0 — règles d'alarme
+> capteurs dans le module `centreon-nsca` (5 métriques issues de l'agent Telegraf des nœuds →
+> InfluxDB raw). Validé en prod (E2E API, Centreon 192.168.1.130, InfluxDB réel) puis clôturé sur
+> GitHub avec commentaire précis. 891 tests verts (475 shared + 416 server).
+
+**Décision de conception (clé)** : les règles capteurs lisent **InfluxDB raw** (agent Telegraf des
+nœuds), pas le snapshot du poller → elles fonctionnent **même si l'endpoint PVE est injoignable**.
+Le seuil de `sensor_temp_c` est le **seuil effectif** (perso ≤ firmware, onglet « Seuils capteurs »)
+— la règle suit l'onglet admin (repli : le seuil de la règle si aucun seuil défini pour le capteur).
+
+- **5 nouvelles métriques** (shared `centreon-nsca.ts`) : `smart_temp_c` / `smart_health` /
+  `sensor_temp_c` / `systemd_unit_failed` / `zfs_pool_state` — ajoutées à `NODE_METRICS` +
+  `METRIC_SHORT` (SMART-TEMP / SMART-HEALTH / SENSOR-TEMP / SYSTEMD-UNIT / ZFS-POOL).
+  `AlarmTarget` étendu : `device?` / `chip?` / `feature?` / `unit?` / `pool?` (toutes les règles
+  capteurs visent `kind='node'` + identifiant).
+- **Fonctions pures** (shared, testées) : `sensorMetricValue()` (1 = OK / 0 = dégradé /
+  null = inconnu — jamais de faux OK : unité inconnue, pool inconnu, SMART healthOk null,
+  température SMART 0 °C), `resolveSensorThresholds()` (seuil effectif perso ≤ firmware +
+  cohérence hystérésis), `sensorTargetFields()` / `isSensorMetric()` (validation + UI).
+- **Source de données** (server) : `nodesensors/data.ts` — `fetchSensorAlarmData(ctx)` (6
+  requêtes InfluxDB raw : SMART, capteurs, ZFS ARC, **pools ZFS** (table `zpool`), unités en
+  échec, **TOUTES les unités** (sans filtre — distingue « saine » de « inconnue »)), try/catch
+  par section. `nodesensors/routes.ts` refactored dessus (page `/api/node-sensors` inchangée).
+- **Moteur d'alarmes** : `SensorDataCache` (TTL 60 s — 1 lecture InfluxDB/min partagée par toutes
+  les règles capteurs) + injection de `sensorThresholds` (`SensorThresholdStore` partagé via
+  `ctx`, créé dans index.ts). Pour les métriques capteurs : valeur depuis InfluxDB, seuil
+  effectif, pas de retour anticipé si l'endpoint est injoignable.
+- **Pools ZFS** : le plugin zfs de Telegraf ne collecte PAS l'état des pools (ARC + counters I/O
+  optionnels uniquement, pas de champ `state`) → nouveau script exec `prox4u-telegraf-zpool.sh`
+  (`zpool status -p -H -o name,state` → table `zpool`) dans `deploiement/60-telegraf-nodes.sh`
+  (à déployer sur les nœuds).
+- **Routes** : validation des cibles capteurs (POST + PATCH — kind=node + identifiant, sinon 400
+  `bad-sensor-target` / `fields`), `GET /api/alarms/targets` + section `sensors`
+  (smart/sensors/units/pools).
+- **Web** : `rule-form.tsx` — sélecteurs capteurs (disque SMART, chip→feature en cascade, unité +
+  datalist, pool ZFS), reset au changement métrique/nœud, hint « seuil effectif », label
+  `nœud / <identifiant>`, placeholder hôte Centreon = nom du nœud. `nsca-api.ts`
+  (`AlarmSensorTargets`, `buildNodeTarget`, `sensorTargetIdentifier`). i18n fr/en.
+- **Tests** : +34 (21 shared `sensorMetricValue`/`resolveSensorThresholds`/`sensorTargetFields`,
+  7 engine cycles capteurs, 8 routes validation/targets, 5 `data.ts` isolation). **Total 891**
+  (475 shared + 416 server).
+- **Validation prod** (E2E API test-admin, Centreon 192.168.1.130, InfluxDB réel) :
+  **smart_temp_c** cycle complet (nvme0n1 36 °C : seuil 10 → ALARM warn « seuil 10 », seuil 100 →
+  RÉCUP « seuil 100 ») ; **sensor_temp_c** **seuil effectif** (amdgpu junction 37 °C : seuil règle
+  100, perso 30 → ALARM « seuil effectif 30 », perso 90 → RÉCUP « seuil effectif 90 ») ;
+  **systemd_unit_failed** (openipmi.service réellement en échec sur proxmox → ALARM crit, trame
+  envoyée, provisioning OK via REST /api/latest) ; **zfs_pool_state** cycle complet (testpool
+  DEGRADED → ALARM, ONLINE → RÉCUP — chemin de requête `zpool` validé par écriture manuelle) ;
+  **smart_health** (disque healthOk=None → **aucune fausse alarme**). Nettoyage : 5 règles E2E +
+  5 services Centreon supprimés (generate + reload poller), config restaurée aux 4 règles
+  d'origine ; régression `/api/node-sensors` OK (source influx, 7 SMART / 38 capteurs / 3 ZFS /
+  2 unités en échec, 4 seuils perso).
+- **Reste** : déployer la nouvelle config Telegraf sur les nœuds (script exec `zpool`,
+  `60-telegraf-nodes.sh`) pour l'état réel des pools — en attendant `zfs_pool_state` = « pool
+  inconnu » (pas d'échantillon, pas de faux OK).
+
 ---
 
 ## ⏳ Suivi des tâches (GitHub)
@@ -2668,7 +2726,7 @@ Les sections « ✅ Fait » ci-dessus conservent l'historique des livraisons ; l
 de référence (ProxMenux, Telegraf) est dans les skills (`monitoring-proxmenux`, `audit`,
 `node-sensors`, `centreon-nsca`).
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · **#4 P0 règles d'alarme capteurs (clôturée 2026-11-27 — SMART / température / systemd / ZFS, seuil effectif perso ≤ firmware)** · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
 
 ---
 

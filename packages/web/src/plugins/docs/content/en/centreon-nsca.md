@@ -28,8 +28,8 @@ Turns **monitoring rules** on your Proxmox VMs, nodes and clusters into **alarms
 
 1. Open **Alarms & Centreon → Create a monitor**.
 2. Choose :
-   - the **target** : a VM, a node, or a cluster (quorum / Qdevice) ;
-   - the **metric** : CPU, RAM, disk, VM status, IP reachable, uptime, network, node online, quorum… ;
+   - the **target** : a VM, a node (including the node's **sensors** — see below), or a cluster (quorum / Qdevice) ;
+   - the **metric** : CPU, RAM, disk, VM status, IP reachable, uptime, network, node online, quorum, **or a sensor metric** (SMART temperature, SMART health, sensor temperature, systemd unit, ZFS pool state) ;
    - the **condition** : threshold (e.g. CPU > 90 %), direction (above / below), severity (WARNING / CRITICAL) ;
    - the **confirmation window** : the condition must hold for the whole window before alerting (avoids spikes).
 3. Save : Prox4u **provisions the Centreon service** (passive service), then saves the rule.
@@ -43,6 +43,28 @@ In **Alarms & Centreon**, the table lists all rules with :
 - actions : **activate / deactivate**, **Edit**, **Delete**, **Test** (sends a test frame), **Re-provision** (recreates the Centreon service).
 
 ![Active monitoring rules — rules table](/screenshots/alarms.png)
+
+---
+
+## Sensor alarm rules (SMART / temperature / systemd / ZFS)
+
+In addition to the VM / node / cluster metrics (Proxmox API), you can create rules on the **nodes' local sensors**, collected by the **Telegraf** agent (InfluxDB database) :
+
+| Metric | What it monitors | Target (node + identifier) |
+|---|---|---|
+| **SMART temperature** (`smart_temp_c`) | a disk's temperature (°C) | disk (e.g. `nvme0n1`) |
+| **SMART health** (`smart_health`) | SMART health (PASSED / FAILED) | disk |
+| **Sensor temperature** (`sensor_temp_c`) | CPU / memory temperature (lm-sensors) | chip + feature (e.g. `amdgpu-pci-0300` / `junction`) |
+| **systemd unit** (`systemd_unit_failed`) | a unit in failed state | unit (e.g. `openipmi.service`) |
+| **ZFS pool** (`zfs_pool_state`) | a pool's state (ONLINE / DEGRADED…) | pool (e.g. `local-zpool`) |
+
+**How it works** :
+- These rules read **InfluxDB** (Telegraf agent), **not** the Proxmox API → they work **even if the Proxmox endpoint is unreachable**.
+- **Effective threshold** : for the sensor temperature, the applied threshold is the **effective threshold** (custom threshold ≤ firmware threshold, set in **Administration → Sensor thresholds**) — the rule follows the admin tab (the threshold entered in the rule is only used if no threshold is defined for the sensor).
+- **Unknown ≠ degraded** : if the target is unknown (unit not found, pool absent, disk without SMART), the rule does **not** alert (no false positive).
+- **ZFS pool** : the pool state is provided by the Telegraf script `prox4u-telegraf-zpool.sh` (deployment `60-telegraf-nodes.sh`) — **the agent must be deployed on the node** for the ZFS pool rule to work.
+
+> Example : a "SMART temperature" rule on node `proxmox`, disk `nvme0n1`, condition `> 45 °C`, severity WARNING → Centreon alarm if the disk goes above 45 °C, recovery when it drops back below.
 
 ---
 
@@ -62,7 +84,7 @@ Prox4u runs an **alarm engine** that, every **15 seconds**, evaluates the active
 - The **host check** pulls the Centreon host out of `Pending` **without an active check command** (the state is inferred from Proxmox).
 - `okHeartbeatSeconds` / `hostCheckSeconds` = **0** → disabled.
 
-**Flow** : Proxmox snapshot (poller) → alarm engine (in-memory ring buffer) → `send_nsca` → poller NSCA daemon → Centreon.
+**Flow** : Proxmox snapshot (poller) → alarm engine (in-memory ring buffer) → `send_nsca` → poller NSCA daemon → Centreon. For the **sensor rules**, the source is InfluxDB (Telegraf agent, 1 shared read/minute) instead of the Proxmox snapshot — the rest of the flow is identical.
 
 ---
 
@@ -83,7 +105,7 @@ Prox4u runs an **alarm engine** that, every **15 seconds**, evaluates the active
 
 ## Known limitations
 
-- **REST v1 transport** : the current code still targets the old Centreon API (`/api/restapi/` + Basic auth), removed in 26.10. To be reworked on the new API (`/api/latest/` + `X-AUTH-TOKEN`) — see issue #8. **Use CLAPI in the meantime.**
+- **REST v1 transport** : targets the new Centreon API (`/api/latest/` + `X-AUTH-TOKEN`) — reworked in issue #13, validated in real conditions. CLAPI remains available as an alternative.
 - **`send_nsca`** must be installed on the Prox4u server (`apt install nsca-client`), otherwise "send_nsca unavailable".
 - **Service not deployed** : frames are rejected if the Centreon service has not been deployed (generation + `CFGMOVE`). Provisioning does this step automatically.
 - **Quorum per endpoint** : the quorum rule is per Proxmox cluster (no vmid / node).
@@ -107,3 +129,8 @@ The rule displays its state (ok / alert) in the table. If a send fails, the "Tra
 
 **How to test without waiting for a real alert ?**
 The **Test** action on a rule : sends a test frame to Centreon.
+
+**A sensor rule (SMART / temperature / systemd / ZFS) does not alert ?**
+1. Is the **Telegraf agent** deployed on the node (`60-telegraf-nodes.sh`) ? The **ZFS pool** rule also requires the `zpool` script (deployed with the agent).
+2. Does the **target** exactly match the identifier (disk `nvme0n1` without `/dev/`, chip + feature, unit name, pool name) ? An unknown target never triggers (no error, no false positive).
+3. For the **sensor temperature**, is the **effective threshold** (Administration → Sensor thresholds) actually below the current temperature ? It takes precedence over the threshold entered in the rule.
