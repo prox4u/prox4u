@@ -7,6 +7,7 @@ import { InfluxKpiRow } from '../components/kpi-row';
 import { InfluxHistoryCharts } from '../components/history-charts';
 import { InfluxDatabasesCard } from '../components/databases-card';
 import { InfluxArchiveCard } from '../components/archive-card';
+import { InfluxSizingCard } from '../components/sizing-card';
 import { InfluxActionsPanel } from '../components/actions-panel';
 import { Skeleton } from '../../../components/ui/skeleton';
 
@@ -58,6 +59,7 @@ export function InfluxDbPage() {
             <InfluxDatabasesCard databases={data.databases} enabled={data.enabled} />
             <InfluxArchiveCard archive={data.archive} />
           </div>
+          <InfluxSizingCard />
           <InfluxActionsPanel
             canAct={data.canAct}
             enabled={data.enabled}

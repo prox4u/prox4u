@@ -9,6 +9,6 @@ import { registerInfluxDbRoutes } from './routes.js';
  * Les alertes InfluxDB (influxdb-down / write-drops / file-headroom) sont
  * calculées par le poller et poussées dans le snapshot WS (cf. poller.ts).
  */
-export function registerInfluxDbModule(app: FastifyInstance, ctx: AppContext, _poller: Poller): void {
-  registerInfluxDbRoutes(app, ctx);
+export function registerInfluxDbModule(app: FastifyInstance, ctx: AppContext, poller: Poller): void {
+  registerInfluxDbRoutes(app, ctx, poller);
 }

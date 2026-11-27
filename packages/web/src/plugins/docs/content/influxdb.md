@@ -39,6 +39,7 @@ Surveille la **santé** de la base de métriques **InfluxDB 3 Core** qui aliment
    - la **Dernière borne archivée** ;
    - le nombre de **Fichiers** et leur taille totale ;
    - le **Dossier** d'archivage.
+3. La carte **Dimensionnement** (calculateur P3) recommande la config InfluxDB 3 Core adaptée au **parc réel** (VMs / nœuds / datastores du dernier poll + tick) : **file d'écriture**, **flush**, **query-file-limit**, **rétention** — avec la **justification** (repliable) et des **avertissements** si la config actuelle est sous-dimensionnée. Utile avant un déploiement prod (dimensionner sans deviner).
 
 ### 4. Agir sur la base (groupes autorisés)
 

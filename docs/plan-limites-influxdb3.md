@@ -234,7 +234,9 @@ manuellement).
 
 ## Hors périmètre (pour plus tard) — tracé en issues GitHub (prox4u/prox4u)
 - **P3 — Calculateur de dimensionnement** (script VMs/nœuds/tick → config recommandée) :
-  utile avant déploiement prod, mais non retenu dans cette itération. → **GitHub #19**
+  utile avant déploiement prod. → **FAIT** (GitHub #19, 2026-11-27) — fonction pure
+  `computeInfluxSizing` (shared) + CLI `scripts/influx-sizing.mjs` + endpoint
+  `GET /api/influxdb/sizing` + carte « Dimensionnement » de la page /influxdb.
 - **UI « carte InfluxDB »** dans Administration (P4 est d'abord route + alertes).
   → **FAIT** (module `/influxdb` — itération `plan-module-influxdb.md`, 2026-11-23).
 - **Migration vers InfluxDB 3 Enterprise** (compaction, HA, rétention mutable) : décision

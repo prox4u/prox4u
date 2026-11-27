@@ -21,6 +21,7 @@ import type { InfluxHistoryResponse } from '@prox4u/shared';
 import type {
   CapacityResponse,
   InfluxDbResponse,
+  InfluxSizingResponse,
   MetricsResponse,
   NetworkTopologyResponse,
   OvercommitRiskResponse,
@@ -199,6 +200,11 @@ export function fetchInfluxHistory(range: '24h' | '7d' | '30d' = '24h'): Promise
 /** Tables d'une base InfluxDB (défaut consolidated) — liste dynamique, cache serveur 5 min. */
 export function fetchInfluxTables(db?: string): Promise<{ db: string; tables: string[] }> {
   return getJson<{ db: string; tables: string[] }>(`/api/influxdb/tables${db ? `?db=${encodeURIComponent(db)}` : ''}`);
+}
+
+/** Calculateur de dimensionnement (P3, GitHub #19) : parc réel → config recommandée. */
+export function fetchInfluxSizing(): Promise<InfluxSizingResponse> {
+  return getJson<InfluxSizingResponse>('/api/influxdb/sizing');
 }
 
 /** Sauvegardes InfluxDB (GET /api/influxdb/backups) — manifestes lus sur disque. */

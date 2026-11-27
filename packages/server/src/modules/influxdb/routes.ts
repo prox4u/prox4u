@@ -2,7 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { InfluxHistoryRange, InfluxHistoryResponse } from '@prox4u/shared';
-import type { AppContext } from '../../core/poller.js';
+import { computeInfluxSizing } from '@prox4u/shared';
+import type { AppContext, Poller } from '../../core/poller.js';
 import { influxTsToUnix, type InfluxQueryStats, type InfluxWriteStats } from '../../core/influx.js';
 
 /**
@@ -125,7 +126,7 @@ function num(v: string | number | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): void {
+export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext, poller?: Poller): void {
   const historyCache = new Map<string, { at: number; value: InfluxHistoryResponse }>();
   const tablesCache = new Map<string, { at: number; value: string[] }>();
 
@@ -221,6 +222,25 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext): v
   app.get('/api/influxdb/backups', async (_req, reply) => {
     if (!ctx.archiver) return reply.code(503).send({ error: 'unavailable', code: 'archiver-missing' });
     return { backups: ctx.archiver.listBackups() };
+  });
+
+  /**
+   * Calculateur de dimensionnement (P3, GitHub #19) : parc réel (VMs/nœuds/
+   * datastores du dernier poll) + tick → config recommandée + justification +
+   * avertissements si la config actuelle est sous-dimensionnée. Lecture seule.
+   */
+  app.get('/api/influxdb/sizing', async (_req, reply) => {
+    if (!poller) return reply.code(503).send({ error: 'unavailable', code: 'poller-missing' });
+    const input = poller.getSizingInput();
+    const sizing = computeInfluxSizing({
+      ...input,
+      current: {
+        queueMax: ctx.config.influx.queueMax,
+        flushMaxLines: ctx.config.influx.flushMaxLines,
+        queryFileLimit: ctx.config.influx.queryFileLimit,
+      },
+    });
+    return { input, sizing };
   });
 
   // ---------- ACTIONS (guard : admin ou groupe configuré) ----------

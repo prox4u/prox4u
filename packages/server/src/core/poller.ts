@@ -136,6 +136,11 @@ interface EndpointState {
    */
   lastNodes: PveNodeStatus[];
   lastVms: PveVmResource[];
+  /**
+   * Datastores à capacité du dernier poll réussi — conservés pour le calculateur
+   * de dimensionnement (1 ligne/datastore/tick, cf. writeInflux).
+   */
+  lastStorages: Array<{ storage: string }>;
 }
 
 /**
@@ -237,6 +242,7 @@ export class Poller {
         snapshotAge: new Map(),
         lastNodes: [],
         lastVms: [],
+        lastStorages: [],
       });
     }
   }
@@ -369,6 +375,36 @@ export class Poller {
       headroom: fe.headroom,
       chunkFiles: fe.chunkFiles,
       fileLimit: fe.fileLimit,
+    };
+  }
+
+  /**
+   * Entrée du calculateur de dimensionnement InfluxDB 3 Core (P3, GitHub #19) :
+   * parc réel (VMs/nœuds/datastores du dernier poll réussi par endpoint) + tick
+   * du poller. Sert GET /api/influxdb/sizing. Les endpoints jamais pollés
+   * (pas de données) contribuent 0 — le calculateur reste honnête.
+   */
+  getSizingInput(): {
+    vms: number;
+    nodes: number;
+    datastores: number;
+    endpoints: number;
+    tickSeconds: number;
+  } {
+    let vms = 0;
+    let nodes = 0;
+    let datastores = 0;
+    for (const st of this.states.values()) {
+      vms += st.lastVms.length;
+      nodes += st.lastNodes.length;
+      datastores += st.lastStorages.length;
+    }
+    return {
+      vms,
+      nodes,
+      datastores,
+      endpoints: this.states.size,
+      tickSeconds: Math.max(1, Math.round(this.intervalMs / 1000)),
     };
   }
 
@@ -930,6 +966,7 @@ export class Poller {
       // (tick) : un endpoint down conserve son dernier état connu.
       st.lastNodes = nodes;
       st.lastVms = vms;
+      st.lastStorages = storagesForMetrics.map((s) => ({ storage: s.storage }));
       // Failover : si l'API a été servie par un autre nœud que l'URL configurée,
       // on l'expose (transparence) — le nœud endpoint est down, l'app bascule.
       const apiVia = rt.source.activeUrl && rt.source.activeUrl !== rt.url ? rt.source.activeUrl : undefined;

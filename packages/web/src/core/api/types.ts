@@ -68,3 +68,32 @@ export interface InfluxDbResponse {
   archive: { lastArchivedTs: number; archiveDir: string; fileCount: number; totalBytes: number } | null;
   canAct: boolean;
 }
+
+/** Réponse GET /api/influxdb/sizing (P3 — calculateur de dimensionnement, GitHub #19). */
+export interface InfluxSizingResponse {
+  /** parc réel (VMs/nœuds/datastores du dernier poll) + tick du poller. */
+  input: {
+    vms: number;
+    nodes: number;
+    datastores: number;
+    endpoints: number;
+    tickSeconds: number;
+  };
+  sizing: {
+    linesPerTick: number;
+    linesPerMinute: number;
+    linesPerDay: number;
+    queueMax: number;
+    flushMaxLines: number;
+    flushDelayMs: number;
+    queryFileLimit: number;
+    maxQueryWindowDays: number;
+    chunkDays: number;
+    rawRetention: string;
+    consolidatedRetention: string;
+    chunkFiles: number;
+    fileHeadroom: 'ok' | 'warn' | 'crit';
+    justification: string[];
+    warnings: string[];
+  };
+}

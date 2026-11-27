@@ -39,6 +39,7 @@ Monitors the **health** of the **InfluxDB 3 Core** metrics database that powers 
    - the **Last archived bound**;
    - the number of **Files** and their total size;
    - the archive **Directory**.
+3. The **Sizing** card (P3 calculator) recommends the InfluxDB 3 Core configuration adapted to the **real fleet** (VMs / nodes / datastores from the last poll + tick): **write queue**, **flush**, **query-file-limit**, **retention** — with the **justification** (collapsible) and **warnings** if the current configuration is undersized. Useful before a production deployment (size without guessing).
 
 ### 4. Act on the database (authorized groups)
 

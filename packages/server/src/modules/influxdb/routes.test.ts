@@ -38,6 +38,10 @@ interface MockOpts {
   archiveDir?: string;
   /** dossier de sauvegardes (routes backup/restore/download) */
   backupDir?: string;
+  /** config d'écriture actuelle (route sizing — détection sous-dimensionnement) */
+  queueMax?: number;
+  flushMaxLines?: number;
+  queryFileLimit?: number;
   /** résultat de archiver.backupDatabase (mock) */
   backupResult?: { file: string; tables: Array<{ table: string; rows: number }>; totalRows: number };
   /** sauvegardes renvoyées par archiver.listBackups (mock) */
@@ -60,6 +64,9 @@ function makeCtx(over: MockOpts = {}): AppContext {
       influx: {
         archiveDir: over.archiveDir ?? '/tmp/prox4u-influx-test',
         backupDir: over.backupDir ?? '/tmp/prox4u-influx-backup-test',
+        queueMax: over.queueMax ?? 20_000,
+        flushMaxLines: over.flushMaxLines ?? 1_000,
+        queryFileLimit: over.queryFileLimit ?? 10_000,
       },
     } as AppContext['config'],
     endpoints: [],
@@ -116,14 +123,18 @@ function makeCtx(over: MockOpts = {}): AppContext {
   return ctx;
 }
 
-async function boot(ctx: AppContext, authUser?: { id: string; role: Role; groupIds: string[] }): Promise<FastifyInstance> {
+async function boot(
+  ctx: AppContext,
+  authUser?: { id: string; role: Role; groupIds: string[] },
+  poller?: { getSizingInput: () => { vms: number; nodes: number; datastores: number; endpoints: number; tickSeconds: number } },
+): Promise<FastifyInstance> {
   const app = Fastify();
   if (authUser) {
     app.addHook('onRequest', async (req) => {
       req.authUser = authUser;
     });
   }
-  registerInfluxDbRoutes(app, ctx);
+  registerInfluxDbRoutes(app, ctx, poller as never);
   await app.ready();
   return app;
 }
@@ -131,6 +142,65 @@ async function boot(ctx: AppContext, authUser?: { id: string; role: Role; groupI
 const admin = { id: 'u1', role: 'admin' as Role, groupIds: [] };
 const userAdmin = { id: 'u2', role: 'user' as Role, groupIds: ['g-admin'] };
 const userOther = { id: 'u3', role: 'user' as Role, groupIds: ['g-other'] };
+
+describe('GET /api/influxdb/sizing (P3 — calculateur de dimensionnement, GitHub #19)', () => {
+  const mockPoller = (over: {
+    vms?: number;
+    nodes?: number;
+    datastores?: number;
+    endpoints?: number;
+    tickSeconds?: number;
+  } = {}) => ({
+    getSizingInput: () => ({
+      vms: over.vms ?? 500,
+      nodes: over.nodes ?? 10,
+      datastores: over.datastores ?? 5,
+      endpoints: over.endpoints ?? 2,
+      tickSeconds: over.tickSeconds ?? 5,
+    }),
+  });
+
+  it('parc réel + config actuelle → recommandation + justification + warnings', async () => {
+    const app = await boot(makeCtx({ flushMaxLines: 1_000 }), admin, mockPoller({ vms: 500, nodes: 10, endpoints: 2, datastores: 5 }));
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/sizing' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    // input = parc réel du poller
+    expect(body.input).toEqual({ vms: 500, nodes: 10, datastores: 5, endpoints: 2, tickSeconds: 5 });
+    // 1 + 2 + 10×2 + 500×3 + 5 = 1528 lignes/tick
+    expect(body.sizing.linesPerTick).toBe(1528);
+    // tick 5 s → 12 ticks/min
+    expect(body.sizing.linesPerMinute).toBe(1528 * 12);
+    // flushMaxLines recommandé 2300 > actuel 1000 → warning
+    expect(body.sizing.flushMaxLines).toBe(2300);
+    expect(body.sizing.warnings.some((w: string) => w.includes('flushMaxLines'))).toBe(true);
+    // justification présente (5 lignes)
+    expect(body.sizing.justification).toHaveLength(5);
+    // config requête constante
+    expect(body.sizing.queryFileLimit).toBe(10_000);
+    await app.close();
+  });
+
+  it('config actuelle suffisante → aucun warning', async () => {
+    const app = await boot(
+      makeCtx({ flushMaxLines: 5_000, queueMax: 50_000, queryFileLimit: 20_000 }),
+      admin,
+      mockPoller({ vms: 100, nodes: 4 }),
+    );
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/sizing' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sizing.warnings).toEqual([]);
+    await app.close();
+  });
+
+  it('sans poller → 503 poller-missing', async () => {
+    const app = await boot(makeCtx(), admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/sizing' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().code).toBe('poller-missing');
+    await app.close();
+  });
+});
 
 describe('GET /api/influxdb', () => {
   it('enabled : ping/version/bases + compteurs + headroom + canAct', async () => {

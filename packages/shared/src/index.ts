@@ -1,5 +1,7 @@
 export * from './types.js';
 export { computeHealthScore } from './health.js';
+export { computeInfluxSizing, SIZING_CONSTANTS } from './influx-sizing.js';
+export type { InfluxSizingInput, InfluxSizingResult } from './influx-sizing.js';
 export { deriveQuorumState, deriveQdeviceState, qdeviceStateFromCorosync } from './quorum.js';
 export { computePra } from './pra.js';
 export { linearRegression, buildForecast } from './capacity.js';
