@@ -1,6 +1,6 @@
 # Prox4u — État d'avancement
 
-> **Dernière mise à jour : 2026-11-20**
+> **Dernière mise à jour : 2026-11-27**
 > Application de supervision vCenter-like pour Proxmox VE (managers/DSI).
 > Conception de référence : `.opencode/skills/proxmox-web/SKILL.md`
 
@@ -14,7 +14,7 @@
 - App en **HTTPS** (cert auto-signé, SAN localhost + IP VM) ; InfluxDB en HTTPS sur 8181 ; **Explorer** (UI InfluxDB 3) en HTTPS sur 8888
 - Logs / pid : `logs/` (à la racine du projet, rien dans /tmp)
 - Cron : `@reboot` + keepalive minute par minute sur `server.sh start` (idempotent) ; le conteneur InfluxDB se relance seul au boot (`restart: unless-stopped`)
-- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (641 tests : 389 shared + 252 server)
+- Dev (hot reload) : `pnpm dev` · Build : `pnpm build` · Vérif : `pnpm typecheck && pnpm test` (825 tests : 444 shared + 381 server)
 
 ---
 
@@ -2413,6 +2413,57 @@ Export/restore de l'administration (users + groupes + **layouts de grilles par u
  - Skill `general` §4.1 (flux PRA global dans le poller).
  - GitHub issue #11 (PRA multi-sites) : **clôturée 2026-11-22** — commentaire « PRA global livré » + commentaire de clôture (code terminé ; `sites.json` = config par déploiement, documentée via `sites.example.json` + guide `DEPLOY.md` §6 — commit `ff598c9`).
 
+## ✅ Fait — Gérer les limites InfluxDB 3 Core (cible 500 VMs 24/7) — P1–P5 (livré, tests verts)
+
+> **2026-11-23** (commit `24ef3bc`) — Plan : `docs/plan-limites-influxdb3.md` (tâches cochées).
+> InfluxDB 3 Core = **single-node**, **pas de compaction** (le compactor est Enterprise) → le nombre
+> de fichiers Parquet croît linéairement ; `--query-file-limit=10000` (≈ 69 j/table) est le levier.
+> Cinq livraisons pour **gérer** (pas subir) les limites à 500 VMs 24/7, **zéro nouvelle dépendance**
+> Node (le Parquet vient de l'API InfluxDB, header `Accept`).
+
+### Implémentation
+- **P1 — Backpressure d'écriture** (`core/influx.ts`) : file dimensionnée `INFLUX_QUEUE_MAX`
+  (défaut **20 000** — tient ~15 ticks de 500 VMs, plus de débordement/abandon sur un pic), batch
+  `INFLUX_FLUSH_MAX_LINES` (défaut 1 000), compteurs monotones `enqueued/flushed/dropped/
+  failedBatches/lastDropAt/lastErrorAt` + `getStats()`, dead-letter borné `INFLUX_FLUSH_MAX_RETRIES`
+  (défaut 3 lots consécutifs en échec → `dropped` au lieu de ré-enfiler indéfiniment).
+- **P2 — Requêtes long terme chunkées** (`core/influx.ts` `querySqlChunked(db, buildSql, from, to)`) :
+  découpe `[from, to)` en tranches `INFLUX_QUERY_CHUNK_DAYS` (défaut **30 j** = 4 320 fichiers
+  < 10 000), concatène (tranches disjointes), tranche « table absente » ignorée. Appliqué à
+  `mergedTempBuckets` (consolidated `year` = 365 j) → la vue « 1 an » capteurs/SMART remarche
+  au-delà de ~69 j.
+- **P4 — Auto-monitoring** : route `GET /api/influxdb` (module `modules/influxdb/` — la UI est dans
+  le § module ci-dessous), `getServerInfo()` (version défensive), stats requête (latence + dernier
+  error), `fileEstimate` (estimation fichiers vs `INFLUX_QUERY_FILE_LIMIT` → `headroom` ok/warn/crit),
+  self-telemetry `influxdb_self` (1 ligne/tick dans `raw`), alertes `influxdb-write-drops` /
+  `influxdb-file-headroom` / `influxdb-down` (+ i18n fr/en).
+- **P5 — Archivage** (`core/influx-archiver.ts`, pattern consolidateur) : timer
+  `INFLUX_ARCHIVE_INTERVAL` (défaut 6 h), export CSV `consolidated` `[lastArchivedTs,
+  now - INFLUX_ARCHIVE_AGE]` (défaut 90 j) → `data/influx-archive/<table>-<YYYY-MM-DD>.csv`
+  (1 fichier/table/jour), état `data/archive-state.json` (tmp+rename, n'avance que si succès → reprise).
+- **Env** (`.env.example` + `DEPLOY.md` §InfluxDB) : `INFLUX_QUEUE_MAX`, `INFLUX_FLUSH_MAX_LINES`,
+  `INFLUX_FLUSH_MAX_RETRIES`, `INFLUX_QUERY_CHUNK_DAYS`, `INFLUX_QUERY_FILE_LIMIT`, `INFLUX_ARCHIVE_*`.
+
+### Fichiers
+- `packages/server/src/core/influx.ts` (P1/P2/P4) · `influx-archiver.ts` (P5, nouveau) · `config.ts`
+  (env) · `poller.ts` (self-telemetry + `influxAlerts`) · `modules/influxdb/routes.ts` (P4, nouveau) ·
+  `modules/dashboard/routes.ts` (`/api/health` section `influx`) · `modules/nodesensors/routes.ts`
+  (P2 chunké) · `index.ts` (module + archiver) · `i18n/{fr,en}.ts` (alertes)
+- Tests : `influx.test.ts` · `influx-archiver.test.ts` · `modules/influxdb/routes.test.ts` ·
+  `poller.test.ts`
+- `docs/plan-limites-influxdb3.md` (plan, tâches cochées) · `deploiement/DEPLOY.md` (+ `.en.md`) ·
+  `.env.example`
+
+### Vérifications effectuées
+- **Tests** : P1 (débordement file, dead-letter, compteurs) · P2 (découpage, concat, tranche
+  « table absente » ignorée) · P4 (route enabled/désactivé + headroom) · P5 (export CSV 1/table/jour,
+  table absente ignorée, erreur → état figé, reprise) — tous verts.
+- **P2 validé partiellement** (2026-11-27, GitHub #17) : vue 1 an capteur (656 pts) + SMART (727 pts)
+  OK sur 21 j de données (chunking 13 tranches, 0 erreur) ; la concaténation multi-chunks avec données
+  > 69 j reste à re-tester quand le parc aura > 69 j (~14/01/2027).
+
+---
+
 ## ✅ Fait — Module « InfluxDB 3 Core » : widget vue d'ensemble + page /influxdb + actions (livré, validé E2E navigateur)
 
 > **2026-11-23** — Vision + action sur la base de métriques : **widget « InfluxDB 3 Core »**
@@ -2477,10 +2528,87 @@ Export/restore de l'administration (users + groupes + **layouts de grilles par u
      (pattern `request()` d'`auth-api.ts`).
 
 ### Backlog (issues GitHub — voir § Suivi des tâches)
-- **#14** Enterprise (stratégique) · **#15** Parquet · **#16** Version « — » + Rétention « infinie »
-  (limites API : `server-info` 404 + GET bases sans rétention) · **#17** tests restants
-  (P2 vue 1 an > 69 j + `influxAlerts()`) · **#18** sharding (stratégique) · **#19** P3
-  calculateur de dimensionnement.
+- **Clôturées 2026-11-27** : **#15** Parquet · **#16** Version « — » + Rétention · **#17** tests
+  restants (P2 vue 1 an + `influxAlerts()`) · **#19** P3 calculateur de dimensionnement
+  (voir § ci-dessous).
+- **Ouvertes** : **#14** Enterprise (stratégique) · **#18** sharding multi-endpoints (stratégique).
+
+---
+
+## ✅ Fait — Export CSV ZIP + sauvegarde/restauration de bases InfluxDB (livré, validé E2E)
+
+> **2026-11-25** (commits `5ca76ab`/`24401c7`/`963bcb0` export, `d702af0`/`03125e9` backup/restore) —
+> prolonge le module /influxdb : l'export devient un **ZIP téléchargeable** (multi-tables, zéro
+> stockage disque) et on ajoute la **sauvegarde/restauration de bases** (ZIP + manifeste).
+> Détail : skill `api` (§ /api/influxdb) + notice docs FR/EN + `DEPLOY.md` §Sauvegarde.
+
+### Implémentation
+- **Export CSV multi-tables → ZIP** : `POST /api/influxdb/actions/export` (liste de tables dynamique
+  — `GET /api/influxdb/tables?db=`) + `GET /api/influxdb/actions/download` (téléchargement direct du
+  ZIP, **zéro écriture disque** — streaming en mémoire). 1 CSV/table.
+- **Sauvegarde de bases** : `POST /api/influxdb/actions/database/backup` → `backupDatabase()`
+  (`influx-archiver.ts`) : **ZIP** (1 CSV/table + `manifest.json` : db, createdAt, tables, rows) dans
+  `INFLUX_BACKUP_DIR` (défaut `data/influx-backups/`). `GET /api/influxdb/backups` → `listBackups()`
+  (manifestes lus, tri décroissant, non-backup ignoré).
+- **Restauration** : `POST /api/influxdb/actions/database/restore` → `restoreBackup(file)` :
+  `createDatabase` + `createTable` + réécriture line-protocol (champ absent → `skipped`), basename +
+  pattern fixe `backup-[\w.-]+\.zip` (pas de path traversal). **Drop avec sauvegarde** :
+  `database/drop` accepte `backup: true` → sauvegarde OBLIGATOIRE (doit réussir) avant le drop.
+- **Étape de validation** avant exécution des actions destructives (commit `abe06c1`).
+- **i18n** fr/en + **DEPLOY.md** (§Sauvegarde : `data/influx-backups/` + `data/influx-archive/`) +
+  `.env.example` (`INFLUX_BACKUP_DIR`).
+
+### Fichiers
+- `packages/server/src/core/influx-archiver.ts` (`backupDatabase`/`restoreBackup`/`listBackups`) ·
+  `influx-archiver.test.ts` (+5 tests : backup ZIP, listBackups, restore round-trip, champ absent
+  skipped, fichier absent) · `modules/influxdb/routes.ts` (routes backup/restore/backups + download)
+  · `routes.test.ts` · `config.ts` (`INFLUX_BACKUP_DIR`)
+- `packages/web/src/plugins/influxdb/` (export ZIP + backup/restore dans actions-panel) ·
+  `core/api/apiClient.ts` · `i18n/{fr,en}.ts`
+- `deploiement/DEPLOY.md` (+ `.en.md`) · `.env.example` · `docs/` (notice sauvegarde/restauration FR/EN)
+
+### Vérifications effectuées
+- **Tests** : backup ZIP (1 CSV/table + manifeste), listBackups (tri + non-backup ignoré + dossier
+  absent → []), restore round-trip (createDatabase + createTable + line-protocol), champ absent →
+  skipped, fichier absent → « backup not found » — verts.
+- **E2E** : ZIP de test `data/influx-backups/backup-proxmox-2026-11-25-184123.zip` (28 M) créé et
+  **conservé** (jamais supprimé).
+
+---
+
+## ✅ Fait — Itération issues InfluxDB GitHub #16 / #17 / #15 / #19 (livrées, clôturées 2026-11-27)
+
+> **2026-11-27** — 4 issues traitées séquentiellement (commits `c09b734` → `d3a1d64` → `97ee4a6` →
+> `6dfcc12`), chacune validée en prod puis clôturée sur GitHub avec commentaire précis. 825 tests verts.
+
+### #16 — Affichage honnête de la rétention (commit `c09b734`)
+Rétention « — » si inconnue (l'API InfluxDB 3 Core ne l'expose pas sur GET bases) au lieu de
+« infinie » trompeuse ; KPI Version « — » si `server-info` indisponible (404). Honnêteté d'affichage.
+
+### #17 — Tests restants (commit `d3a1d64`)
+`influxAlerts()` exportée + **10 tests** (`poller.test.ts` : down/drops/file-limit, fenêtres 60 s,
+cumul). **P2 vue 1 an validé partiellement** : capteur (656 pts) + SMART (727 pts) OK sur 21 j
+(chunking 13 tranches, 0 erreur) ; la concaténation multi-chunks avec données > 69 j reste à
+re-tester quand le parc aura > 69 j (~14/01/2027).
+
+### #15 — Export Parquet en option (commit `97ee4a6`)
+Parquet **généré par l'API InfluxDB** (header `Accept: application/vnd.apache.parquet`), zéro
+dépendance Node. `querySqlRaw`/`querySqlChunkedRaw` (`influx.ts`) + `tableParquet`
+(`influx-archiver.ts`) + param `format` sur la route export (400 `bad-format`) + sélecteur
+CSV/Parquet web. 1 fichier/tranche de 30 j ; `rows: null` (non compté en Parquet). Gain ×3,2 vs CSV.
++13 tests (378 server).
+
+### #19 — Calculateur de dimensionnement (commit `6dfcc12`)
+`computeInfluxSizing` (shared, 12 tests) + CLI `scripts/influx-sizing.mjs` + `GET /api/influxdb/sizing`
+(poller `getSizingInput()` + `lastStorages` dans `EndpointState`) + carte « Dimensionnement »
+/influxdb + i18n fr/en. Modèle d'écriture = 1 globale + 1/endpoint + 2/nœud + ~3/VM + 1/datastore
+par tick ; config requête **indépendante du parc** ; `flushMaxLines = max(1000, roundUp(linesPerTick
+×1.5, 100))`, `queueMax = max(20000, roundUp(linesPerTick×10, 1000))` ; tick réel = 5 s. Prod :
+8 VMs/1 nœud/4 datastores/2 endpoints/tick 5 s → 33 lignes/tick, 0 warning.
+
+### Piège rencontré (corrigé — ne pas réintroduire)
+- **Indentation des listes Markdown dans les notices docs** = **3 espaces** (pas 4) — un edit de
+  notice FR a d'abord échoué car l'indentation réelle était 3 espaces.
 
 ---
 
@@ -2492,7 +2620,7 @@ Les sections « ✅ Fait » ci-dessus conservent l'historique des livraisons ; l
 de référence (ProxMenux, Telegraf) est dans les skills (`monitoring-proxmenux`, `audit`,
 `node-sensors`, `centreon-nsca`).
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet** · **#16 InfluxDB affichage Version + Rétention** · **#17 InfluxDB vérifs/tests restants (P2 vue 1 an + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement**. Labels : `validation` / `feature` / `decision` / `enhancement`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — #1 Alarmes & Centreon (validation) · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · #4 P0 règles d'alarme capteurs · #5 P2 moteur d'alarmes v2 · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
 
 ---
 
