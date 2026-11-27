@@ -2645,6 +2645,15 @@ coupant les trames.
   règle hystérésis 90/80 + suppress 300 s, 400 `bad-recovery-threshold`, `/ack`
   (`acknowledgedBy=test-admin`) + `/unack`, engine démarré (tick 15 s, heartbeat + check hôte OK,
   zéro erreur).
+- **Validation E2E conditions réelles (Centreon 192.168.1.130, API monitoring)** — sauvegarde avant
+  (JSON app + état services Centreon) : **alarme** `ram_pct > 40` (VM 48,6 %) → service **CRITICAL**
+  ; **zone morte** (seuil → 55) → **aucune trame**, `lastAlarmAt` invariant, reste CRITICAL ;
+  **récupération hystérésis** (récup → 50) → service **OK** « Récupération — … » ; **ack** pendant
+  l'alarme → `acknowledgedBy=test-admin` ; **auto-résolution** → ack réinitialisé à la récup ;
+  **suppression** `suppressSeconds 120` + condition de récup vraie → toujours en alarme à +65 s,
+  récup à +140 s ; **heartbeat OK** à +300 s exact ; **trame de test** `POST /test` visible.
+  Nettoyage : 2 règles + 5 services Centreon supprimés (dont 3 orphelins en Pending préexistants :
+  `Prox4u-Test`, `Prox4u-Alarm-CPU`, `Prox4u-E2E-Hysteresis`) — il reste les 4 règles/services réels.
 - **Écart préexistant (non traité, hors périmètre #5)** : la route DELETE ne retire pas le service
   Centreon (seul `store.deleteRule`) → un service orphelin peut rester sur Centreon après
   suppression d'une règle (comportement antérieur à la v2).
