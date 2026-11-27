@@ -171,6 +171,22 @@ export interface AlarmRule {
   /** template du plugin_output : {{vm}} {{metric}} {{value}} {{threshold}}. */
   messageTemplate: string;
   active: boolean;
+  // --- Moteur v2 (hystérésis / suppression / ack) ---
+  /**
+   * Seuil de récupération (hystérésis) — null = même seuil que le déclenchement.
+   * La règle ne récupère que si la valeur repasse de l'autre côté de CE seuil
+   * (ex. op « > » : déclenche >90, récupère ≤80) → zone morte anti-flapping.
+   */
+  recoveryThreshold: number | null;
+  /**
+   * Durée minimale de firing en secondes (0 = off) : une fois en alarme, la règle
+   * reste en alarme au moins cette durée avant de pouvoir récupérer (anti-boucle).
+   */
+  suppressSeconds: number;
+  /** timestamp (ms) du dernier acknowledgment (null = non ack). */
+  acknowledgedAt: number | null;
+  /** user ayant acké l'alarme (null = non ack). */
+  acknowledgedBy: string | null;
   // --- Statuts (jamais bloquants — robustesse) ---
   provisionStatus: ProvisionStatus;
   provisionMessage: string;
@@ -383,6 +399,49 @@ export function evaluateAlarm(
   if (recent.length === 0) return { firing: false, value: samples[samples.length - 1].value };
   const firing = recent.every((s) => conditionMet(operator, threshold, s.value));
   return { firing, value: recent[recent.length - 1].value };
+}
+
+export interface AlarmHysteresisResult {
+  /** true si la condition de DÉCLENCHEMENT tient sur toute la fenêtre (ok → firing). */
+  trigger: boolean;
+  /** true si la condition de RÉCUPÉRATION tient sur toute la fenêtre (firing → ok). */
+  recover: boolean;
+  /** valeur la plus récente (affichage), null si aucun échantillon. */
+  value: number | null;
+}
+
+/**
+ * Évaluation avec HYSTÉRÉSIS (moteur v2, GitHub #5) : le seuil de récupération
+ * est distinct (et plus sûr) du seuil de déclenchement → zone morte anti-flapping.
+ *
+ * - `trigger` : tous les échantillons de la fenêtre [now - confirmSeconds, now]
+ *   vérifient `conditionMet(operator, threshold, v)` (comme `evaluateAlarm`).
+ * - `recover` : tous les échantillons vérifient `!conditionMet(operator,
+ *   recoveryThreshold ?? threshold, v)` — la valeur est repassée du côté SÛR du
+ *   seuil de récupération. Ex. op « > » seuil 90 / récupération 80 : déclenche
+ *   à >90 soutenu, récupère à ≤80 soutenu ; entre 80 et 90 = zone morte (aucun
+ *   basculement). `recoveryThreshold = null` → comportement d'origine (récupère
+ *   dès que la valeur ne dépasse plus le seuil de déclenchement).
+ *
+ * Une fenêtre vide (pas d'échantillons récents) ne déclenche NI ne récupère.
+ */
+export function evaluateAlarmHysteresis(
+  operator: AlarmOperator,
+  threshold: number,
+  recoveryThreshold: number | null,
+  confirmSeconds: number,
+  samples: MetricSample[],
+  now: number,
+): AlarmHysteresisResult {
+  if (samples.length === 0) return { trigger: false, recover: false, value: null };
+  const windowStart = now - confirmSeconds * 1000;
+  const recent = samples.filter((s) => s.t >= windowStart);
+  const value = recent.length > 0 ? recent[recent.length - 1].value : samples[samples.length - 1].value;
+  if (recent.length === 0) return { trigger: false, recover: false, value };
+  const recThreshold = recoveryThreshold ?? threshold;
+  const trigger = recent.every((s) => conditionMet(operator, threshold, s.value));
+  const recover = recent.every((s) => !conditionMet(operator, recThreshold, s.value));
+  return { trigger, recover, value };
 }
 
 // ---------------------------------------------------------------------------

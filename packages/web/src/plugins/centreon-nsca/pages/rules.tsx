@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
-import { Pencil, Plus, RefreshCw, RotateCw, Search, Send, Trash2 } from 'lucide-react';
+import { Check, Pencil, Plus, RefreshCw, RotateCw, Search, Send, Trash2, Undo2 } from 'lucide-react';
 import type { AlarmRule, AlarmStats, CentreonPoller } from '@prox4u/shared';
 import { Card, CardContent } from '../../../components/ui/card';
 import { Button } from '../../../components/ui/button';
@@ -10,7 +10,7 @@ import { Skeleton } from '../../../components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/table';
 import { alarmsApi, type ProvisionOutcome } from '../lib/nsca-api';
 
-type SortKey = 'name' | 'target' | 'metric' | 'threshold' | 'poller' | 'host' | 'service' | 'state' | 'provision' | 'lastAlarm';
+type SortKey = 'name' | 'target' | 'metric' | 'threshold' | 'poller' | 'host' | 'service' | 'alarm' | 'state' | 'provision' | 'lastAlarm';
 
 function targetLabel(r: AlarmRule): string {
   return r.target.kind === 'vm' ? `${r.target.label} (#${r.target.vmid})` : r.target.label;
@@ -20,6 +20,14 @@ function provisionTone(r: AlarmRule): string {
   if (r.provisionStatus === 'ok') return 'bg-ok/15 text-ok';
   if (r.provisionStatus === 'error') return 'bg-crit/15 text-crit';
   return 'bg-warn/15 text-warn';
+}
+
+/** Teinte de l'état d'alarme (machine à états du moteur — v2). */
+function alarmTone(state: AlarmRule['currentState']): string {
+  if (state === 'ok') return 'bg-ok/15 text-ok';
+  if (state === 'warn') return 'bg-warn/15 text-warn';
+  if (state === 'crit') return 'bg-crit/15 text-crit';
+  return 'bg-muted-foreground/15 text-muted-foreground';
 }
 
 /**
@@ -87,6 +95,7 @@ export function RulesPage() {
           case 'poller': return r.pollerId;
           case 'host': return r.centreonHost;
           case 'service': return r.centreonService;
+          case 'alarm': return { ok: 0, warn: 1, crit: 2, unknown: 3 }[r.currentState];
           case 'state': return r.active ? 1 : 0;
           case 'provision': return r.provisionStatus;
           case 'lastAlarm': return r.lastAlarmAt ?? 0;
@@ -120,6 +129,11 @@ export function RulesPage() {
     void load();
   }
   function doEdit(r: AlarmRule) { navigate(`/alarms/edit/${r.id}`); }
+  async function doAck(r: AlarmRule) {
+    if (r.acknowledgedAt) await alarmsApi.unack(r.id);
+    else await alarmsApi.ack(r.id);
+    void load();
+  }
 
   function toggleSort(key: SortKey) {
     setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
@@ -214,6 +228,7 @@ export function RulesPage() {
                 <Th k="poller">{t('alarm.col.poller')}</Th>
                 <Th k="host">{t('alarm.col.host')}</Th>
                 <Th k="service">{t('alarm.col.service')}</Th>
+                <Th k="alarm">{t('alarm.col.alarm')}</Th>
                 <Th k="state">{t('alarm.col.state')}</Th>
                 <Th k="provision">{t('alarm.col.provision')}</Th>
                 <Th k="lastAlarm">{t('alarm.col.lastAlarm')}</Th>
@@ -223,17 +238,35 @@ export function RulesPage() {
             <TableBody>
               {visible.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="py-8 text-center text-xs text-muted-foreground">{t('alarm.empty')}</TableCell>
+                  <TableCell colSpan={12} className="py-8 text-center text-xs text-muted-foreground">{t('alarm.empty')}</TableCell>
                 </TableRow>
               ) : visible.map((r) => (
                 <TableRow key={r.id}>
                   <TableCell className="font-medium">{r.name}</TableCell>
                   <TableCell className="text-muted-foreground">{targetLabel(r)}</TableCell>
                   <TableCell>{t(`alarm.metric.${r.metric}`)}</TableCell>
-                  <TableCell className="tabular-nums">{r.operator} {r.threshold}</TableCell>
+                  <TableCell className="tabular-nums">
+                    {r.operator} {r.threshold}
+                    {r.recoveryThreshold != null && (
+                      <span className="text-muted-foreground"> · {t('alarm.col.recovery')} {r.recoveryThreshold}</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{r.pollerId}</TableCell>
                   <TableCell className="text-muted-foreground">{r.centreonHost}</TableCell>
                   <TableCell className="text-muted-foreground">{r.centreonService}</TableCell>
+                  <TableCell>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${alarmTone(r.currentState)}`}>
+                      {t(`alarm.sev.${r.currentState}`)}
+                    </span>
+                    {r.acknowledgedAt != null && (
+                      <span
+                        className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+                        title={t('alarm.acked.hint', { by: r.acknowledgedBy ?? '—', at: new Date(r.acknowledgedAt).toLocaleString() })}
+                      >
+                        ✓ {r.acknowledgedBy ?? '—'}
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <button
                       type="button"
@@ -254,6 +287,9 @@ export function RulesPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="sm" title={r.acknowledgedAt ? t('alarm.action.unack') : t('alarm.action.ack')} onClick={() => void doAck(r)}>
+                        {r.acknowledgedAt ? <Undo2 className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
+                      </Button>
                       <Button variant="ghost" size="sm" title={t('alarm.action.test')} onClick={() => void doTest(r)}><Send className="h-3.5 w-3.5" /></Button>
                       <Button variant="ghost" size="sm" title={t('alarm.action.reprovision')} onClick={() => void doReprovision(r)}><RotateCw className="h-3.5 w-3.5" /></Button>
                       <Button variant="ghost" size="sm" title={t('alarm.action.edit')} onClick={() => doEdit(r)}><Pencil className="h-3.5 w-3.5" /></Button>

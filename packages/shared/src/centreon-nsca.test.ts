@@ -8,6 +8,7 @@ import {
   defaultServiceName,
   escapeNscaField,
   evaluateAlarm,
+  evaluateAlarmHysteresis,
   METRIC_IDS,
   nscaCfgContent,
   nscaReturnCode,
@@ -169,6 +170,84 @@ describe('evaluateAlarm', () => {
     const r = evaluateAlarm('>', 90, 60, samples, t0);
     expect(r.firing).toBe(false);
     expect(r.value).toBe(99); // dernière valeur connue
+  });
+});
+
+describe('evaluateAlarmHysteresis (moteur v2 — GitHub #5)', () => {
+  const t0 = 1_000_000_000;
+  it('aucun échantillon → trigger/recover false, value null', () => {
+    const r = evaluateAlarmHysteresis('>', 90, 80, 300, [], t0);
+    expect(r).toEqual({ trigger: false, recover: false, value: null });
+  });
+  it('aucun échantillon dans la fenêtre → trigger/recover false, value = dernière connue', () => {
+    const r = evaluateAlarmHysteresis('>', 90, 80, 60, [{ t: t0 - 600_000, value: 99 }], t0);
+    expect(r.trigger).toBe(false);
+    expect(r.recover).toBe(false);
+    expect(r.value).toBe(99);
+  });
+  it('trigger : toute la fenêtre au-dessus du seuil de déclenchement', () => {
+    const samples: MetricSample[] = [
+      { t: t0 - 60_000, value: 95 },
+      { t: t0, value: 94 },
+    ];
+    const r = evaluateAlarmHysteresis('>', 90, 80, 300, samples, t0);
+    expect(r.trigger).toBe(true);
+    expect(r.recover).toBe(false);
+  });
+  it('pas de trigger si un échantillon de la fenêtre est sous le seuil', () => {
+    const samples: MetricSample[] = [
+      { t: t0 - 60_000, value: 95 },
+      { t: t0, value: 85 },
+    ];
+    const r = evaluateAlarmHysteresis('>', 90, 80, 300, samples, t0);
+    expect(r.trigger).toBe(false);
+  });
+  it('zone morte : valeur entre récupération et déclenchement → ni trigger ni recover', () => {
+    const r = evaluateAlarmHysteresis('>', 90, 80, 0, [{ t: t0, value: 85 }], t0);
+    expect(r.trigger).toBe(false); // 85 n'est pas > 90
+    expect(r.recover).toBe(false); // 85 n'est pas ≤ 80
+  });
+  it('recover : valeur repassée du côté sûr du seuil de récupération', () => {
+    const r = evaluateAlarmHysteresis('>', 90, 80, 0, [{ t: t0, value: 75 }], t0);
+    expect(r.trigger).toBe(false);
+    expect(r.recover).toBe(true); // 75 ≤ 80
+  });
+  it('recoveryThreshold null → comportement d\'origine (récupère dès que le seuil de déclenchement n\'est plus dépassé)', () => {
+    // 85 < 90 → récupère (sans hystérésis), alors qu'avec récupération 80 ce serait zone morte.
+    const r = evaluateAlarmHysteresis('>', 90, null, 0, [{ t: t0, value: 85 }], t0);
+    expect(r.trigger).toBe(false);
+    expect(r.recover).toBe(true);
+  });
+  it('opérateur « < » symétrique : déclenche <10, récupère ≥20', () => {
+    expect(evaluateAlarmHysteresis('<', 10, 20, 0, [{ t: t0, value: 5 }], t0).trigger).toBe(true);
+    expect(evaluateAlarmHysteresis('<', 10, 20, 0, [{ t: t0, value: 15 }], t0).recover).toBe(false); // zone morte
+    expect(evaluateAlarmHysteresis('<', 10, 20, 0, [{ t: t0, value: 25 }], t0).recover).toBe(true);
+  });
+  it('anti-flapping : oscillation autour du seuil → 1 trigger, 0 recover (zone morte tient)', () => {
+    // Oscillation 92/88 autour du seuil 90, récupération 80 : ni trigger ni recover
+    // sur les creux (88 > 80) → la machine à états ne bascule qu'UNE fois.
+    const seq = [95, 88, 93, 87, 96, 85];
+    let triggers = 0;
+    let recovers = 0;
+    let firing = false;
+    seq.forEach((v, i) => {
+      const r = evaluateAlarmHysteresis('>', 90, 80, 0, [{ t: t0 + i * 15_000, value: v }], t0 + i * 15_000);
+      if (r.trigger && !firing) { triggers += 1; firing = true; }
+      else if (r.recover && firing) { recovers += 1; firing = false; }
+    });
+    expect(triggers).toBe(1);
+    expect(recovers).toBe(0);
+  });
+  it('sans hystérésis, la même oscillation fait boucler (trigger/recover alternés)', () => {
+    const seq = [95, 88, 93, 87, 96, 85];
+    let transitions = 0;
+    let firing = false;
+    seq.forEach((v, i) => {
+      const r = evaluateAlarmHysteresis('>', 90, null, 0, [{ t: t0 + i * 15_000, value: v }], t0 + i * 15_000);
+      if (r.trigger && !firing) { transitions += 1; firing = true; }
+      else if (r.recover && firing) { transitions += 1; firing = false; }
+    });
+    expect(transitions).toBeGreaterThan(2); // boucle alarme/récup
   });
 });
 

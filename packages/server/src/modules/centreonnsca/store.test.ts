@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -21,6 +21,10 @@ function rule(over: Partial<Parameters<NscaStore['createRule']>[0]> = {}) {
     centreonService: 'Prox4u-Alarm-CPU',
     messageTemplate: '{{vm}} {{value}}',
     active: true,
+    recoveryThreshold: null,
+    suppressSeconds: 0,
+    acknowledgedAt: null,
+    acknowledgedBy: null,
     provisionStatus: 'ok' as const,
     provisionMessage: '',
     lastSendState: null,
@@ -65,6 +69,25 @@ describe('NscaStore', () => {
     const s2 = fresh();
     expect(s2.listRules()).toHaveLength(1);
     expect(s2.listRules()[0].name).toBe('r1');
+  });
+
+  it('migration v2 : une règle sans champs hystérésis/suppression/ack reçoit les défauts (GitHub #5)', () => {
+    const s1 = fresh();
+    const r = s1.createRule(rule());
+    // Simule un fichier écrit avant la v2 (champs absents).
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    delete raw.rules[0].recoveryThreshold;
+    delete raw.rules[0].suppressSeconds;
+    delete raw.rules[0].acknowledgedAt;
+    delete raw.rules[0].acknowledgedBy;
+    writeFileSync(file, JSON.stringify(raw, null, 2));
+    const s2 = new NscaStore(file, logger);
+    s2.init();
+    const migrated = s2.ruleById(r.id)!;
+    expect(migrated.recoveryThreshold).toBeNull();
+    expect(migrated.suppressSeconds).toBe(0);
+    expect(migrated.acknowledgedAt).toBeNull();
+    expect(migrated.acknowledgedBy).toBeNull();
   });
 
   it('createRule génère un id + horodatage', () => {

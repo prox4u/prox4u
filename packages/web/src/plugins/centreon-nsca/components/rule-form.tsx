@@ -23,7 +23,11 @@ export interface RuleFormValues {
   metric: MetricId | '';
   operator: AlarmOperator;
   threshold: string;
+  /** Seuil de récupération (hystérésis) — '' = même seuil que le déclenchement. */
+  recoveryThreshold: string;
   confirmMinutes: string;
+  /** Durée minimale d'alarme en minutes (0 = off) — anti-flapping. */
+  suppressMinutes: string;
   severity: AlarmSeverity;
   pollerId: string;
   centreonHost: string;
@@ -70,7 +74,9 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
           metric: initial.metric,
           operator: initial.operator,
           threshold: String(initial.threshold),
+          recoveryThreshold: initial.recoveryThreshold != null ? String(initial.recoveryThreshold) : '',
           confirmMinutes: String(Math.round(initial.confirmSeconds / 60)),
+          suppressMinutes: String(Math.round((initial.suppressSeconds ?? 0) / 60)),
           severity: initial.severity === 'ok' ? 'crit' : initial.severity,
           pollerId: initial.pollerId,
           centreonHost: initial.centreonHost,
@@ -87,7 +93,9 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
           metric: 'cpu_pct',
           operator: '>',
           threshold: '90',
+          recoveryThreshold: '',
           confirmMinutes: '5',
+          suppressMinutes: '0',
           severity: 'crit',
           pollerId: pollers[0]?.id ?? '',
           centreonHost: '',
@@ -216,6 +224,18 @@ export function RuleForm({ vms, nodes, clusters, pollers, mappingHost, initial, 
           <label className="flex flex-col gap-1 text-xs font-medium">
             {t('alarm.form.threshold')}
             <Input type="number" value={values.threshold} onChange={(e) => set('threshold', e.target.value)} />
+          </label>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1 text-xs font-medium">
+            {t('alarm.form.recoveryThreshold')}
+            <Input type="number" value={values.recoveryThreshold} onChange={(e) => set('recoveryThreshold', e.target.value)} placeholder="—" />
+            <span className="font-normal text-muted-foreground">{t('alarm.form.recoveryThreshold.hint')}</span>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium">
+            {t('alarm.form.suppress')} ({t('alarm.form.suppress.unit')})
+            <Input type="number" min={0} value={values.suppressMinutes} onChange={(e) => set('suppressMinutes', e.target.value)} />
+            <span className="font-normal text-muted-foreground">{t('alarm.form.suppress.hint')}</span>
           </label>
         </div>
         <label className="flex flex-col gap-1 text-xs font-medium">

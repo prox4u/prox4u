@@ -22,7 +22,7 @@ export function registerAlarmNsca(app: FastifyInstance, ctx: AppContext, poller:
   store.init();
   const engine = new AlarmEngine(store, poller, dataDir, ctx.logger);
   engine.start();
-  registerAlarmRoutes(app, store, dataDir, poller);
+  registerAlarmRoutes(app, store, dataDir, poller, ctx.auth);
   app.addHook('onClose', async () => {
     engine.stop();
   });

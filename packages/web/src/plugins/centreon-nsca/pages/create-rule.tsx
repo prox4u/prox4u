@@ -50,8 +50,12 @@ export function CreateRulePage() {
   async function onSubmit(values: RuleFormValues) {
     const threshold = Number(values.threshold);
     const confirmSeconds = Math.round(Number(values.confirmMinutes) * 60);
+    const recoveryThreshold = values.recoveryThreshold.trim() === '' ? null : Number(values.recoveryThreshold);
+    const suppressSeconds = Math.round(Number(values.suppressMinutes) * 60);
     if (!values.name.trim()) throw new Error('name');
     if (Number.isNaN(threshold)) throw new Error('threshold');
+    if (recoveryThreshold !== null && Number.isNaN(recoveryThreshold)) throw new Error('recoveryThreshold');
+    if (Number.isNaN(suppressSeconds) || suppressSeconds < 0) throw new Error('suppressSeconds');
     const payload = {
       name: values.name.trim(),
       target: values.kind === 'vm'
@@ -62,7 +66,9 @@ export function CreateRulePage() {
       metric: values.metric as MetricId,
       operator: values.operator,
       threshold,
+      recoveryThreshold,
       confirmSeconds,
+      suppressSeconds,
       severity: values.severity,
       pollerId: values.pollerId,
       centreonHost: values.centreonHost.trim(),

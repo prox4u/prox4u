@@ -97,13 +97,17 @@ export const alarmsApi = {
   list: () => request<AlarmList>('/api/alarms'),
   targets: () => request<AlarmTargets>('/api/alarms/targets'),
 
-  create: (rule: Omit<AlarmRule, 'id' | 'createdAt' | 'updatedAt' | 'provisionStatus' | 'provisionMessage' | 'lastSendState' | 'lastSendMessage' | 'lastAlarmAt' | 'lastOkSendAt' | 'lastOutput' | 'currentState'>) =>
+  create: (rule: Omit<AlarmRule, 'id' | 'createdAt' | 'updatedAt' | 'provisionStatus' | 'provisionMessage' | 'lastSendState' | 'lastSendMessage' | 'lastAlarmAt' | 'lastOkSendAt' | 'lastOutput' | 'currentState' | 'acknowledgedAt' | 'acknowledgedBy'>) =>
     request<{ rule: AlarmRule; provision: ProvisionOutcome }>('/api/alarms/rules', { method: 'POST', body: JSON.stringify(rule) }),
   update: (id: string, patch: Partial<AlarmRule>) =>
     request<{ rule: AlarmRule }>(`/api/alarms/rules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   remove: (id: string) => request<{ ok: boolean }>(`/api/alarms/rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   test: (id: string) => request<{ ok: boolean; code: number; message: string }>(`/api/alarms/rules/${encodeURIComponent(id)}/test`, { method: 'POST' }),
   provision: (id: string) => request<ProvisionOutcome>(`/api/alarms/rules/${encodeURIComponent(id)}/provision`, { method: 'POST' }),
+  /** Acknowledgment (moteur v2 — marqueur, ne coupe pas les trames). */
+  ack: (id: string) => request<{ rule: AlarmRule }>(`/api/alarms/rules/${encodeURIComponent(id)}/ack`, { method: 'POST' }),
+  /** Retrait de l'acknowledgment. */
+  unack: (id: string) => request<{ rule: AlarmRule }>(`/api/alarms/rules/${encodeURIComponent(id)}/unack`, { method: 'POST' }),
 
   config: () => request<AlarmConfigPayload>('/api/alarms/config'),
   saveConfig: (payload: { config?: Partial<CentreonConfig> & { nsca?: Partial<CentreonConfig['nsca']> }; pollers?: CentreonPoller[]; mappings?: VmMapping[] }) =>

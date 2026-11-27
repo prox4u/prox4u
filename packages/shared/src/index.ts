@@ -118,6 +118,7 @@ export {
   suggestCenteronHost,
   conditionMet,
   evaluateAlarm,
+  evaluateAlarmHysteresis,
   nscaCfgContent,
   shellQuote,
   clapiProvisionCommands,
@@ -144,6 +145,7 @@ export type {
   AlarmStats,
   MetricSample,
   AlarmEvalResult,
+  AlarmHysteresisResult,
 } from './centreon-nsca.js';
 export type {
   NodeNic,

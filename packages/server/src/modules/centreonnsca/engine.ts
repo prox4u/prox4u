@@ -2,7 +2,7 @@ import path from 'node:path';
 import {
   buildNscaFrame,
   buildNscaHostFrame,
-  evaluateAlarm,
+  evaluateAlarmHysteresis,
   nscaReturnCode,
   renderOutput,
   type AlarmRule,
@@ -20,9 +20,16 @@ import type { NscaStore } from './store.js';
  * Engine d'alarmes — tick 15 s. Pour chaque règle active (module actif) :
  *  1. échantillonne la métrique depuis le snapshot poller (VmSummary/NodeHealth/
  *     cluster) → ring-buffer en mémoire (pas de dépendance InfluxDB) ;
- *  2. évalue la fenêtre de confirmation (evaluateAlarm) ;
+ *  2. évalue la fenêtre de confirmation AVEC HYSTÉRÉSIS (evaluateAlarmHysteresis,
+ *     moteur v2 — GitHub #5) : `trigger` (seuil de déclenchement) et `recover`
+ *     (seuil de récupération distinct, plus sûr) → zone morte anti-flapping ;
  *  3. machine à états ok ⇄ firing : envoie une trame NSCA À CHAQUE transition
  *     (alarme = code sévérité, récupération = code 0) ;
+ *     - DURÉE MINIMALE DE FIRING (rule.suppressSeconds, 0 = off) : une fois en
+ *       alarme, la règle ne peut récupérer qu'après cette durée (anti-boucle
+ *       alarme→récup→alarme) ;
+ *     - AUTO-RÉSOLUTION : la récupération (firing→ok) réinitialise l'ack
+ *       (acknowledgedAt/acknowledgedBy) ;
  *  4. HEARTBEAT OK : règle saine (état ok) → trame OK périodique
  *     (config.okHeartbeatSeconds, 0 = off) — le service Centreon reste OK /
  *     hors `Pending` même sans alerte, et survit aux restarts (services volatiles) ;
@@ -33,6 +40,12 @@ import type { NscaStore } from './store.js';
  *     commande de check active ;
  *  6. robuste : valeur null (pas de données) → pas de transition ; échec
  *     send_nsca → la règle reste, lastSendState=error + message, aucun crash.
+ *
+ * Les trames coulent TOUJOURS aux transitions réelles + heartbeat : Centreon
+ * reflète l'état réel (OK ou critique). L'anti-flapping se fait au niveau de la
+ * machine à états (hystérésis + durée minimale), pas en coupant les trames.
+ * L'ack (acknowledgedAt/acknowledgedBy) est un MARQUEUR (UI) — il ne coupe pas
+ * les trames ; il est posé/retiré par les routes /ack et /unack.
  *
  * Le return code de la trame alarme est celui de la sévérité de la règle
  * (warn=1, crit=2, unknown=3) ; la récupération et le heartbeat sont 0 (OK).
@@ -72,7 +85,8 @@ export class AlarmEngine {
     this.timer = null;
   }
 
-  private async tick(): Promise<void> {
+  /** Un tick complet (public pour les tests — le timer interne l'appelle aussi). */
+  async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
     try {
@@ -120,7 +134,14 @@ export class AlarmEngine {
       this.buffers.set(rule.id, buf);
     }
 
-    const { firing, value: latest } = evaluateAlarm(rule.operator, rule.threshold, rule.confirmSeconds, buf, now);
+    const { trigger, recover, value: latest } = evaluateAlarmHysteresis(
+      rule.operator,
+      rule.threshold,
+      rule.recoveryThreshold ?? null,
+      rule.confirmSeconds,
+      buf,
+      now,
+    );
     if (latest === null) return; // aucune donnée connue → aucune transition
 
     // Suivi local de l'état : `rule` est une copie (listRules), le store est
@@ -128,7 +149,7 @@ export class AlarmEngine {
     let state: AlarmRule['currentState'] = rule.currentState;
     let lastOkSendAt = rule.lastOkSendAt ?? 0;
 
-    if (firing && rule.currentState === 'ok') {
+    if (trigger && rule.currentState === 'ok') {
       // --- ALARME : ok → firing ---
       const output = renderOutput(rule.messageTemplate, {
         vm: rule.target.label,
@@ -140,8 +161,10 @@ export class AlarmEngine {
       const send = await this.sendAndRecord(rule, cfg, frame, output, now);
       state = rule.severity;
       this.logger.info(`alarm : ALARME « ${rule.name} » → ${rule.centreonHost}/${rule.centreonService} (${send.ok ? 'envoyée' : 'ÉCHEC : ' + send.message})`);
-    } else if (!firing && rule.currentState !== 'ok') {
-      // --- RÉCUPÉRATION : firing → ok (toujours code 0) ---
+    } else if (recover && rule.currentState !== 'ok' && this.minFiringElapsed(rule, now)) {
+      // --- RÉCUPÉRATION : firing → ok (toujours code 0) + AUTO-RÉSOLUTION
+      // (l'alarme se ferme → l'ack est réinitialisé). La durée minimale de
+      // firing (suppressSeconds) casse la boucle alarme→récup→alarme.
       const output = `Récupération — ${renderOutput(rule.messageTemplate, {
         vm: rule.target.label,
         metric: rule.metric,
@@ -149,7 +172,10 @@ export class AlarmEngine {
         threshold: rule.threshold,
       })}`;
       const frame = buildNscaFrame(rule.centreonHost, rule.centreonService, 0, output);
-      const send = await this.sendAndRecord(rule, cfg, frame, output, now);
+      const send = await this.sendAndRecord(rule, cfg, frame, output, now, {
+        acknowledgedAt: null,
+        acknowledgedBy: null,
+      });
       state = 'ok';
       lastOkSendAt = now; // la trame de récupération EST une trame OK
       this.logger.info(`alarm : RÉCUP « ${rule.name} » → ${rule.centreonHost}/${rule.centreonService} (${send.ok ? 'envoyée' : 'ÉCHEC : ' + send.message})`);
@@ -168,11 +194,25 @@ export class AlarmEngine {
   }
 
   /**
+   * DURÉE MINIMALE DE FIRING (moteur v2 — GitHub #5) : la règle peut-elle
+   * récupérer maintenant ? `suppressSeconds = 0` (défaut) → oui. Sinon, il
+   * faut que `now - lastAlarmAt ≥ suppressSeconds` (le timer part de la
+   * dernière alarme). `lastAlarmAt` null (défensif) → oui.
+   */
+  private minFiringElapsed(rule: AlarmRule, now: number): boolean {
+    const suppressMs = (rule.suppressSeconds ?? 0) * 1000;
+    if (suppressMs <= 0) return true;
+    if (rule.lastAlarmAt == null) return true;
+    return now - rule.lastAlarmAt >= suppressMs;
+  }
+
+  /**
    * Envoie la trame et met à jour la règle. La transition d'état est consommée
    * même si send_nsca échoue → pas de ré-envoi en boucle ; l'échec est
    * consigné (lastSendState=error + message) sans bloquer l'engine.
+   * `extra` : patch supplémentaire (ex. auto-résolution : clear de l'ack).
    */
-  private async sendAndRecord(rule: AlarmRule, cfg: CentreonConfig, frame: string, output: string, now: number): Promise<NscaSendResult> {
+  private async sendAndRecord(rule: AlarmRule, cfg: CentreonConfig, frame: string, output: string, now: number, extra?: Partial<AlarmRule>): Promise<NscaSendResult> {
     // L'état est basculé AVANT l'envoi : la transition est consommée même si
     // send_nsca échoue (pas de ré-envoi en boucle).
     const nextState: AlarmRule['currentState'] = rule.currentState === 'ok' ? rule.severity : 'ok';
@@ -194,6 +234,7 @@ export class AlarmEngine {
       lastOutput: output,
       lastSendState: send.ok ? 'ok' : 'error',
       lastSendMessage: send.message,
+      ...extra,
     });
     return send;
   }

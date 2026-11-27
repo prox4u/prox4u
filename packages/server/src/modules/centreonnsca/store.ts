@@ -76,7 +76,17 @@ export class NscaStore {
       if (f.version !== 1 || !Array.isArray(f.rules) || !Array.isArray(f.pollers) || !f.config) {
         throw new Error('data/centreon-nsca.json invalide : structure inattendue (version/config/pollers/mappings/rules)');
       }
+      // Migration moteur v2 (GitHub #5) : les champs hystérésis/suppression/ack
+      // n'existent pas sur les règles créées avant la v2 → défauts.
+      let migrated = false;
+      for (const r of f.rules) {
+        if (r.recoveryThreshold === undefined) { r.recoveryThreshold = null; migrated = true; }
+        if (r.suppressSeconds === undefined) { r.suppressSeconds = 0; migrated = true; }
+        if (r.acknowledgedAt === undefined) { r.acknowledgedAt = null; migrated = true; }
+        if (r.acknowledgedBy === undefined) { r.acknowledgedBy = null; migrated = true; }
+      }
       this.file = f;
+      if (migrated) this.persist();
       this.logger.info(`nsca : ${f.rules.length} règle(s), ${f.pollers.length} poller(s) chargés depuis data/centreon-nsca.json`);
       return;
     }

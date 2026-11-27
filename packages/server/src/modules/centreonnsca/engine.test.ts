@@ -1,0 +1,153 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MultiDashboardSnapshot, VmSummary } from '@prox4u/shared';
+import type { Poller } from '../../core/poller.js';
+import { AlarmEngine } from './engine.js';
+import { NscaStore } from './store.js';
+
+// Mock de l'envoi NSCA (pas de vrai daemon en test) — les trames sont capturées.
+vi.mock('./nsca.js', () => ({
+  sendNsca: vi.fn(async () => ({ ok: true, code: null, message: 'trame acceptée (mock)' })),
+}));
+import { sendNsca } from './nsca.js';
+
+const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
+
+const sendNscaMock = sendNsca as unknown as { mock: { calls: unknown[][] } };
+/** Trames envoyées (2ᵉ argument de sendNsca : `host\tsvc\tcode\toutput`). */
+function framesSent(): string[] {
+  return sendNscaMock.mock.calls.map((c) => String(c[1]));
+}
+
+/**
+ * Engine v2 (GitHub #5) : hystérésis de sortie, durée minimale de firing
+ * (suppression), auto-résolution (clear de l'ack). Les trames coulent TOUJOURS
+ * aux transitions réelles — l'anti-flapping est au niveau de la machine à états.
+ */
+describe('AlarmEngine v2 (hystérésis / suppression / ack)', () => {
+  let dir: string;
+  let store: NscaStore;
+  let engine: AlarmEngine;
+  let vm: VmSummary;
+  let vms: VmSummary[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-27T12:00:00Z'));
+    dir = mkdtempSync(path.join(tmpdir(), 'nsca-engine-'));
+    store = new NscaStore(path.join(dir, 'centreon-nsca.json'), logger);
+    store.init();
+    // Module actif, heartbeat/check hôte OFF (pas de trame périodique en test).
+    store.setConfig({ enabled: true, okHeartbeatSeconds: 0, hostCheckSeconds: 0 });
+    vm = { vmid: 100, name: 'vm-100', status: 'running', cpuPct: 10 } as unknown as VmSummary;
+    vms = [vm];
+    const multi = {
+      endpoints: [{ id: 'e1', snapshot: { vms, nodes: [], cluster: { quorumState: null, qdevice: 'unknown' } } }],
+    } as unknown as MultiDashboardSnapshot;
+    const poller = { getMulti: () => multi } as unknown as Poller;
+    engine = new AlarmEngine(store, poller, dir, logger, 3_600_000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  function createRule(over: Record<string, unknown> = {}) {
+    return store.createRule({
+      name: 'CPU test',
+      target: { kind: 'vm', endpointId: 'e1', vmid: 100, label: 'vm-100' },
+      metric: 'cpu_pct',
+      operator: '>',
+      threshold: 90,
+      confirmSeconds: 0,
+      severity: 'crit',
+      pollerId: 'linux',
+      centreonHost: 'vm-100',
+      centreonService: 'Prox4u-Alarm-CPU',
+      messageTemplate: '{{vm}} CPU {{value}}%',
+      active: true,
+      recoveryThreshold: 80,
+      suppressSeconds: 0,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      provisionStatus: 'ok',
+      provisionMessage: '',
+      lastSendState: null,
+      lastSendMessage: '',
+      lastAlarmAt: null,
+      lastOkSendAt: null,
+      lastOutput: '',
+      currentState: 'ok',
+      ...over,
+    });
+  }
+
+  async function tickWithCpu(v: number, advanceMs = 15_000) {
+    vm.cpuPct = v;
+    vi.advanceTimersByTime(advanceMs);
+    await engine.tick();
+  }
+
+  it('anti-flapping : oscillation autour du seuil → 1 seule alarme (critère d\'acceptation)', async () => {
+    const rule = createRule(); // seuil 90, récupération 80
+    for (const v of [95, 88, 93, 87, 96, 85]) await tickWithCpu(v);
+    expect(framesSent()).toHaveLength(1); // une seule trame (l'alarme initiale)
+    expect(framesSent()[0]).toContain('vm-100\tProx4u-Alarm-CPU\t2\t'); // code CRITICAL
+    expect(store.ruleById(rule.id)!.currentState).toBe('crit'); // toujours en alarme
+  });
+
+  it('récupération hystérésis : valeur ≤ seuil de récupération → trame code 0', async () => {
+    const rule = createRule();
+    await tickWithCpu(95);
+    expect(framesSent()).toHaveLength(1);
+    await tickWithCpu(85); // zone morte (80 < 85 < 90) → pas de récup
+    expect(framesSent()).toHaveLength(1);
+    await tickWithCpu(75); // ≤ 80 → récupération
+    expect(framesSent()).toHaveLength(2);
+    expect(framesSent()[1]).toContain('\t0\t'); // code OK
+    expect(store.ruleById(rule.id)!.currentState).toBe('ok');
+  });
+
+  it('sans hystérésis (recoveryThreshold null) : la même oscillation fait boucler', async () => {
+    const rule = createRule({ recoveryThreshold: null });
+    for (const v of [95, 88, 93]) await tickWithCpu(v);
+    // 95 → ALARME · 88 → RÉCUP (88 < 90) · 93 → ALARME → boucle
+    expect(framesSent()).toHaveLength(3);
+    expect(store.ruleById(rule.id)!.currentState).toBe('crit');
+  });
+
+  it('durée minimale de firing (suppressSeconds) : pas de récupération avant la durée', async () => {
+    const rule = createRule({ suppressSeconds: 300 });
+    await tickWithCpu(95); // ALARME à T0
+    expect(framesSent()).toHaveLength(1);
+    await tickWithCpu(75, 60_000); // T0+60 s < 300 s → pas de récup
+    expect(framesSent()).toHaveLength(1);
+    expect(store.ruleById(rule.id)!.currentState).toBe('crit');
+    await tickWithCpu(75, 300_000); // T0+360 s ≥ 300 s → récupération
+    expect(framesSent()).toHaveLength(2);
+    expect(store.ruleById(rule.id)!.currentState).toBe('ok');
+  });
+
+  it('auto-résolution : la récupération réinitialise l\'ack', async () => {
+    const rule = createRule();
+    await tickWithCpu(95); // ALARME
+    store.updateRule(rule.id, { acknowledgedAt: Date.now(), acknowledgedBy: 'alice' });
+    await tickWithCpu(75); // RÉCUP
+    const r = store.ruleById(rule.id)!;
+    expect(r.currentState).toBe('ok');
+    expect(r.acknowledgedAt).toBeNull();
+    expect(r.acknowledgedBy).toBeNull();
+  });
+
+  it('valeur null (VM absente du snapshot) → pas de transition', async () => {
+    const rule = createRule();
+    vms.length = 0; // VM disparue du snapshot
+    await engine.tick();
+    expect(framesSent()).toHaveLength(0);
+    expect(store.ruleById(rule.id)!.currentState).toBe('ok');
+  });
+});

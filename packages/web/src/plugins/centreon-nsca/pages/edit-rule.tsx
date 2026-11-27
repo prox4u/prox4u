@@ -48,6 +48,7 @@ export function EditRulePage() {
   }, [targets]);
 
   async function onSubmit(values: RuleFormValues) {
+    const recoveryThreshold = values.recoveryThreshold.trim() === '' ? null : Number(values.recoveryThreshold);
     await alarmsApi.update(id!, {
       name: values.name.trim(),
       target: values.kind === 'vm'
@@ -58,7 +59,9 @@ export function EditRulePage() {
       metric: values.metric as MetricId,
       operator: values.operator,
       threshold: Number(values.threshold),
+      recoveryThreshold,
       confirmSeconds: Math.round(Number(values.confirmMinutes) * 60),
+      suppressSeconds: Math.round(Number(values.suppressMinutes) * 60),
       severity: values.severity,
       pollerId: values.pollerId,
       centreonHost: values.centreonHost.trim(),
