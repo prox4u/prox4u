@@ -1327,7 +1327,7 @@ function buildAlerts(
  *  - influxdb-write-drops (warn) : abandons de lignes récents (file saturée / dead-letter)
  *  - influxdb-file-limit  (warn/crit) : headroom fichiers < 80 % / < 100 %
  */
-function influxAlerts(influx: InfluxClient): Alert[] {
+export function influxAlerts(influx: InfluxClient): Alert[] {
   const alerts: Alert[] = [];
   if (!influx.enabled) return alerts;
   const s = influx.getStats();

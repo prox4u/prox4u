@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_AUDIT_CONFIG, DEFAULT_HEALTH_CONFIG, type PveNodeStatus, type PveVmResource, type Site } from '@prox4u/shared';
-import { Poller, type AppContext, type EndpointRuntime } from './poller.js';
+import { Poller, influxAlerts, type AppContext, type EndpointRuntime } from './poller.js';
+import type { InfluxClient } from './influx.js';
 
 const GB = 1024 ** 3;
 
@@ -164,5 +165,107 @@ describe('Poller.computeInfluxStatus (santé InfluxDB globale)', () => {
     await new Promise((r) => setTimeout(r, 0)); // laisse le ping se résoudre
     const s = influxStatus(poller);
     expect(s!.ping).toBe(true);
+  });
+});
+
+describe('influxAlerts (P4 — alertes InfluxDB, GitHub #17)', () => {
+  /** Mock InfluxClient : seuls `enabled` / `getStats()` / `fileEstimate()` sont lus par influxAlerts. */
+  const mockInflux = (opts: {
+    enabled?: boolean;
+    lastErrorAt?: number | null;
+    lastDropAt?: number | null;
+    dropped?: number;
+    headroom?: 'ok' | 'warn' | 'crit';
+    chunkFiles?: number;
+    fileLimit?: number;
+  } = {}): InfluxClient => {
+    const {
+      enabled = true,
+      lastErrorAt = null,
+      lastDropAt = null,
+      dropped = 0,
+      headroom = 'ok',
+      chunkFiles = 4320,
+      fileLimit = 10000,
+    } = opts;
+    return {
+      enabled,
+      getStats: () => ({
+        enabled,
+        queueDepth: 0,
+        enqueued: 0,
+        flushed: 0,
+        dropped,
+        failedBatches: 0,
+        lastDropAt,
+        lastErrorAt,
+      }),
+      fileEstimate: () => ({ chunkDays: 30, chunkFiles, yearFiles: 52560, fileLimit, headroom }),
+    } as unknown as InfluxClient;
+  };
+
+  it('désactivé → aucune alerte', () => {
+    expect(influxAlerts(mockInflux({ enabled: false }))).toEqual([]);
+  });
+
+  it('sain (pas d’erreur/drop récent, headroom ok) → aucune alerte', () => {
+    expect(influxAlerts(mockInflux())).toEqual([]);
+  });
+
+  it('influxdb-down (crit) : erreur d’écriture récente (< 60 s)', () => {
+    const alerts = influxAlerts(mockInflux({ lastErrorAt: Date.now() - 5_000 }));
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ id: 'influxdb-down', severity: 'crit', messageKey: 'alerts.influxdbDown' });
+  });
+
+  it('influxdb-down : erreur ancienne (> 60 s) → pas d’alerte', () => {
+    expect(influxAlerts(mockInflux({ lastErrorAt: Date.now() - 120_000 }))).toEqual([]);
+  });
+
+  it('influxdb-write-drops (warn) : abandons récents (< 60 s), compteur dans params', () => {
+    const alerts = influxAlerts(mockInflux({ dropped: 7, lastDropAt: Date.now() - 10_000 }));
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      id: 'influxdb-write-drops',
+      severity: 'warn',
+      messageKey: 'alerts.influxdbDrops',
+      params: { dropped: 7 },
+    });
+  });
+
+  it('influxdb-write-drops : drop ancien (> 60 s) → pas d’alerte', () => {
+    expect(influxAlerts(mockInflux({ dropped: 7, lastDropAt: Date.now() - 120_000 }))).toEqual([]);
+  });
+
+  it('influxdb-write-drops : dropped=0 (lastDropAt posé) → pas d’alerte', () => {
+    expect(influxAlerts(mockInflux({ dropped: 0, lastDropAt: Date.now() - 10_000 }))).toEqual([]);
+  });
+
+  it('influxdb-file-limit (warn) : headroom < 80 %', () => {
+    const alerts = influxAlerts(mockInflux({ headroom: 'warn', chunkFiles: 8500, fileLimit: 10000 }));
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      id: 'influxdb-file-limit',
+      severity: 'warn',
+      messageKey: 'alerts.influxdbFileLimit',
+      params: { files: 8500, limit: 10000 },
+    });
+  });
+
+  it('influxdb-file-limit (crit) : headroom > 100 %', () => {
+    const alerts = influxAlerts(mockInflux({ headroom: 'crit', chunkFiles: 12000, fileLimit: 10000 }));
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      id: 'influxdb-file-limit',
+      severity: 'crit',
+      params: { files: 12000, limit: 10000 },
+    });
+  });
+
+  it('cumul : down + drops + file-limit → 3 alertes (ordre stable)', () => {
+    const alerts = influxAlerts(
+      mockInflux({ lastErrorAt: Date.now() - 5_000, dropped: 3, lastDropAt: Date.now() - 5_000, headroom: 'warn' }),
+    );
+    expect(alerts.map((a) => a.id)).toEqual(['influxdb-down', 'influxdb-write-drops', 'influxdb-file-limit']);
   });
 });

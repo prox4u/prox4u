@@ -191,7 +191,7 @@ manuellement).
 - [x] `config.ts` : `INFLUX_QUERY_CHUNK_DAYS` (défaut 30), `INFLUX_QUERY_FILE_LIMIT` (défaut 10 000)
 - [x] `nodesensors/routes.ts` : `mergedTempBuckets` → consolidated en chunké (raw inchangé)
 - [x] Tests unitaires : découpage, concat, tranche « table absente » ignorée
-- [ ] Test manuel : vue « 1 an » capteur/SMART avec > 69 j de données (besoin de données réelles) → **GitHub #17**
+- [ ] Test manuel : vue « 1 an » capteur/SMART avec > 69 j de données (besoin de données réelles) → **GitHub #17** — *validé partiellement le 27/11/2026 : vue 1 an capteur (656 pts) + SMART (727 pts) OK sur 21 j de données (chunking 13 tranches exercé, 0 erreur) ; la concaténation multi-chunks avec données > 69 j reste à re-tester quand le parc aura > 69 j (~14/01/2027)*
 
 ### P4 — Auto-monitoring
 - [x] Nouveau module `packages/server/src/modules/influxdb/` (route `GET /api/influxdb`)
@@ -202,7 +202,7 @@ manuellement).
 - [x] Alertes `influxdb-write-drops` / `influxdb-file-headroom` / `influxdb-down` (+ i18n fr/en)
 - [x] Enregistrement du module dans le loader
 - [x] Tests : route (enabled/désactivé, headroom) — `influxdb/routes.test.ts`
-- [ ] Tests : alertes `influxAlerts()` (optionnel — fonction pure, non couverte) → **GitHub #17**
+- [x] Tests : alertes `influxAlerts()` (10 tests — `poller.test.ts` : down/drops/file-limit, fenêtres 60 s, cumul) → **GitHub #17**
 
 ### P5 — Archivage
 - [x] `influx-archiver.ts` : timer + état `data/archive-state.json` + reprise
