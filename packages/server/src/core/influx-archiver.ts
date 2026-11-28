@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { escapeFieldString, escapeTag, influxTsToUnix, type InfluxFieldType, type SqlRow } from './influx.js';
+import { escapeFieldString, escapeTag, influxTsToUnix, type InfluxClient, type InfluxFieldType, type SqlRow } from './influx.js';
+import { shardClientsWithIds } from './influx-shards.js';
 import type { AppContext } from './poller.js';
 
 /**
@@ -241,12 +242,21 @@ export class InfluxArchiver {
   getState(): { lastArchivedTs: number; archiveDir: string; fileCount: number; totalBytes: number } {
     let fileCount = 0;
     let totalBytes = 0;
-    try {
-      for (const f of readdirSync(this.ctx.config.influx.archiveDir)) {
-        if (!f.endsWith('.csv')) continue;
-        fileCount++;
-        totalBytes += statSync(path.join(this.ctx.config.influx.archiveDir, f)).size;
+    // Récursif : les shards écrivent dans des sous-dossiers `/<endpointId>/`
+    // (GitHub #18) — on compte les CSV de la racine ET des sous-dossiers.
+    const walk = (dir: string): void => {
+      for (const f of readdirSync(dir)) {
+        const full = path.join(dir, f);
+        const st = statSync(full);
+        if (st.isDirectory()) walk(full);
+        else if (f.endsWith('.csv')) {
+          fileCount++;
+          totalBytes += st.size;
+        }
       }
+    };
+    try {
+      walk(this.ctx.config.influx.archiveDir);
     } catch {
       // dossier absent (jamais archivé) → 0
     }
@@ -549,8 +559,20 @@ export class InfluxArchiver {
 
   /** Archive [from, to) de `consolidated` vers CSV (1 fichier / table / jour). */
   private async archiveRange(from: number, to: number): Promise<void> {
-    const influx = this.ctx.influx;
-    mkdirSync(this.ctx.config.influx.archiveDir, { recursive: true });
+    // Sharding (GitHub #18) : chaque instance archive sa propre base consolidated.
+    // Le global écrit à la racine de archiveDir (comportement d'origine) ; chaque
+    // shard écrit dans un sous-dossier `/<endpointId>/` (évite les collisions de
+    // fichiers `${table}-${day}.csv` entre instances).
+    for (const { client: influx, endpointId } of shardClientsWithIds(this.ctx)) {
+      await this.archiveClient(influx, endpointId, from, to);
+    }
+  }
+
+  private async archiveClient(influx: InfluxClient, endpointId: string | null, from: number, to: number): Promise<void> {
+    const outDir = endpointId
+      ? path.join(this.ctx.config.influx.archiveDir, endpointId)
+      : this.ctx.config.influx.archiveDir;
+    mkdirSync(outDir, { recursive: true });
     for (const table of ARCHIVE_TABLES) {
       // Chunké (30 j) → chaque requête reste sous --query-file-limit.
       let rows: SqlRow[];
@@ -581,7 +603,7 @@ export class InfluxArchiver {
       for (const [day, dayRows] of byDay) {
         const lines = [columns.join(',')];
         for (const r of dayRows) lines.push(columns.map((c) => csvEscape(r[c])).join(','));
-        const file = path.join(this.ctx.config.influx.archiveDir, `${table}-${day}.csv`);
+        const file = path.join(outDir, `${table}-${day}.csv`);
         writeFileSync(file, lines.join('\n') + '\n');
       }
     }

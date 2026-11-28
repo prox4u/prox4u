@@ -60,6 +60,23 @@ The **Actions** panel is only visible if your account is an **admin** or a membe
    - **Drop table**: permanently drops a table from a database.
 5. The **result** of each action is displayed (success / failure) and the page refreshes.
 
+### 5. Multi-InfluxDB sharding per endpoint (admin)
+
+When a single InfluxDB node is no longer enough (write volume, file headroom, query performance), metrics can be **spread across multiple InfluxDB instances** — one per endpoint. The feature is **dormant by default**: with no shard configured, everything goes through the global instance (zero behavior change).
+
+1. Open **Administration** → **InfluxDB shards** tab (admin role).
+2. **Add a shard**: pick the **endpoint** (dropdown), the **instance URL** (`https://host:8181`), and optionally the **token** (empty = global token), the **raw / consolidated DBs** (empty = global) and the **CA certificate**.
+3. **Test** the connection (ping), **edit**, **remove** the shard, or **Remove all** (back to a single instance).
+4. The config is persisted in `data/influx-shards.json` and the router is **reloaded on the fly** (no restart). The health of each shard (ping / version / databases / write queue) is visible in the `GET /api/influxdb` response (`shards` field).
+
+**How it works**:
+- **Writes**: the poller's PVE API metrics for an endpoint go to that endpoint's shard (if configured), otherwise to the global instance.
+- **Reads**: Prox4u queries the global instance **and** all shards (fan-out) and merges the results — history stays **complete** (pre-sharding data, in the global, is included).
+- **Telegraf data** (node sensors): written directly by each node's Telegraf agent. To shard these, you must **reconfigure Telegraf on each node** to point to its endpoint's shard (deployment step — Phase 1).
+- **Consolidation / archiving**: each instance consolidates and archives its own data (shards write to a `/<endpointId>/` subfolder).
+
+> **Note**: activating sharding (deploying per-endpoint instances + reconfiguring Telegraf + deciding on history migration) is a **deployment** step (Phase 1), not a simple click. The Phase 0 code is in place and dormant.
+
 ---
 
 ## What happens in the background
@@ -92,6 +109,7 @@ Prox4u continuously writes Proxmox metrics into InfluxDB 3 Core, then consolidat
 | Archive directory | `.env` `INFLUX_ARCHIVE_DIR` | `data/influx-archive` |
 | Backup directory | `.env` `INFLUX_BACKUP_DIR` | `data/influx-backups` |
 | Consolidated database | `.env` `INFLUX_AGG_DB` | `consolidated` |
+| Shards per endpoint | `data/influx-shards.json` (admin UI) | empty (dormant) |
 | Consolidation window | code (fixed) | 5 min |
 | Query chunk | `.env` `INFLUX_QUERY_CHUNK_DAYS` | 30 d |
 | Query file limit | `.env` `INFLUX_QUERY_FILE_LIMIT` | 10,000 |
@@ -135,3 +153,6 @@ Two ways: **Backup a database** (🟢 action, creates a persistent ZIP on the se
 
 **Where are the backups stored?**
 On the **server disk**, in the backup directory (`.env` `INFLUX_BACKUP_DIR`, default `data/influx-backups`). They are **downloadable** from the UI (**Download** link in the action result) — copy them elsewhere if you want an off-server copy.
+
+**How do I spread metrics across multiple InfluxDB instances (sharding)?**
+Via **Administration** → **InfluxDB shards**: add a shard per endpoint (instance URL, optional token/DBs/CA — empty = inherited from the global). The code is **dormant**: with no shard, everything stays on the global instance. For a full activation (Phase 1), you must also deploy the per-endpoint instances and **reconfigure Telegraf on each node** so it writes to its endpoint's shard — reads, meanwhile, are automatically fanned out (global + shards) and stay complete.

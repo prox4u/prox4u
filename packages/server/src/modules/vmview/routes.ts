@@ -10,6 +10,7 @@ import type {
   VmMetricsResponse,
 } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
+import { fanOutQuery } from '../../core/influx-shards.js';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 import { registerVmDiskioRoute } from './vm-diskio.js';
 import { registerVmNetRoute } from './vm-net.js';
@@ -119,7 +120,6 @@ export function registerVmInventory(app: FastifyInstance, ctx: AppContext, polle
     } else {
       try {
         const { bucket, window, db } = VM_METRICS_TF[tf];
-        const target = db === 'raw' ? ctx.influx.rawDb : ctx.influx.aggDb;
         // Occupation disque : champ ajouté en cours de vie — absent de la base si ce
         // cluster n'a jamais eu de VM QEMU running avec agent (ex. cluster de test).
         // InfluxDB 3 Core lève « No field named » sur un champ absent du scan → on
@@ -134,11 +134,11 @@ export function registerVmInventory(app: FastifyInstance, ctx: AppContext, polle
            GROUP BY t ORDER BY t`;
         let rows: VmMetricsRow[];
         try {
-          rows = await ctx.influx.querySql<VmMetricsRow>(target, sql(diskSelect));
+          rows = await fanOutQuery<VmMetricsRow>(ctx, db, sql(diskSelect));
         } catch (err) {
           const msg = (err as Error).message ?? '';
           if (/No field named (disk_bytes|disk_alloc_bytes)/.test(msg)) {
-            rows = await ctx.influx.querySql<VmMetricsRow>(target, sql(''));
+            rows = await fanOutQuery<VmMetricsRow>(ctx, db, sql(''));
           } else {
             throw err;
           }
@@ -187,9 +187,7 @@ export function registerVmInventory(app: FastifyInstance, ctx: AppContext, polle
     } else {
       try {
         const { bucket, window, db } = VM_METRICS_TF[tf];
-        const target = db === 'raw' ? ctx.influx.rawDb : ctx.influx.aggDb;
-        const rows = await ctx.influx.querySql<VmFsRow>(
-          target,
+        const rows = await fanOutQuery<VmFsRow>(ctx, db,
           `SELECT date_bin(INTERVAL '${bucket}', time) AS t, mountpoint, dev,
                   MAX(used_bytes) AS used_bytes, MAX(total_bytes) AS total_bytes
            FROM vm_fs WHERE time >= now() - INTERVAL '${window}' AND ${clusterFilter(ctx, ep.id)} AND vmid = '${vmid}'

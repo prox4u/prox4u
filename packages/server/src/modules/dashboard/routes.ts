@@ -17,6 +17,7 @@ import {
   type TrendPoint,
 } from '@prox4u/shared';
 import { influxTsToUnix, type SqlRow } from '../../core/influx.js';
+import { fanOutQuery } from '../../core/influx-shards.js';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -230,8 +231,7 @@ function aggregateDaily(
 async function computeCapacity(ctx: AppContext, poller: Poller, ep: EndpointRuntime): Promise<CapacityResponse> {
   if (influxReady(ctx)) {
     try {
-      const rows = await ctx.influx.querySql<NodeAggRow>(
-        ctx.influx.aggDb,
+      const rows = await fanOutQuery<NodeAggRow>(ctx, 'agg',
         `SELECT date_bin(INTERVAL '1 day', time) AS t, node,
                 AVG(cpu_pct) AS cpu_pct, AVG(ram_pct) AS ram_pct, AVG(disk_pct) AS disk_pct
          FROM node_metrics WHERE time >= now() - INTERVAL '30 days' AND ${clusterFilter(ctx, ep.id)}
@@ -243,8 +243,7 @@ async function computeCapacity(ctx: AppContext, poller: Poller, ep: EndpointRunt
         // si disponible ; sinon série legacy rootfs (historique antérieur).
         let diskSeries = days.map((d) => ({ time: d.time, value: d.diskPct }));
         try {
-          const srows = await ctx.influx.querySql<StorageAggRow>(
-            ctx.influx.aggDb,
+          const srows = await fanOutQuery<StorageAggRow>(ctx, 'agg',
             `SELECT date_bin(INTERVAL '1 day', time) AS t, "cluster",
                     AVG(used_bytes) AS used, AVG(total_bytes) AS total
              FROM storage_metrics WHERE time >= now() - INTERVAL '30 days' AND ${clusterFilter(ctx, ep.id)}
@@ -342,8 +341,7 @@ export function nodeDailyFromRrd(
 async function computeNodeCapacity(ctx: AppContext, ep: EndpointRuntime, nodeName: string): Promise<CapacityResponse> {
   if (influxReady(ctx)) {
     try {
-      const rows = await ctx.influx.querySql<NodeAggRow>(
-        ctx.influx.aggDb,
+      const rows = await fanOutQuery<NodeAggRow>(ctx, 'agg',
         `SELECT date_bin(INTERVAL '1 day', time) AS t, node,
                 AVG(cpu_pct) AS cpu_pct, AVG(ram_pct) AS ram_pct, AVG(disk_pct) AS disk_pct
          FROM node_metrics WHERE time >= now() - INTERVAL '30 days' AND node = '${sqlQuote(nodeName)}' AND ${clusterFilter(ctx, ep.id)}
@@ -371,8 +369,7 @@ async function computeTrends(ctx: AppContext, ep: EndpointRuntime): Promise<Tren
   let fromInflux = false;
   if (influxReady(ctx)) {
     try {
-      const rows = await ctx.influx.querySql<NodeAggRow>(
-        ctx.influx.rawDb,
+      const rows = await fanOutQuery<NodeAggRow>(ctx, 'raw',
         `SELECT date_bin(INTERVAL '1 day', time) AS t, node,
                 AVG(cpu_pct) AS cpu_pct, AVG(ram_pct) AS ram_pct
          FROM node_metrics WHERE time >= now() - INTERVAL '7 days' AND ${clusterFilter(ctx, ep.id)}
@@ -430,27 +427,25 @@ async function metricsFromInflux(
   node?: string,
 ): Promise<MetricsPoint[]> {
   const { bucket, window, db } = TF_SQL[timeframe];
-  const dbSel = db === 'raw' ? ctx.influx.rawDb : ctx.influx.aggDb;
   const where = `WHERE time >= now() - INTERVAL '${window}' AND ${clusterFilterOrAll(ctx, epId)}${node ? ` AND node = '${sqlQuote(node)}'` : ''}`;
   // Le trafic réseau est lu depuis la mesure dédiée node_net (PVE ≥ 9 : les champs net de
   // node_metrics sont à zéro sur tout l'historique) — jointure par (bucket, nœud) avant
   // agrégation. node_net absente (installation fraîche) → réseau à zéro, pas de repli RRD.
+  // Sharding (GitHub #18) : fan-out sur global + shards (epId « all » = tous les
+  // endpoints ; endpoint précis = son shard + le global pour les données legacy).
   const [rows, netRows] = await Promise.all([
-    ctx.influx.querySql<NodeAggRow>(
-      dbSel,
+    fanOutQuery<NodeAggRow>(ctx, db,
       `SELECT date_bin(INTERVAL '${bucket}', time) AS t, node,
               AVG(cpu_pct) AS cpu_pct, AVG(ram_pct) AS ram_pct, AVG(disk_pct) AS disk_pct
        FROM node_metrics ${where}
        GROUP BY t, node ORDER BY t`,
     ),
-    ctx.influx
-      .querySql<NetAggRow>(
-        dbSel,
-        `SELECT date_bin(INTERVAL '${bucket}', time) AS t, node,
-                AVG(net_in_bps) AS net_in_bps, AVG(net_out_bps) AS net_out_bps
-         FROM node_net ${where}
-         GROUP BY t, node ORDER BY t`,
-      )
+    fanOutQuery<NetAggRow>(ctx, db,
+      `SELECT date_bin(INTERVAL '${bucket}', time) AS t, node,
+              AVG(net_in_bps) AS net_in_bps, AVG(net_out_bps) AS net_out_bps
+       FROM node_net ${where}
+       GROUP BY t, node ORDER BY t`,
+    )
       .catch(() => [] as NetAggRow[]),
   ]);
   const netByKey = new Map(netRows.map((r) => [`${influxTsToUnix(r.t)}|${r.node}`, r]));
@@ -466,8 +461,7 @@ async function metricsFromInflux(
   // Non applicable en vue nœud (le stockage VM est une métrique d'endpoint).
   if (!node) {
     try {
-      const srows = await ctx.influx.querySql<StorageAggRow>(
-        db === 'raw' ? ctx.influx.rawDb : ctx.influx.aggDb,
+      const srows = await fanOutQuery<StorageAggRow>(ctx, db,
         `SELECT date_bin(INTERVAL '${bucket}', time) AS t, "cluster",
                 AVG(used_bytes) AS used, AVG(total_bytes) AS total
          FROM storage_metrics WHERE time >= now() - INTERVAL '${window}' AND ${clusterFilterOrAll(ctx, epId)}
@@ -566,8 +560,7 @@ function round1(n: number): number {
 async function vmP95(ctx: AppContext, epId: string): Promise<Map<number, { cpuPct: number | null; memBytes: number | null }> | null> {
   if (!influxReady(ctx)) return null;
   try {
-    const rows = await ctx.influx.querySql<SqlRow>(
-      ctx.influx.rawDb,
+    const rows = await fanOutQuery<SqlRow>(ctx, 'raw',
       `SELECT vmid, quantile_cont(cpu_pct, 0.95) AS cpu_p95, quantile_cont(mem_bytes, 0.95) AS mem_p95
        FROM vm_metrics WHERE time >= now() - INTERVAL '7 days' AND ${clusterFilter(ctx, epId)}
        GROUP BY vmid`,

@@ -90,6 +90,31 @@ function auditAction(ctx: AppContext, req: FastifyRequest, target: string, detai
   ctx.auth.audit.append({ id: actorId, username }, 'influxdb.action', target, details);
 }
 
+/**
+ * Santé d'un shard (GitHub #18) : ping + version + bases + compteurs d'écriture
+ * + headroom fichiers. Chaque sous-lecture est bornée (3–5 s) et défensive —
+ * un shard injoignable renvoie ping:false + vides, sans casser la route.
+ */
+async function buildShardHealth(ctx: AppContext, endpointId: string, url: string): Promise<InfluxShardHealth> {
+  const c = ctx.influxShards?.forEndpoint(endpointId) ?? ctx.influx;
+  if (!c.enabled) {
+    return {
+      endpointId, url, enabled: false, ping: false, version: null, databases: [],
+      write: c.getStats(), fileEstimate: c.fileEstimate(),
+    };
+  }
+  const [ping, info, databases] = await Promise.all([c.ping(), c.getServerInfo(), c.listDatabases()]);
+  return {
+    endpointId, url, enabled: true, ping, version: info.version, databases,
+    write: c.getStats(), fileEstimate: c.fileEstimate(),
+  };
+}
+
+/** Liste des shards configurés (vide si sharding dormant). */
+function configuredShards(ctx: AppContext): Array<{ endpointId: string; url: string }> {
+  return ctx.influxShardStore?.getShards().map((s) => ({ endpointId: s.endpointId, url: s.url })) ?? [];
+}
+
 // ---------- Types de réponse ----------
 
 export interface InfluxDbResponse {
@@ -110,6 +135,30 @@ export interface InfluxDbResponse {
   archive: { lastArchivedTs: number; archiveDir: string; fileCount: number; totalBytes: number } | null;
   /** true si la session peut lancer les actions (admin ou groupe configuré). */
   canAct: boolean;
+  /**
+   * Shards InfluxDB par endpoint (GitHub #18) — santé de chaque instance sharded
+   * (ping/version/bases/compteurs d'écriture/headroom). Vide si aucun shard
+   * configuré (sharding dormant). L'instance globale est le corps de la réponse.
+   */
+  shards: InfluxShardHealth[];
+}
+
+/** Santé d'un shard (même forme que le corps global, sans archive/canAct). */
+export interface InfluxShardHealth {
+  endpointId: string;
+  url: string;
+  enabled: boolean;
+  ping: boolean;
+  version: string | null;
+  databases: Array<{ name: string; retention: string | null }>;
+  write: InfluxWriteStats;
+  fileEstimate: {
+    chunkDays: number;
+    chunkFiles: number;
+    yearFiles: number;
+    fileLimit: number;
+    headroom: 'ok' | 'warn' | 'crit';
+  };
 }
 
 /** Buckets adaptatifs : 24 h → 5 min · 7 j → 15 min · 30 j → 1 h. */
@@ -136,6 +185,9 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext, po
     const influx = ctx.influx;
     const can = canAct(ctx, req);
     const archive = ctx.archiver ? ctx.archiver.getState() : null;
+    // Shards (GitHub #18) : santé de chaque instance sharded, en parallèle du global.
+    const shardConfigs = configuredShards(ctx);
+    const shards = await Promise.all(shardConfigs.map((s) => buildShardHealth(ctx, s.endpointId, s.url)));
     if (!influx.enabled) {
       return {
         enabled: false,
@@ -147,6 +199,7 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext, po
         fileEstimate: influx.fileEstimate(),
         archive,
         canAct: can,
+        shards,
       };
     }
     // Sous-lectures indépendantes et bornées : une qui échoue ne casse pas la route.
@@ -161,6 +214,7 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext, po
       fileEstimate: influx.fileEstimate(),
       archive,
       canAct: can,
+      shards,
     };
   });
 
@@ -209,13 +263,18 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext, po
 
   app.get('/api/influxdb/tables', async (req, reply) => {
     if (!influxReady(ctx)) return reply.code(404).send({ error: 'not-found', code: 'influx-disabled' });
-    const db = (req.query as { db?: string }).db ?? ctx.influx.aggDb;
+    const q = req.query as { db?: string; shard?: string };
+    // Sharding (GitHub #18) : `?shard=<endpointId>` → tables de la base du shard
+    // (repli global si endpoint inconnu / sharding dormant).
+    const client = q.shard ? ctx.influxShards?.forEndpoint(q.shard) ?? ctx.influx : ctx.influx;
+    const db = q.db ?? client.aggDb;
     if (!validName(db)) return reply.code(400).send({ error: 'invalid', code: 'bad-db' });
-    const cached = tablesCache.get(db);
+    const cacheKey = `${q.shard ?? 'global'}/${db}`;
+    const cached = tablesCache.get(cacheKey);
     if (cached && Date.now() - cached.at < HISTORY_CACHE_TTL_MS) return { db, tables: cached.value };
     // Défensif : InfluxDB indispo en cours de requête → [] (pas de crash de la route).
-    const tables = await ctx.influx.listTables(db);
-    tablesCache.set(db, { at: Date.now(), value: tables });
+    const tables = await client.listTables(db);
+    tablesCache.set(cacheKey, { at: Date.now(), value: tables });
     return { db, tables };
   });
 

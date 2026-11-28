@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Archive, Boxes, ScrollText, Siren, Thermometer, Users, UserCog } from 'lucide-react';
+import { Archive, Boxes, Database, ScrollText, Siren, Thermometer, Users, UserCog } from 'lucide-react';
 import { parsePluginVersion } from '@prox4u/shared';
 import { adminApi, type AdminState } from '../../lib/auth-api';
 import { registry } from '../../core/plugin/registry';
@@ -10,9 +10,10 @@ import { ModuleCatalog } from '../../components/admin/module-catalog';
 import { GroupManager } from '../../components/admin/group-manager';
 import { NscaConfig } from '../../components/admin/nsca-config';
 import { SensorThresholds } from '../../components/admin/sensor-thresholds';
+import { InfluxShards } from '../../components/admin/influx-shards';
 import { UserManager } from '../../components/admin/user-manager';
 
-type Tab = 'catalog' | 'groups' | 'users' | 'nsca' | 'sensorThresholds' | 'audit' | 'backup';
+type Tab = 'catalog' | 'groups' | 'users' | 'nsca' | 'sensorThresholds' | 'influxShards' | 'audit' | 'backup';
 
 /**
  * Page d'administration (rôle admin uniquement — protégée par ProtectedRoute).
@@ -50,6 +51,7 @@ export function AdminPage() {
             { id: 'users', label: t('admin.tab.users'), icon: UserCog },
             { id: 'nsca', label: t('admin.tab.nsca'), icon: Siren },
             { id: 'sensorThresholds', label: t('admin.tab.sensorThresholds'), icon: Thermometer },
+            { id: 'influxShards', label: t('admin.tab.influxShards'), icon: Database },
             { id: 'audit', label: t('admin.tab.audit'), icon: ScrollText },
             { id: 'backup', label: t('admin.tab.backup'), icon: Archive },
           ] as const
@@ -86,6 +88,9 @@ export function AdminPage() {
         <NscaConfig onDone={() => void load()} />
       ) : tab === 'sensorThresholds' ? (
         <SensorThresholds onDone={() => void load()} />
+      ) : tab === 'influxShards' ? (
+        // Shards InfluxDB (GitHub #18) : autonome (chargement propre), comme AuditLog.
+        <InfluxShards onDone={() => void load()} />
       ) : tab === 'groups' ? (
         // Les groupes autorisent des FAMILLES entières (pas des versions) —
         // une entrée par famille (id + nom) pour l'affichage lisible.

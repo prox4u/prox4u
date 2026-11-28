@@ -1,6 +1,6 @@
 ---
 name: operations
-description: Runbook production de Prox4u — kit de déploiement autonome (deploiement/), pointage INFLUX_URL vers un InfluxDB externe, agent Telegraf sur les nœuds PVE (60-telegraf-nodes.sh, 16 tables, DEPLOY.md §10), setup Centreon pour le module Alarmes & Centreon (70-centreon-setup.sh : groupe + compte admin global + token API + mdp NSCA + user de monitoring non-admin (console, ACL + topologie menu), DEPLOY.md §11), systemd/server.sh, logs, dépannage (WS, repli InfluxDB→RRD, TLS SAN, tokens PVE). Use when deploying, updating, or troubleshooting the app in production.
+description: Runbook production de Prox4u — kit de déploiement autonome (deploiement/), pointage INFLUX_URL vers un InfluxDB externe, agent Telegraf sur les nœuds PVE (60-telegraf-nodes.sh, 16 tables, DEPLOY.md §10), setup Centreon pour le module Alarmes & Centreon (70-centreon-setup.sh : groupe + compte admin global + token API + mdp NSCA + user de monitoring non-admin (console, ACL + topologie menu), DEPLOY.md §11), systemd/server.sh, logs, dépannage (WS, repli InfluxDB→RRD, TLS SAN, tokens PVE), activation Phase 1 du sharding multi-InfluxDB par endpoint (GitHub #18 : instances par endpoint + reconfig Telegraf par nœud + migration historique). Use when deploying, updating, or troubleshooting the app in production, or activating InfluxDB sharding.
 ---
 
 # Prox4u — Runbook production
@@ -36,6 +36,15 @@ Ordre : tokens PVE → tarball → install `/opt/prox4u` + `pnpm install --prod`
 - `INFLUX_TOKEN` vide → InfluxDB désactivé, **repli RRD Proxmox automatique** (l'app marche, sans historique long terme).
 - Bases `raw` (rétention 31 j) et `consolidated` (∞, agrégats 5 min) créées au démarrage ; consolidateur toutes les 5 min (état `data/consolidation-state.json`, backfill par tranches d'un jour après long arrêt).
 - Après pointage : la courbe « Disque » (`storage_metrics`) s'accumule depuis le 1er tick — 7 jours pour une vue complète.
+
+### 3bis. Sharding multi-InfluxDB par endpoint (GitHub #18) — activation Phase 1
+Le code de la **Phase 0 est dormant** : sans shard configuré, tout reste sur l'instance globale (`INFLUX_URL`). L'activation est une **étape de déploiement** (pas un simple clic) :
+1. **Déployer une instance InfluxDB par endpoint** (ou un sous-ensemble) — mêmes exigences que l'instance globale (`--query-file-limit=10000`, TLS, token).
+2. **Configurer les shards** via l'UI admin (onglet **Shards InfluxDB**) ou `data/influx-shards.json` : `{ endpointId, url, token?, rawDb?, aggDb?, rrdDb?, caCert? }` (vide = hérité du global). Le routeur se recharge **à chaud** (sans restart).
+3. **Reconfigurer Telegraf sur chaque nœud PVE** pour qu'il écrive dans le shard de son endpoint : `60-telegraf-nodes.sh` avec `INFLUX_URL`/`TELEGRAF_INFLUX_TOKEN` pointant vers le shard (les tables Telegraf n'ont **pas de tag endpoint** — le routage passe par la destination, pas par un tag).
+4. **Décision migration historique** : les données pré-sharding restent dans le global ; les lectures sont en fan-out (global + shards) donc **complètes** tant que le global conserve ses données.
+
+> Les **écritures** du poller (métriques API PVE, tag `cluster`) sont routées automatiquement par endpoint dès qu'un shard est configuré ; les **lectures** sont toujours en fan-out. Consolidator/archiver tournent per-client (shards → sous-dossier `/<endpointId>/`). Détail : skill `general` §4.5bis + `docs/plan-limites-influxdb3.md` § Hors périmètre.
 
 ## 4. Démarrage + vérification
 ```bash

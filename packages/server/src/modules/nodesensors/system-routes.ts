@@ -22,6 +22,7 @@ import type {
 } from '@prox4u/shared';
 import { isPhysicalDevice, zfsHitRatePct } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
+import { fanOutQuery } from '../../core/influx-shards.js';
 import type { NodeNetwork } from '../../core/data-source.js';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 
@@ -445,18 +446,15 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
     if (influxReady(ctx)) {
       try {
         const [sysRows, memRows, cpuRows] = await Promise.all([
-          ctx.influx!.querySql<InfluxRow>(
-            ctx.influx!.rawDb,
+          fanOutQuery<InfluxRow>(ctx, 'raw',
             `SELECT node, load1, load5, load15, n_cpus, uptime, time
              FROM system WHERE time >= now() - INTERVAL '10 minutes' ORDER BY time DESC`,
           ),
-          ctx.influx!.querySql<InfluxRow>(
-            ctx.influx!.rawDb,
+          fanOutQuery<InfluxRow>(ctx, 'raw',
             `SELECT node, swap_total, swap_free, time
              FROM mem WHERE time >= now() - INTERVAL '10 minutes' ORDER BY time DESC`,
           ),
-          ctx.influx!.querySql<InfluxRow>(
-            ctx.influx!.rawDb,
+          fanOutQuery<InfluxRow>(ctx, 'raw',
             `SELECT node, cpu, usage_user, usage_system, usage_iowait, usage_idle, time
              FROM cpu WHERE time >= now() - INTERVAL '10 minutes' ORDER BY time DESC`,
           ),
@@ -544,8 +542,7 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
     let body: NodeHardwareResponse = { nodes: [], source: 'empty' };
     if (influxReady(ctx)) {
       try {
-        const rows = await ctx.influx!.querySql<InfluxRow>(
-          ctx.influx!.rawDb,
+        const rows = await fanOutQuery<InfluxRow>(ctx, 'raw',
           `SELECT node, cpu_model, product, vendor, board, time
            FROM node_hardware WHERE time >= now() - INTERVAL '1 hour' ORDER BY time DESC`,
         );
@@ -603,7 +600,7 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
         const { bucket, bucketSec, window } = HOST_DISKIO_TF[tf];
         const where = `node = ${sqlStr(node)} AND name NOT LIKE 'dm-%' AND name NOT LIKE 'loop%'
           AND name NOT LIKE 'md%' AND name NOT LIKE 'sr%' AND name NOT LIKE 'ram%' AND name NOT LIKE 'zram%'`;
-        const rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, diskioRateSql(where, bucket, bucketSec, window));
+        const rows = await fanOutQuery<InfluxRow>(ctx, 'raw', diskioRateSql(where, bucket, bucketSec, window));
         const devices = diskioRowsToDevices(rows);
         body = { timeframe: tf, node, devices, source: devices.length > 0 ? 'influx' : 'insufficientData' };
       } catch (err) {
@@ -645,7 +642,7 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
         const { bucket, bucketSec, window } = HOST_DISKIO_TF[tf];
         const where = `node = ${sqlStr(node)} AND "interface" NOT LIKE 'vnet%' AND "interface" NOT LIKE 'tap%'
           AND "interface" NOT LIKE 'veth%' AND "interface" <> 'lo'`;
-        const rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, netRateSql(where, bucket, bucketSec, window));
+        const rows = await fanOutQuery<InfluxRow>(ctx, 'raw', netRateSql(where, bucket, bucketSec, window));
         const out: NodeNetRow[] = [];
         for (const r of rows) {
           const iface = String(r.iface ?? '');
@@ -708,7 +705,7 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
     if (influxReady(ctx)) {
       try {
         const { bucket, window } = HOST_DISKIO_TF[tf];
-        const rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, tempsSql(`node = ${sqlStr(node)}`, bucket, window));
+        const rows = await fanOutQuery<InfluxRow>(ctx, 'raw', tempsSql(`node = ${sqlStr(node)}`, bucket, window));
         const series = tempsRowsToSeries(rows);
         body = { timeframe: tf, node, series, source: series.length > 0 ? 'influx' : 'insufficientData' };
       } catch (err) {
@@ -748,12 +745,11 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
       try {
         const where = `node = ${sqlStr(node)}`;
         const { bucket, window } = HOST_DISKIO_TF[tf];
-        const rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, smartTempsSql(where, bucket, window));
+        const rows = await fanOutQuery<InfluxRow>(ctx, 'raw', smartTempsSql(where, bucket, window));
         const series = smartTempsRowsToSeries(rows);
         if (series.length > 0) {
           try {
-            const modelRows = await ctx.influx!.querySql<InfluxRow>(
-              ctx.influx!.rawDb,
+            const modelRows = await fanOutQuery<InfluxRow>(ctx, 'raw',
               `SELECT device, model, time FROM smart_device WHERE ${where} AND time >= now() - INTERVAL '1h' ORDER BY time DESC`,
             );
             const models = new Map<string, string | null>();
@@ -804,7 +800,7 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
     if (influxReady(ctx)) {
       try {
         const { bucket, window } = HOST_DISKIO_TF[tf];
-        const rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, zfsArcSql(`node = ${sqlStr(node)}`, bucket, window));
+        const rows = await fanOutQuery<InfluxRow>(ctx, 'raw', zfsArcSql(`node = ${sqlStr(node)}`, bucket, window));
         const points = zfsArcRowsToPoints(rows);
         body = { timeframe: tf, node, points, source: points.length > 0 ? 'influx' : 'insufficientData' };
       } catch (err) {
@@ -848,12 +844,12 @@ export function registerNodeSystemRoutes(app: FastifyInstance, ctx: AppContext, 
       let sysRows: InfluxRow[] = [];
       let memRows: InfluxRow[] = [];
       try {
-        sysRows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, hostHistorySystemSql(where, bucket, window));
+        sysRows = await fanOutQuery<InfluxRow>(ctx, 'raw', hostHistorySystemSql(where, bucket, window));
       } catch (err) {
         ctx.logger.warn(`node-system-history(${key}) : table system indisponible (${(err as Error).message})`);
       }
       try {
-        memRows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, hostHistoryMemSql(where, bucket, window));
+        memRows = await fanOutQuery<InfluxRow>(ctx, 'raw', hostHistoryMemSql(where, bucket, window));
       } catch (err) {
         ctx.logger.warn(`node-system-history(${key}) : table mem indisponible (${(err as Error).message})`);
       }

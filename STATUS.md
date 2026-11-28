@@ -1,6 +1,6 @@
 # Prox4u — État d'avancement
 
-> **Dernière mise à jour : 2026-11-27**
+> **Dernière mise à jour : 2026-11-28**
 > Application de supervision vCenter-like pour Proxmox VE (managers/DSI).
 > Conception de référence : `.opencode/skills/proxmox-web/SKILL.md`
 
@@ -2862,6 +2862,69 @@ Le seuil de `sensor_temp_c` est le **seuil effectif** (perso ≤ firmware, ongle
 
 ---
 
+## ✅ Fait — Sharding multi-InfluxDB par endpoint — Phase 0 « dormant » (GitHub #18, livré 2026-11-28, tests verts + E2E)
+
+Répartit les métriques sur plusieurs instances InfluxDB quand un seul nœud ne suffit plus
+(volume d'écriture, headroom fichiers, performance requêtes). **Phase 0 = code dormant** :
+le routeur retombe sur l'instance **globale** tant qu'aucun shard n'est configuré →
+**zéro changement de comportement** (prouvé par tests + E2E). L'activation (Phase 1) est
+une étape de **déploiement** (instances par endpoint + reconfig Telegraf par nœud).
+
+### `packages/server` — cœur du feature
+- **`core/influx-shards.ts`** (NOUVEAU) : `InfluxShardConfig` + `InfluxShardRouter`
+  (`forEndpoint`/`all`/`allWithIds`/`hasShards`/`reload`/`stop`, dédup par URL, hot-reload)
+  + `InfluxShardStore` (`data/influx-shards.json`, chmod 600, écriture atomique tmp+rename)
+  + helpers de routage `shardFor` / `shardClients` / `shardClientsWithIds` /
+  `fanOutQuery` / `fanOutQueryChunked` / `dbOf`.
+- **`core/influx.ts`** : getter `url` (sert le dédup du routeur).
+- **`core/poller.ts`** : `AppContext.influxShards?` + `influxShardStore?` ; `writeInflux`
+  routé par `shardFor(ctx, clusterId)` (les métriques API PVE de l'endpoint vont dans son
+  shard ; self-telemetry `influxdb_self` reste globale).
+- **`index.ts`** : wiring store + router + `ctx` + `ensureInfluxDatabases` par shard +
+  `influxShards.stop()` au shutdown.
+- **Lectures → `fanOutQuery`** (global + shards, merge, tolérance partiel) : nodesensors
+  (`data.ts`, `routes.ts`, `system-routes.ts`), vmview (`routes.ts`, `vm-diskio.ts`,
+  `vm-net.ts`), dashboard (`routes.ts`), supervision (`routes.ts`), influxdb (`routes.ts`).
+  Solution universelle : correcte (chaque shard = 1 endpoint) **et** complète (les données
+  legacy pré-sharding restent dans le global, donc incluses).
+- **Consolidator** : `consolidateRange` boucle `shardClients` (chaque instance consolide
+  ses propres données, idempotent). **Archiver** : `archiveRange` boucle
+  `shardClientsWithIds` ; le global écrit à la racine de `archiveDir`, chaque shard dans
+  `/<endpointId>/` (évite les collisions `${table}-${day}.csv`) ; `getState()` récursif.
+- **Module `/influxdb`** : `GET /api/influxdb` + champ `shards: InfluxShardHealth[]`
+  (ping/version/bases/write/headroom par shard) ; `GET /api/influxdb/tables?shard=`
+  (réponse inchangée, rétrocompatible). Actions (flush/archive/export/bases) + `/api/health`
+  + history restent **globales** en Phase 0.
+- **API admin** : `influxdb/shard-routes.ts` — `GET/POST /api/admin/influx-shards`
+  (upsert par endpointId), `DELETE` (tout), `DELETE /:endpointId`, `POST /:endpointId/test`
+  (ping, 404 si shard non sauvé). Validation : endpointId connu (404 `unknown-endpoint`),
+  url http(s) (400 `bad-url`), slash final normalisé.
+
+### `packages/web` — UI admin
+- **`plugins/influxdb/lib/influx-shards-api.ts`** (NOUVEAU) : client API.
+- **`components/admin/influx-shards.tsx`** (NOUVEAU) : onglet « Shards InfluxDB » — liste
+  des shards + actions (tester/edit/retirer), formulaire d'ajout/édition (endpoint dropdown,
+  URL, token, bases, CA), « Tout retirer ». Message dormant si liste vide.
+- **`pages/admin/index.tsx`** : onglet + icône Database.
+- **i18n** `shared/i18n/{fr,en}.ts` : `admin.tab.influxShards` + `influxShards.*`.
+
+### Vérifications effectuées
+- `pnpm typecheck` (server 0 erreur nouvelle, web 0) + `pnpm test` (server **506** = 473 +
+  33 nouveaux : `influx-shards.test.ts` 24 + `shard-routes.test.ts` 9 ; shared 481) + `pnpm build` ✓
+- **E2E smoke** : `GET /api/influxdb` → `shards: []` (dormant) · CRUD `/api/admin/influx-shards`
+  (upsert → shard visible avec santé, ping OK, slash normalisé · 404 endpoint inconnu ·
+  400 url invalide · delete → re-dormant + fichier persisté) ✓
+- **UI Playwright** : onglet « Shards InfluxDB » rendu, titre + message dormant + bouton
+  ajouter, **zéro erreur JS** ✓
+
+### Limitations connues (Phase 1)
+- `fanOutQuery` masque le fallback « No field named » par client (ex. `vm_metrics.disk_bytes`)
+  — sans impact en dormant (1 client) ; à affiner à l'activation.
+- Données legacy pré-sharding dans le global : à l'activation, l'historique d'un endpoint
+  shardé est complet (global + shard) tant que le global conserve ses données.
+
+---
+
 ## ⏳ Suivi des tâches (GitHub)
 
 Le **backlog et le suivi des tâches** sont désormais dans les **issues GitHub**
@@ -2870,7 +2933,7 @@ Les sections « ✅ Fait » ci-dessus conservent l'historique des livraisons ; l
 de référence (ProxMenux, Telegraf) est dans les skills (`monitoring-proxmenux`, `audit`,
 `node-sensors`, `centreon-nsca`).
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — **#1 Alarmes & Centreon (validation) (clôturée 2026-11-27 — E2E central réel : passe UI Playwright 13/13 + check sécurité, sans CLAPI)** · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · **#4 P0 règles d'alarme capteurs (clôturée 2026-11-27 — SMART / température / systemd / ZFS, seuil effectif perso ≤ firmware)** · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)** · **#20 centreon-nsca suppression service Centreon à la suppression d'une règle (clôturée 2026-11-28 — cohérence Prox4u↔Centreon : service supprimé AVANT la règle, état « suppression en attente » + réessai auto, filtre `filter[name]`, E2E 3 cas + UI 5/5)** · **#21 centreon-nsca gestion des orphelins d'hôtes Centreon (clôturée 2026-11-28 — `managedHosts` + 3 garde-fous + suppression hôte orpheline + balayage périodique `orphanSweepMinutes`, E2E 25/25 + UI 6/6)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — **#1 Alarmes & Centreon (validation) (clôturée 2026-11-27 — E2E central réel : passe UI Playwright 13/13 + check sécurité, sans CLAPI)** · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · **#4 P0 règles d'alarme capteurs (clôturée 2026-11-27 — SMART / température / systemd / ZFS, seuil effectif perso ≤ firmware)** · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique) — Phase 0 « dormant » livrée 2026-11-28 (code complet : routeur + écritures routées + lectures fan-out + consolidator/archiver per-client + santé `/influxdb` + `?shard=` + admin UI/API, zéro changement sans shard configuré, tests 506 + E2E) ; Phase 1 activation (instances par endpoint + reconfig Telegraf par nœud + migration historique) à venir** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)** · **#20 centreon-nsca suppression service Centreon à la suppression d'une règle (clôturée 2026-11-28 — cohérence Prox4u↔Centreon : service supprimé AVANT la règle, état « suppression en attente » + réessai auto, filtre `filter[name]`, E2E 3 cas + UI 5/5)** · **#21 centreon-nsca gestion des orphelins d'hôtes Centreon (clôturée 2026-11-28 — `managedHosts` + 3 garde-fous + suppression hôte orpheline + balayage périodique `orphanSweepMinutes`, E2E 25/25 + UI 6/6)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
 
 ---
 

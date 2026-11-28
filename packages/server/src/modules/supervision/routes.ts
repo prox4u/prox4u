@@ -17,6 +17,7 @@ import {
 } from '@prox4u/shared';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 import { influxTsToUnix, type SqlRow } from '../../core/influx.js';
+import { fanOutQuery } from '../../core/influx-shards.js';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -163,15 +164,13 @@ async function influxDatastoreHistory(
   //  - infini (consolidated) : buckets 5 min, rétention illimitée (historique long terme)
   // On fusionne les deux et on dédoublonne par horodatage (raw prime, plus fin).
   const [rawRows, aggRows] = await Promise.all([
-    ctx.influx.querySql<SqlRow>(
-      ctx.influx.rawDb,
+    fanOutQuery<SqlRow>(ctx, 'raw',
       `SELECT "storage", time, used_bytes, total_bytes
        FROM datastore_metrics
        WHERE time >= now() - INTERVAL '${window}' AND ${clusterFilter(ctx, ep.id)}
        ORDER BY time`,
     ),
-    ctx.influx.querySql<SqlRow>(
-      ctx.influx.aggDb,
+    fanOutQuery<SqlRow>(ctx, 'agg',
       `SELECT "storage", time, used_bytes, total_bytes
        FROM datastore_metrics
        WHERE time >= now() - INTERVAL '${window}' AND ${clusterFilter(ctx, ep.id)}

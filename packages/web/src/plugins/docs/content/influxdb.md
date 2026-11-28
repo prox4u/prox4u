@@ -60,6 +60,23 @@ Le panneau **Actions** n'est visible que si votre compte est **admin** ou membre
    - **Supprimer une table** : supprime définitivement une table d'une base.
 5. Le **résultat** de chaque action s'affiche (succès / échec) et la page se rafraîchit.
 
+### 5. Sharding multi-InfluxDB par endpoint (admin)
+
+Quand un seul nœud InfluxDB ne suffit plus (volume d'écriture, headroom fichiers, performance des requêtes), les métriques peuvent être **réparties sur plusieurs instances InfluxDB** — une par endpoint. La fonctionnalité est **dormante par défaut** : sans shard configuré, tout transite par l'instance globale (zéro changement de comportement).
+
+1. Ouvrez **Administration** → onglet **Shards InfluxDB** (rôle admin).
+2. **Ajouter un shard** : choisissez l'**endpoint** (menu déroulant), l'**URL de l'instance** (`https://hote:8181`), et éventuellement le **token** (vide = token global), les **bases raw / consolidée** (vide = globales) et le **certificat CA**.
+3. **Tester** la connexion (ping), **modifier**, **retirer** le shard, ou **Tout retirer** (retour à l'instance unique).
+4. La config est persistée dans `data/influx-shards.json` et le routeur est **rechargé à chaud** (sans redémarrage). La santé de chaque shard (ping / version / bases / file d'écriture) est visible dans la réponse `GET /api/influxdb` (champ `shards`).
+
+**Comment ça marche** :
+- **Écritures** : les métriques API PVE du poller pour un endpoint vont dans le shard de cet endpoint (s'il est configuré), sinon dans l'instance globale.
+- **Lectures** : Prox4u interroge l'instance globale **et** tous les shards (fan-out) et fusionne les résultats — l'historique reste **complet** (les données pré-sharding, dans le global, sont incluses).
+- **Données Telegraf** (capteurs nœuds) : écrites directement par l'agent Telegraf de chaque nœud. Pour les sharder, il faut **reconfigurer Telegraf sur chaque nœud** pour qu'il pointe vers le shard de son endpoint (étape de déploiement — Phase 1).
+- **Consolidation / archivage** : chaque instance consolide et archive ses propres données (les shards écrivent dans un sous-dossier `/<endpointId>/`).
+
+> **À noter** : activer le sharding (déployer les instances par endpoint + reconfigurer Telegraf + décider de la migration de l'historique) est une étape de **déploiement** (Phase 1), pas un simple clic. Le code de la Phase 0 est en place et dormant.
+
 ---
 
 ## Ce qui se passe en fond
@@ -92,6 +109,7 @@ Prox4u écrit en continu les métriques Proxmox dans InfluxDB 3 Core, puis les c
 | Dossier d'archivage | `.env` `INFLUX_ARCHIVE_DIR` | `data/influx-archive` |
 | Dossier de sauvegardes | `.env` `INFLUX_BACKUP_DIR` | `data/influx-backups` |
 | Base consolidée | `.env` `INFLUX_AGG_DB` | `consolidated` |
+| Shards par endpoint | `data/influx-shards.json` (UI admin) | vide (dormant) |
 | Fenêtre de consolidation | code (fixe) | 5 min |
 | Chunk de requête | `.env` `INFLUX_QUERY_CHUNK_DAYS` | 30 j |
 | Limite de fichiers requête | `.env` `INFLUX_QUERY_FILE_LIMIT` | 10 000 |
@@ -135,3 +153,6 @@ Deux façons : **Sauvegarder une base** (action 🟢, crée un ZIP persistant su
 
 **Où sont stockées les sauvegardes ?**
 Sur le **disque du serveur**, dans le dossier de sauvegardes (`.env` `INFLUX_BACKUP_DIR`, défaut `data/influx-backups`). Elles sont **téléchargeables** depuis l'UI (lien **Télécharger** dans le résultat de l'action) — pensez à les copier ailleurs si vous voulez une copie hors serveur.
+
+**Comment répartir les métriques sur plusieurs instances InfluxDB (sharding) ?**
+Via **Administration** → **Shards InfluxDB** : ajoutez un shard par endpoint (URL de l'instance, token/bases/CA optionnels — vide = hérité du global). Le code est **dormant** : sans shard, tout reste sur l'instance globale. Pour une activation complète (Phase 1), il faut en plus déployer les instances par endpoint et **reconfigurer Telegraf sur chaque nœud** pour qu'il écrive dans le shard de son endpoint — les lectures, elles, sont automatiquement en fan-out (global + shards) et restent complètes.

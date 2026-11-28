@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildLine, influxTsToUnix, type SqlRow } from './influx.js';
+import { buildLine, influxTsToUnix, type InfluxClient, type SqlRow } from './influx.js';
+import { shardClients } from './influx-shards.js';
 import type { AppContext } from './poller.js';
 
 const WINDOW_SEC = 300;
@@ -101,9 +102,19 @@ export class InfluxConsolidator {
     }
   }
 
-  /** Agrège [from, to) de raw vers consolidated (buckets 5 min). */
+  /**
+   * Agrège [from, to) de raw vers consolidated (buckets 5 min) — pour CHAQUE
+   * client (global + shards, GitHub #18). Chaque instance consolide ses propres
+   * données (son endpoint). Idempotent : re-consolider une fenêtre réécrit les
+   * mêmes lignes (même timestamp) → sur-écriture, pas de doublon.
+   */
   private async consolidateRange(from: number, to: number): Promise<void> {
-    const influx = this.ctx.influx;
+    for (const influx of shardClients(this.ctx)) {
+      await this.consolidateClient(influx, from, to);
+    }
+  }
+
+  private async consolidateClient(influx: InfluxClient, from: number, to: number): Promise<void> {
     // bornes ISO UTC : DataFusion ne coerce pas timestamp >= entier
     const iso = (ts: number) => new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
     // lignes legacy (avant le tag cluster) → endpoint par défaut

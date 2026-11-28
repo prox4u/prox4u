@@ -40,6 +40,7 @@ import { reloadOvercommitConfig, reloadTunableConfigs, type AppConfig } from './
 import type { DataSource } from './data-source.js';
 import { AGENT_CONCURRENCY, mapLimit } from './prox4u-client.js';
 import { buildLine, type InfluxClient } from './influx.js';
+import { shardFor, type InfluxShardRouter, type InfluxShardStore } from './influx-shards.js';
 import type { InfluxArchiver } from './influx-archiver.js';
 import type { WsHub } from './ws-hub.js';
 import type { AuthContext } from '../modules/auth/runtime.js';
@@ -60,8 +61,21 @@ export interface AppContext {
   config: AppConfig;
   endpoints: EndpointRuntime[];
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
-  /** client InfluxDB (désactivé si INFLUX_TOKEN vide) */
+  /** client InfluxDB global (désactivé si INFLUX_TOKEN vide) */
   influx: InfluxClient;
+  /**
+   * Routeur de shards InfluxDB par endpoint (GitHub #18, Phase 0 dormant).
+   * Absent des mocks de tests → les helpers `shardFor`/`fanOutQuery` retombent
+   * sur `ctx.influx` (zéro changement de comportement). Posé en production
+   * (index.ts) ; `forEndpoint()` retombe sur le global si aucun shard configuré.
+   */
+  influxShards?: InfluxShardRouter;
+  /**
+   * Store de la config des shards (data/influx-shards.json) — sert les routes
+   * admin (GET/PUT/DELETE /api/admin/influx-shards). Optionnel : absent des
+   * mocks de tests ; toujours posé en production (index.ts).
+   */
+  influxShardStore?: InfluxShardStore;
   /**
    * archiver InfluxDB (consolidated → CSV) — accessible aux routes d'actions
    * (POST /api/influxdb/actions/archive/*). Optionnel : absent des mocks de tests
@@ -1156,7 +1170,9 @@ export class Poller {
     kpis: KpiSummary,
     storages: { storage: string; usedBytes: number; totalBytes: number }[],
   ): Promise<void> {
-    const influx = this.ctx.influx;
+    // Sharding (GitHub #18) : les métriques API PVE de l'endpoint sont écrites
+    // dans le shard de cet endpoint (repli sur le global si aucun shard configuré).
+    const influx = shardFor(this.ctx, clusterId);
     if (!influx.enabled || this.ctx.config.mock) return;
     const ts = Math.floor(Date.now() / 1000);
     // Stockage VM au niveau endpoint (used/total, toutes capacités confondues) :

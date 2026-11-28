@@ -245,3 +245,10 @@ manuellement).
   `Accept: application/vnd.apache.parquet`), zéro dépendance — 1 fichier/tranche de 30 j.
   → **FAIT** (GitHub #15, 2026-11-27).
 - **Sharding multi-InfluxDB** par endpoint (si un seul nœud ne suffit plus). → **GitHub #18**
+  → **Phase 0 FAIT** (2026-11-28) — code **dormant** : routeur de shards
+  (`core/influx-shards.ts`), écritures poller routées par endpoint, lectures en
+  fan-out (global + shards), consolidator/archiver per-client, santé `/api/influxdb`
+  + param `?shard=`, admin UI (onglet « Shards InfluxDB ») + API `/api/admin/influx-shards`.
+  Zéro changement de comportement sans shard configuré (`data/influx-shards.json` vide).
+  **Phase 1 (activation, à venir)** : déployer les instances par endpoint + reconfig
+  Telegraf par nœud + décision de migration de l'historique.

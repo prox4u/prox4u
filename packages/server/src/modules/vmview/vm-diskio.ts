@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { MetricsTimeframe, VmDiskioPoint, VmDiskioResponse, VmDiskioSeries } from '@prox4u/shared';
 import { mapperLabel, parsePveMapperName } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
+import { fanOutQuery } from '../../core/influx-shards.js';
 import type { AppContext, EndpointRuntime } from '../../core/poller.js';
 import { DISKIO_CACHE_TTL_MS, HOST_DISKIO_TF, diskioRateSql, normRate, sqlStr, type InfluxRow } from '../nodesensors/system-routes.js';
 
@@ -92,8 +93,7 @@ export function registerVmDiskioRoute(app: FastifyInstance, ctx: AppContext): vo
     if (influxReady(ctx)) {
       try {
         // 1) mapping dm-N → LV (fenêtre 1 h, dernier point par (node, dm))
-        const mapRows = await ctx.influx!.querySql<InfluxRow>(
-          ctx.influx!.rawDb,
+        const mapRows = await fanOutQuery<InfluxRow>(ctx, 'raw',
           `SELECT node, dm, mapper_name FROM dm_names WHERE time >= now() - INTERVAL '1 hour' ORDER BY time DESC`,
         );
         const dmLatest = latestDmMapping(mapRows);
@@ -121,8 +121,7 @@ export function registerVmDiskioRoute(app: FastifyInstance, ctx: AppContext): vo
             }
             for (const [node, devs] of byNode) {
               const names = devs.map((d) => sqlStr(d.dm));
-              const rows = await ctx.influx!.querySql<InfluxRow>(
-                ctx.influx!.rawDb,
+              const rows = await fanOutQuery<InfluxRow>(ctx, 'raw',
                 diskioRateSql(`node = ${sqlStr(node)} AND name IN (${names.join(',')})`, bucket, bucketSec, window),
               );
               const byDev = new Map<string, VmDiskioPoint[]>();

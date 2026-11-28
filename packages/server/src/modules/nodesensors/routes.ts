@@ -9,6 +9,7 @@ import type {
 } from '@prox4u/shared';
 import { sensorKey } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
+import { fanOutQuery, fanOutQueryChunked } from '../../core/influx-shards.js';
 import type { AppContext } from '../../core/poller.js';
 import { fetchSensorAlarmData } from './data.js';
 import type { SensorThresholdStore } from './thresholds.js';
@@ -135,8 +136,7 @@ async function mergedTempBuckets(
   const [rawRows, aggRows] = await Promise.all([
     // raw : buckets 10 min (les points 10 s seraient ~270k sur 31 j). Fenêtre ≤ 31 j
     // = 4 464 fichiers < --query-file-limit → requête simple.
-    ctx.influx!.querySql<Record<string, string | number | null>>(
-      ctx.influx.rawDb,
+    fanOutQuery<Record<string, string | number | null>>(ctx, 'raw',
       `SELECT date_bin(INTERVAL '10 minutes', time) AS t, max(${tempField}) AS temp
        FROM ${table} WHERE ${where} AND time >= '${iso(fromSec)}' AND time < '${iso(toSec)}'
          AND ${tempField} IS NOT NULL
@@ -144,8 +144,7 @@ async function mergedTempBuckets(
     ),
     // consolidated : buckets 15 min (rétention illimitée) — l'année. Fenêtre long terme
     // (> ~69 j = --query-file-limit) → requête CHUNKÉE (P2, plan-limites-influxdb3.md).
-    ctx.influx!.querySqlChunked<Record<string, string | number | null>>(
-      ctx.influx.aggDb,
+    fanOutQueryChunked<Record<string, string | number | null>>(ctx, 'agg',
       (f, t) =>
         `SELECT date_bin(INTERVAL '15 minutes', time) AS t, max(${tempField}) AS temp
        FROM ${table} WHERE ${where} AND time >= '${f}' AND time < '${t}'
@@ -198,8 +197,7 @@ async function computeSensorHistory(
   const custom = thresholds[sensorKey({ node, chip, feature })] ?? null;
   let firmware: number | null = null;
   try {
-    const fwRows = await ctx.influx!.querySql<Record<string, string | number | null>>(
-      ctx.influx.rawDb,
+    const fwRows = await fanOutQuery<Record<string, string | number | null>>(ctx, 'raw',
       `SELECT max(temp_crit) AS temp_crit
        FROM sensors WHERE ${where} AND time >= now() - INTERVAL '1h'`,
     );
@@ -335,8 +333,7 @@ async function fetchFirmwareSensors(ctx: AppContext): Promise<Map<string, Firmwa
   const out = new Map<string, FirmwareSensor>();
   if (!influxReady(ctx)) return out;
   try {
-    const rows = await ctx.influx!.querySql<Record<string, string | number | null>>(
-      ctx.influx.rawDb,
+    const rows = await fanOutQuery<Record<string, string | number | null>>(ctx, 'raw',
       `SELECT node, chip, feature, temp_input, temp_crit, time
        FROM sensors WHERE time >= now() - INTERVAL '1h'
        ORDER BY time DESC`,

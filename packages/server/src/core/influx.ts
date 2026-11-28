@@ -147,6 +147,11 @@ export class InfluxClient {
     return this.cfg.enabled;
   }
 
+  /** URL de l'instance (sans slash final) — sert le dedup du routeur de shards. */
+  get url(): string {
+    return this.cfg.url.replace(/\/$/, '');
+  }
+
   get rawDb(): string {
     return this.cfg.rawDb;
   }

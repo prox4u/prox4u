@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { MetricsTimeframe, VmNetPoint, VmNetResponse, VmNetSeries } from '@prox4u/shared';
 import { influxTsToUnix } from '../../core/influx.js';
+import { fanOutQuery } from '../../core/influx-shards.js';
 import type { AppContext, EndpointRuntime, Poller } from '../../core/poller.js';
 import {
   DISKIO_CACHE_TTL_MS,
@@ -155,8 +156,7 @@ async function buildVmNet(
   // 1) mapping interface hôte → MAC (fenêtre 1 h, dernier point par interface)
   let macIface: Map<string, string>;
   try {
-    const mapRows = await ctx.influx!.querySql<InfluxRow>(
-      ctx.influx!.rawDb,
+    const mapRows = await fanOutQuery<InfluxRow>(ctx, 'raw',
       `SELECT iface, mac FROM net_if_mac WHERE node = ${sqlStr(vm.node)} AND time >= now() - INTERVAL '1 hour' ORDER BY time DESC`,
     );
     macIface = latestIfMacMapping(mapRows);
@@ -188,7 +188,7 @@ async function buildVmNet(
     try {
       const { bucket, bucketSec, window } = HOST_DISKIO_TF[tf];
       const where = `node = ${sqlStr(vm.node)} AND "interface" IN (${hostIfaces.map(sqlStr).join(', ')})`;
-      rows = await ctx.influx!.querySql<InfluxRow>(ctx.influx!.rawDb, netRateSql(where, bucket, bucketSec, window));
+      rows = await fanOutQuery<InfluxRow>(ctx, 'raw', netRateSql(where, bucket, bucketSec, window));
     } catch (err) {
       ctx.logger.warn(`vm-net(${ep.id}/${vmid}) : table net indisponible (${(err as Error).message})`);
       return none('noMapping');

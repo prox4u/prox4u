@@ -8,6 +8,7 @@ import { Agent } from 'undici';
 import type { Site } from '@prox4u/shared';
 import { loadConfig } from './core/config.js';
 import { ensureInfluxDatabases, InfluxClient } from './core/influx.js';
+import { InfluxShardRouter, InfluxShardStore } from './core/influx-shards.js';
 import { InfluxConsolidator } from './core/influx-consolidator.js';
 import { InfluxArchiver } from './core/influx-archiver.js';
 import { MockSource, MOCK_SITES } from './core/mock-source.js';
@@ -120,11 +121,22 @@ async function main(): Promise<void> {
   // le module node-sensors (onglet admin) et le moteur d'alarmes (GitHub #4).
   const sensorThresholds = new SensorThresholdStore(path.join(path.dirname(config.authFile), 'sensor-thresholds.json'), logger);
   sensorThresholds.init();
+  // Sharding multi-InfluxDB par endpoint (GitHub #18, Phase 0 dormant) : store
+  // data/influx-shards.json + routeur (repli global si aucun shard configuré).
+  const influxShardStore = new InfluxShardStore(path.join(path.dirname(config.authFile), 'influx-shards.json'), logger);
+  influxShardStore.init();
+  const influxShards = new InfluxShardRouter(influx, config.influx, logger, {
+    globalDispatcher: influxDispatcher,
+    trustCa: trustInfluxCa,
+  });
+  influxShards.reload(influxShardStore.getShards());
   const ctx: AppContext = {
     config,
     endpoints,
     logger,
     influx,
+    influxShards,
+    influxShardStore,
     auth: { store: authStore, sessions, provider: new LocalProvider(authStore), audit },
     userConfig,
     hub,
@@ -168,8 +180,14 @@ async function main(): Promise<void> {
     });
   }
 
-  // Bases InfluxDB (raw 31 j + consolidated ∞) : non bloquant, repli RRD si absent
-  if (influx.enabled && !config.mock) void ensureInfluxDatabases(influx, logger);
+  // Bases InfluxDB (raw 31 j + consolidated ∞) : non bloquant, repli RRD si absent.
+  // Le global + chaque shard (dormant si aucun) obtiennent leurs bases.
+  if (influx.enabled && !config.mock) {
+    void ensureInfluxDatabases(influx, logger);
+    for (const c of influxShards.all()) {
+      if (c !== influx) void ensureInfluxDatabases(c, logger);
+    }
+  }
 
   poller.start();
   consolidator.start();
@@ -197,6 +215,7 @@ async function main(): Promise<void> {
     poller.stop();
     consolidator.stop();
     archiver.stop();
+    influxShards.stop();
     influx.stop();
     await influx.flush().catch(() => undefined);
     hub.close();

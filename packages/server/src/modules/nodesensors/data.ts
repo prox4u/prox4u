@@ -1,5 +1,6 @@
 import type { FailedUnit, SensorReading, SensorAlarmData, SmartDevice, ZfsStatus } from '@prox4u/shared';
 import { influxTsToUnix, type SqlRow } from '../../core/influx.js';
+import { fanOutQuery } from '../../core/influx-shards.js';
 import type { AppContext } from '../../core/poller.js';
 
 /**
@@ -39,13 +40,13 @@ function parseHealthOk(v: string | number | boolean | null | undefined): boolean
 export async function fetchSensorAlarmData(ctx: AppContext): Promise<SensorAlarmData> {
   const empty: SensorAlarmData = { smart: [], sensors: [], zfs: [], zfsPools: [], failedUnits: [], units: [] };
   if (!influxReady(ctx)) return empty;
-  const db = ctx.influx.rawDb;
-
+  // Sharding (GitHub #18) : les tables Telegraf n'ont pas de tag endpoint →
+  // fan-out sur tous les shards (global + shards) + merge. Complet (inclut les
+  // données legacy du global) et tolérant aux pannes partielles.
   // --- SMART : dernier point par (node, device) ---
   let smart: SmartDevice[] = [];
   try {
-    const smartRows = await ctx.influx!.querySql<SqlRow>(
-      db,
+    const smartRows = await fanOutQuery<SqlRow>(ctx, 'raw',
       `SELECT node, device, model, serial_no, health_ok, temp_c, power_on_hours, power_cycle_count,
               reallocated_sectors_count, pending_sector_count, uncorrectable_sector_count, udma_crc_errors,
               percentage_used, available_spare, critical_warning, time
@@ -84,8 +85,7 @@ export async function fetchSensorAlarmData(ctx: AppContext): Promise<SensorAlarm
   // --- Capteurs : dernier point par (node, chip, feature) ---
   let sensors: SensorReading[] = [];
   try {
-    const sensorRows = await ctx.influx!.querySql<SqlRow>(
-      db,
+    const sensorRows = await fanOutQuery<SqlRow>(ctx, 'raw',
       `SELECT node, chip, feature, temp_input, temp_crit, fan_input, in_input, time
        FROM sensors WHERE time >= now() - INTERVAL '1h'
        ORDER BY time DESC`,
@@ -114,8 +114,7 @@ export async function fetchSensorAlarmData(ctx: AppContext): Promise<SensorAlarm
   // --- ZFS ARC : dernier point par node (colonnes arcstats_*) ---
   let zfs: ZfsStatus[] = [];
   try {
-    const zfsRows = await ctx.influx!.querySql<SqlRow>(
-      db,
+    const zfsRows = await fanOutQuery<SqlRow>(ctx, 'raw',
       `SELECT node, arcstats_hits, arcstats_misses, arcstats_size, time
        FROM zfs WHERE time >= now() - INTERVAL '1h'
        ORDER BY time DESC`,
@@ -148,8 +147,7 @@ export async function fetchSensorAlarmData(ctx: AppContext): Promise<SensorAlarm
   // Telegraf zfs : ARC dans `zfs`, état des pools dans `zpool`). ---
   let zfsPools: ZfsStatus[] = [];
   try {
-    const poolRows = await ctx.influx!.querySql<SqlRow>(
-      db,
+    const poolRows = await fanOutQuery<SqlRow>(ctx, 'raw',
       `SELECT node, pool, state, time
        FROM zpool WHERE time >= now() - INTERVAL '1h'
        ORDER BY time DESC`,
@@ -187,8 +185,7 @@ export async function fetchSensorAlarmData(ctx: AppContext): Promise<SensorAlarm
   // par nœud d'états sains, le vrai échec enfoui).
   let failedUnits: FailedUnit[] = [];
   try {
-    const unitRows = await ctx.influx!.querySql<SqlRow>(
-      db,
+    const unitRows = await fanOutQuery<SqlRow>(ctx, 'raw',
       `SELECT node, name, active, sub, load, time
        FROM systemd_units WHERE time >= now() - INTERVAL '1h'
          AND (active = 'failed' OR load = 'error')
@@ -220,8 +217,7 @@ export async function fetchSensorAlarmData(ctx: AppContext): Promise<SensorAlarm
   // Sert aussi aux suggestions du formulaire de règle (~170 unités/nœud).
   let units: FailedUnit[] = [];
   try {
-    const allUnitRows = await ctx.influx!.querySql<SqlRow>(
-      db,
+    const allUnitRows = await fanOutQuery<SqlRow>(ctx, 'raw',
       `SELECT node, name, active, sub, load, time
        FROM systemd_units WHERE time >= now() - INTERVAL '1h'
        ORDER BY time DESC`,
