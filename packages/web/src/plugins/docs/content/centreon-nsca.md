@@ -42,6 +42,11 @@ Dans **Alarmes & Centreon**, le tableau liste toutes les règles avec :
 - filtres (texte, poller, état, provisioning) et recherche ;
 - actions : **activer / désactiver**, **modifier**, **supprimer**, **Tester** (envoie une trame de test), **Reprovisionner** (recrée le service Centreon).
 
+**Supprimer une règle** retire aussi le **service Centreon associé** (cohérence Prox4u ↔ Centreon) :
+- si le central est joignable, le service est supprimé puis la règle retirée (flash « Règle supprimée — service Centreon supprimé ») ;
+- si le service a déjà disparu de Centreon, la règle est retirée (flash « service Centreon déjà absent ») ;
+- si le **central est injoignable**, la règle reste en **« Suppression en attente »** (badge orange dans le tableau, tooltip = dernière erreur) et est **réessayée automatiquement** dès que le central répond (ou en re-cliquant Supprimer). L'hôte Centreon n'est **pas** supprimé (partagé par d'autres règles).
+
 ![Règles de surveillance actives — tableau des règles](/screenshots/alarms.png)
 
 ---

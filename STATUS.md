@@ -887,7 +887,7 @@ Demande utilisateur : « pour la gestion des Pollers, il faut deux entrées — 
 
 ### Roadmap (hors périmètre de cette itération)
 - Backend **Zabbix** (2ᵉ transport d'alarme) sur le même namespace `/api/alarms/*`.
-- Nettoyage CLAPI du service Centreon à la suppression d'une règle (actuellement : le service reste en place, nettoyage manuel).
+- Nettoyage du service Centreon à la suppression d'une règle — **fait en #20** (2026-11-28 : suppression cohérente Prox4u↔Centreon, service retiré avant la règle + état « suppression en attente » + réessai auto — cf. section dédiée).
 - Historique des alarmes / agrégats au-delà des 24 h.
 
 ---
@@ -2756,9 +2756,57 @@ Le seuil de `sensor_temp_c` est le **seuil effectif** (perso ≤ firmware, ongle
   `Prox4u-Alarm-SMART-TEMP-UI_E2E_test` supprimé (REST DELETE + `GET /configuration/
   monitoring-servers/1/generate` + `/reload`) — les 4 règles/services réels intacts
   (CPU_ia-u24 OK, CPU-test WARNING, IP-ia-u24 CRITICAL, RAM_test WARNING).
-- **Écart préexistant (non traité, hors périmètre #1)** : la route DELETE ne retire pas le
-  service Centreon (seul `store.deleteRule` — cf. #5) → le service orphelin est supprimé
-  manuellement via REST.
+- **Écart préexistant (non traité en #1) → RÉSOLU en #20** : la route DELETE ne retirait pas le
+  service Centreon (seul `store.deleteRule` — cf. #5) → le service orphelin était supprimé
+  manuellement via REST. #20 automatise cette suppression avec cohérence Prox4u ↔ Centreon.
+
+---
+
+## ✅ Fait — Suppression cohérente Prox4u ↔ Centreon du service à la suppression d'une règle (clôturé 2026-11-28)
+
+> **2026-11-28** — GitHub issue **#20** (label `enhancement`) : la route `DELETE /api/alarms/rules/:id`
+> ne faisait que `store.deleteRule` → le service Centreon restait **orphelin** (nettoyage manuel).
+> Fix : supprimer le service Centreon **AVANT** la règle, avec **cohérence maximale** (décision user :
+> « supprimer la règle de prox4u et centreon quand Centreon est de nouveau opérationnel ») — la règle
+> n'est retirée de Prox4u qu'après succès (`deleted`) ou `not-found` ; si le central est injoignable,
+> la règle passe en **« suppression en attente »** et est réessayée **automatiquement**.
+
+- **Suppression du service** (`deleteCenteronService` dans `provision.ts`, selon le transport) :
+  - **REST** : `GET /configuration/services?filter[name]=<svc>` (match exact) → absent = `not-found`
+    (idempotent, pas de generate/reload) ; présent → `DELETE /configuration/services/{id}` +
+    `generate` + `reload` du poller = `deleted` ; exception (réseau/HTTP) = `error`.
+  - **CLAPI** : `clapiDeleteCommands` (shared) = `SERVICE -a del` + `POLLERGENERATE` + `CFGMOVE` ;
+    échec de la ligne `del` avec message « absent » (heuristic) → `not-found`, sinon `error`.
+- **Cohérence** : `deleted`/`not-found` → `store.deleteRule` (réponse `{ ok:true, centreon }`) ;
+  `error` → la règle **reste**, marquée `pendingDeletion` (+ `pendingDeletionError`/`pendingDeletionAt`)
+  → réponse `{ ok:false, pending:true, centreon:'pending' }` (HTTP 200).
+- **Réessai automatique** : `engine.ts` → `retryPendingDeletions(cfg)` dans `tick()` **avant**
+  `if (!cfg.enabled) return;` (marche module désactivé) ; **throttle 60 s/règle** (`PENDING_RETRY_MS`) ;
+  succès → `deleteRule` + log `SUPPRESSION FINALISÉE` ; échec → erreur + timestamp mis à jour.
+  **Réessai manuel** = re-cliquer Supprimer (même route, non throttlé). Auto-réparateur : si le service
+  a disparu entre-temps, le prochain essai renvoie `not-found` et la règle est retirée.
+- **UI** : badge orange « Suppression en attente » (colonne Alarme, tooltip = dernière erreur) +
+  flash dans `doDelete` (`alarm.delete.ok` / `.notFound` / `.pending`). i18n `alarm.confirm.delete`
+  mis à jour (« Le service Centreon associé sera supprimé »).
+- **Hôte Centreon NON supprimé** (partagé par plusieurs règles) — seul le service part.
+- **Migration store #20** : `init()` complète `pendingDeletion false` / `pendingDeletionError null` /
+  `pendingDeletionAt null` sur les règles existantes.
+- **Découverte API (piège)** : `GET /configuration/services` **ignore** `?name=`/`?host_id=`/
+  `?service_description=`/`?search=` — **seul `?filter[name]=` (match exact) filtre**. `provision.ts`
+  corrigé (provision + delete) + test de régression (plusieurs services → supprime le bon).
+- **Tests** : shared +2 (`clapiDeleteCommands`) · provision +9 (REST deleted/not-found/réseau/token/
+  **plusieurs services → le bon** + CLAPI séquence/not-found/erreur/hôte) · store +2 (migration #20 +
+  `markPendingDeletion`) · routes 1→4 (DELETE cohérent : deleted/not-found/error→pending/404) ·
+  engine +5 (`retryPendingDeletions` : deleted/not-found/throttle/error/pas d'attente).
+  **Total 912 tests verts** (477 shared + 435 server) + typecheck (seules erreurs préexistantes
+  `nodesensors/data.test.ts`, hors périmètre).
+- **Validation E2E central réel (192.168.1.130)** : 3 cas validés — **nominal** (règle créée +
+  provisionnée → DELETE → `deleted` → règle + service retirés, 4 services réels intacts) · **idempotent**
+  (service supprimé manuellement → DELETE → `not-found` → règle retirée) · **pending** (restUrl → port
+  mort → DELETE → `pending` + règle conservée → restUrl restaurée → **~80 s** l'engine réessaie →
+  `SUPPRESSION FINALISÉE` → règle + service auto-supprimés). **Passe UI Playwright 5/5** (flash +
+  badge « Suppression en attente » + tooltip). Nettoyage : 0 service `E2E20*`, 4 règles/services réels
+  intacts, config restaurée.
 
 ---
 
@@ -2770,7 +2818,7 @@ Les sections « ✅ Fait » ci-dessus conservent l'historique des livraisons ; l
 de référence (ProxMenux, Telegraf) est dans les skills (`monitoring-proxmenux`, `audit`,
 `node-sensors`, `centreon-nsca`).
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — **#1 Alarmes & Centreon (validation) (clôturée 2026-11-27 — E2E central réel : passe UI Playwright 13/13 + check sécurité, sans CLAPI)** · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · **#4 P0 règles d'alarme capteurs (clôturée 2026-11-27 — SMART / température / systemd / ZFS, seuil effectif perso ≤ firmware)** · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)** · **#20 centreon-nsca suppression service Centreon à la suppression d'une règle (service orphelin — noté pendant l'E2E #1)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — **#1 Alarmes & Centreon (validation) (clôturée 2026-11-27 — E2E central réel : passe UI Playwright 13/13 + check sécurité, sans CLAPI)** · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · **#4 P0 règles d'alarme capteurs (clôturée 2026-11-27 — SMART / température / systemd / ZFS, seuil effectif perso ≤ firmware)** · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)** · **#20 centreon-nsca suppression service Centreon à la suppression d'une règle (clôturée 2026-11-28 — cohérence Prox4u↔Centreon : service supprimé AVANT la règle, état « suppression en attente » + réessai auto, filtre `filter[name]`, E2E 3 cas + UI 5/5)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
 
 ---
 

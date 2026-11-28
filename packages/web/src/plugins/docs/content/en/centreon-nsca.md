@@ -42,6 +42,11 @@ In **Alarms & Centreon**, the table lists all rules with :
 - filters (text, poller, state, provisioning) and search ;
 - actions : **activate / deactivate**, **Edit**, **Delete**, **Test** (sends a test frame), **Re-provision** (recreates the Centreon service).
 
+**Deleting a rule** also removes the **associated Centreon service** (Prox4u ↔ Centreon consistency) :
+- if the central is reachable, the service is deleted then the rule removed (flash « Rule deleted — Centreon service deleted ») ;
+- if the service is already gone from Centreon, the rule is removed (flash « Centreon service already absent ») ;
+- if the **central is unreachable**, the rule stays in **« Deletion pending »** state (orange badge in the table, tooltip = last error) and is **retried automatically** as soon as the central responds again (or by clicking Delete again). The Centreon host is **not** deleted (shared by other rules).
+
 ![Active monitoring rules — rules table](/screenshots/alarms.png)
 
 ---
