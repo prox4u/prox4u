@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import {
   clapiDeleteCommands,
+  clapiDeleteHostCommands,
   clapiProvisionCommands,
   shellQuote,
   type CentreonConfig,
@@ -29,6 +30,13 @@ import {
 export interface ProvisionResult {
   ok: boolean;
   message: string;
+  /**
+   * true si le provisioning a CRÉÉ l'hôte Centreon (transport REST, hôte absent
+   * + IP fournie). Le caller enregistre alors l'hôte dans `managedHosts`
+   * (éligible à la suppression orpheline). false si l'hôte préexistait (ou
+   * transport CLAPI qui présume l'hôte existant).
+   */
+  hostCreated?: boolean;
 }
 
 /**
@@ -39,6 +47,18 @@ export interface ProvisionResult {
  *                  reste en « suppression en attente » (réessai automatique).
  */
 export interface DeleteServiceResult {
+  status: 'deleted' | 'not-found' | 'error';
+  message: string;
+}
+
+/**
+ * Résultat de la SUPPRESSION d'un hôte Centreon (orphelin) :
+ *  - `deleted`   : hôte supprimé + config poller régénérée/déployée ;
+ *  - `not-found` : hôte absent de Centreon (rien à supprimer — idempotent) ;
+ *  - `error`     : échec (central injoignable, HTTP, CLAPI) → réessai
+ *                  (suppression en attente de la règle, ou balayage suivant).
+ */
+export interface DeleteHostResult {
   status: 'deleted' | 'not-found' | 'error';
   message: string;
 }
@@ -118,7 +138,8 @@ async function provisionClapi(cfg: CentreonConfig, host: string, service: string
     const r = await runClapiLine(cfg, line);
     if (!r.ok) return { ok: false, message: `CLAPI « ${line.split(' -v ')[0]} » : ${r.message}` };
   }
-  return { ok: true, message: `service créé, config générée et déployée sur le poller « ${poller.name} » (CLAPI ${cfg.clapiMode})` };
+  // CLAPI présume que l'hôte existe déjà (pas d'auto-création) → jamais créé.
+  return { ok: true, hostCreated: false, message: `service créé, config générée et déployée sur le poller « ${poller.name} » (CLAPI ${cfg.clapiMode})` };
 }
 
 /** Indicateurs d'« inconnu/absent » dans les messages d'erreur CLAPI (heuristic). */
@@ -143,6 +164,27 @@ async function deleteClapi(cfg: CentreonConfig, host: string, service: string, p
     }
   }
   return { status: 'deleted', message: `service « ${service} » supprimé, config régénérée et déployée sur le poller « ${poller.name} » (CLAPI ${cfg.clapiMode})` };
+}
+
+/**
+ * Supprime l'HÔTE via CLAPI : `HOST -a del` + POLLERGENERATE + CFGMOVE
+ * (clapiDeleteHostCommands). Si la ligne `del` échoue avec un message
+ * d'« absent » → `not-found` (idempotent) ; sinon `error` (réessai).
+ */
+async function deleteHostClapi(cfg: CentreonConfig, host: string, poller: CentreonPoller): Promise<DeleteHostResult> {
+  if (!cfg.clapiHost || !cfg.clapiUser) return { status: 'error', message: 'CLAPI : hôte et utilisateur non configurés' };
+  const commands = clapiDeleteHostCommands(host, poller.name);
+  for (const line of commands) {
+    const r = await runClapiLine(cfg, line);
+    if (!r.ok) {
+      // `HOST -a del` sur un hôte absent renvoie une erreur → idempotent.
+      if (line.startsWith('HOST -a del') && CLAPI_NOT_FOUND_RE.test(r.message)) {
+        return { status: 'not-found', message: `hôte « ${host} » absent de Centreon (CLAPI — suppression idempotente)` };
+      }
+      return { status: 'error', message: `CLAPI « ${line.split(' -v ')[0]} » : ${r.message}` };
+    }
+  }
+  return { status: 'deleted', message: `hôte « ${host} » supprimé, config régénérée et déployée sur le poller « ${poller.name} » (CLAPI ${cfg.clapiMode})` };
 }
 
 // ---------------------------------------------------------------------------
@@ -194,19 +236,84 @@ async function findPollerId(cfg: CentreonConfig, poller: CentreonPoller): Promis
  * sinon le nom de l'hôte (pour un check PASSIF l'adresse n'est pas
  * fonctionnellement utilisée — l'hôte reste créable même sans IP).
  */
-async function findHostId(cfg: CentreonConfig, host: string, pollerId: number, hostAddress?: string): Promise<number> {
-  const data = (await rest(cfg, 'GET', `/configuration/hosts?name=${encodeURIComponent(host)}`)) as {
+async function findHostId(cfg: CentreonConfig, host: string, pollerId: number, hostAddress?: string): Promise<{ id: number; created: boolean }> {
+  // NB : `filter[name]` (match exact) est le SEUL paramètre de filtre
+  // fonctionnel de l'API (`?name=` est ignoré → liste tronquée à la 1ʳᵉ page).
+  const data = (await rest(cfg, 'GET', `/configuration/hosts?filter[name]=${encodeURIComponent(host)}`)) as {
     result?: Array<{ id: number; name: string }>;
   };
   const found = (data.result ?? []).find((h) => h.name === host);
-  if (found) return found.id;
+  if (found) return { id: found.id, created: false };
   const created = (await rest(cfg, 'POST', '/configuration/hosts', {
     name: host,
     address: hostAddress ?? host,
     monitoring_server_id: pollerId,
   })) as { id?: number };
   if (!created?.id) throw new Error('POST /configuration/hosts n\'a pas renvoyé d\'id');
-  return created.id;
+  return { id: created.id, created: true };
+}
+
+/**
+ * Recherche l'hôte par nom SANS création → id, ou null si absent (REST).
+ * Sert au comptage de services et à la suppression d'orphelin.
+ */
+async function findHostIdRest(cfg: CentreonConfig, host: string): Promise<number | null> {
+  const data = (await rest(cfg, 'GET', `/configuration/hosts?filter[name]=${encodeURIComponent(host)}`)) as {
+    result?: Array<{ id: number; name: string }>;
+  };
+  const found = (data.result ?? []).find((h) => h.name === host);
+  return found ? found.id : null;
+}
+
+/**
+ * Nombre de services d'un hôte Centreon (REST) — garde-fou « 0 service
+ * restant » de la suppression d'orphelin. L'API ne filtre PAS par hôte
+ * (`filter[host_id]` → 500 « paramètre non autorisé ») → on liste les services
+ * (pagination, limite 10/page imposée) et on compte côté client ceux dont le
+ * tableau `hosts` contient l'hôte. `stopAt` permet de s'arrêter dès qu'un
+ * service est trouvé (le garde-fou n'a besoin que de 0 vs >0).
+ */
+async function countHostServicesRest(cfg: CentreonConfig, hostId: number, stopAt = Infinity): Promise<number> {
+  let count = 0;
+  let page = 1;
+  const PAGE_LIMIT = 10; // limite de page imposée par l'API (page_size ignoré)
+  const MAX_PAGES = 100; // garde anti-boucle (1000 services)
+  for (;;) {
+    const data = (await rest(cfg, 'GET', `/configuration/services?page=${page}`)) as {
+      result?: Array<{ hosts?: Array<{ id: number }> }>;
+      meta?: { total?: number };
+    };
+    const items = data.result ?? [];
+    for (const s of items) {
+      if ((s.hosts ?? []).some((h) => h.id === hostId)) {
+        count += 1;
+        if (count >= stopAt) return count;
+      }
+    }
+    const total = data.meta?.total ?? items.length;
+    if (items.length === 0 || page * PAGE_LIMIT >= total || page >= MAX_PAGES) break;
+    page += 1;
+  }
+  return count;
+}
+
+/**
+ * Nombre de services d'un hôte (tous transports) pour le garde-fou orphelin :
+ *  - REST : comptage réel (hôte absent → 0) ;
+ *  - CLAPI : `null` (inconnu) → le garde-fou conserve l'hôte (conservatif).
+ *    (En pratique `managedHosts` n'est rempli qu'en REST — CLAPI présume
+ *    l'hôte existant — donc ce cas est rare.)
+ */
+export async function countHostServices(cfg: CentreonConfig, host: string): Promise<number | null> {
+  if (cfg.transport === 'clapi') return null;
+  if (!cfg.restUrl || !cfg.restToken) return null;
+  try {
+    const hostId = await findHostIdRest(cfg, host);
+    if (hostId === null) return 0; // hôte absent → aucun service
+    return await countHostServicesRest(cfg, hostId);
+  } catch {
+    return null; // central injoignable → inconnu (conservatif)
+  }
 }
 
 /**
@@ -241,7 +348,7 @@ async function provisionRest(cfg: CentreonConfig, host: string, service: string,
   if (!cfg.restUrl) return { ok: false, message: 'REST : URL de l\'API non configurée' };
   if (!cfg.restToken) return { ok: false, message: 'REST : token d\'API non configuré (CENTREON_REST_TOKEN ou Page 3)' };
   const pollerId = await findPollerId(cfg, poller);
-  const hostId = await findHostId(cfg, host, pollerId, hostAddress);
+  const { id: hostId, created: hostCreated } = await findHostId(cfg, host, pollerId, hostAddress);
   const commandId = await findCommandId(cfg, 'check_dummy');
   // Service : idempotent — existant (même nom sur l'hôte) → on le met à jour ;
   // absent → création. (POST en double renvoie 409.)
@@ -271,7 +378,7 @@ async function provisionRest(cfg: CentreonConfig, host: string, service: string,
   });
   await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/generate`);
   await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/reload`);
-  return { ok: true, message: `service passif en place sur « ${host} », config générée et déployée sur le poller « ${poller.name} » (REST /api/latest)` };
+  return { ok: true, hostCreated, message: `service passif en place sur « ${host} », config générée et déployée sur le poller « ${poller.name} » (REST /api/latest)` };
 }
 
 /**
@@ -296,6 +403,24 @@ async function deleteRest(cfg: CentreonConfig, host: string, service: string, po
   await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/generate`);
   await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/reload`);
   return { status: 'deleted', message: `service « ${service} » supprimé de Centreon, config régénérée et déployée sur le poller « ${poller.name} » (REST /api/latest)` };
+}
+
+/**
+ * Supprime l'HÔTE via l'API `/api/latest/` (orphelin) : recherche par nom
+ * (`filter[name]`, match exact) → absent = `not-found` (idempotent, pas de
+ * generate/reload) ; présent → DELETE + régénération/redéploiement de la
+ * config du poller. Toute exception (réseau/HTTP) = `error`.
+ */
+async function deleteHostRest(cfg: CentreonConfig, host: string, poller: CentreonPoller): Promise<DeleteHostResult> {
+  if (!cfg.restUrl) return { status: 'error', message: 'REST : URL de l\'API non configurée' };
+  if (!cfg.restToken) return { status: 'error', message: 'REST : token d\'API non configuré (CENTREON_REST_TOKEN ou Page 3)' };
+  const hostId = await findHostIdRest(cfg, host);
+  if (hostId === null) return { status: 'not-found', message: `hôte « ${host} » absent de Centreon (rien à supprimer)` };
+  await rest(cfg, 'DELETE', `/configuration/hosts/${hostId}`);
+  const pollerId = await findPollerId(cfg, poller);
+  await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/generate`);
+  await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/reload`);
+  return { status: 'deleted', message: `hôte « ${host} » supprimé de Centreon, config régénérée et déployée sur le poller « ${poller.name} » (REST /api/latest)` };
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +464,27 @@ export async function deleteCenteronService(
   try {
     if (cfg.transport === 'clapi') return await deleteClapi(cfg, host, service, poller);
     return await deleteRest(cfg, host, service, poller);
+  } catch (err) {
+    return { status: 'error', message: (err as Error).message };
+  }
+}
+
+/**
+ * Supprime l'HÔTE Centreon (orphelin) selon le transport configuré. N'est
+ * appelé que si les 3 garde-fous sont passés (hôte dans `managedHosts` +
+ * aucune règle ne le cible + 0 service restant). `deleted`/`not-found` =
+ * l'hôte est retiré de Centreon ; `error` = central injoignable/échec →
+ * réessai (suppression en attente de la règle, ou balayage suivant).
+ * Toute exception est capturée (jamais de throw).
+ */
+export async function deleteCenteronHost(
+  cfg: CentreonConfig,
+  host: string,
+  poller: CentreonPoller,
+): Promise<DeleteHostResult> {
+  try {
+    if (cfg.transport === 'clapi') return await deleteHostClapi(cfg, host, poller);
+    return await deleteHostRest(cfg, host, poller);
   } catch (err) {
     return { status: 'error', message: (err as Error).message };
   }

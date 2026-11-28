@@ -4,8 +4,11 @@ import {
   buildNscaHostFrame,
   clapiDeleteCommand,
   clapiDeleteCommands,
+  clapiDeleteHostCommand,
+  clapiDeleteHostCommands,
   clapiProvisionCommands,
   conditionMet,
+  defaultCenteronConfig,
   defaultServiceName,
   escapeNscaField,
   evaluateAlarm,
@@ -330,6 +333,32 @@ describe('clapiDeleteCommands (GitHub #20)', () => {
   it('échappe les `;` dans les noms (convention Centreon \\;)', () => {
     const cmds = clapiDeleteCommands('h;ost', 'svc', 'Linux');
     expect(cmds[0]).toBe("SERVICE -a del -v 'h\\;ost;svc'");
+  });
+});
+
+describe('clapiDeleteHostCommand (GitHub #21)', () => {
+  it('produit la commande de suppression d\'hôte (arg shell-quoté)', () => {
+    expect(clapiDeleteHostCommand('vm-1')).toBe("HOST -a del -v 'vm-1'");
+  });
+  it('échappe les `;` dans le nom d\'hôte', () => {
+    expect(clapiDeleteHostCommand('h;ost')).toBe("HOST -a del -v 'h\\;ost'");
+  });
+});
+
+describe('clapiDeleteHostCommands (GitHub #21)', () => {
+  it('produit la séquence del + génération + déploiement', () => {
+    const cmds = clapiDeleteHostCommands('vm-web-01', 'Linux');
+    expect(cmds).toEqual([
+      "HOST -a del -v 'vm-web-01'",
+      "POLLERGENERATE -v 'Linux'",
+      "CFGMOVE -v 'Linux'",
+    ]);
+  });
+});
+
+describe('defaultCenteronConfig (GitHub #21)', () => {
+  it('balayage orphelin activé par défaut (30 min)', () => {
+    expect(defaultCenteronConfig().orphanSweepMinutes).toBe(30);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   type CentreonConfig,
   type CentreonNscaFile,
   type CentreonPoller,
+  type ManagedHost,
   type VmMapping,
 } from '@prox4u/shared';
 
@@ -38,6 +39,7 @@ export function seedNscaFile(): CentreonNscaFile {
     pollers: DEFAULT_POLLERS.map((p) => ({ ...p })),
     mappings: [],
     rules: [],
+    managedHosts: [],
   };
 }
 
@@ -90,6 +92,9 @@ export class NscaStore {
         if (r.pendingDeletionError === undefined) { r.pendingDeletionError = null; migrated = true; }
         if (r.pendingDeletionAt === undefined) { r.pendingDeletionAt = null; migrated = true; }
       }
+      // Migration gestion des orphelins : `managedHosts` absent (fichier créé
+      // avant) → défaut vide (aucun hôte auto-supprimable).
+      if (!Array.isArray(f.managedHosts)) { f.managedHosts = []; migrated = true; }
       this.file = f;
       if (migrated) this.persist();
       this.logger.info(`nsca : ${f.rules.length} règle(s), ${f.pollers.length} poller(s) chargés depuis data/centreon-nsca.json`);
@@ -130,6 +135,7 @@ export class NscaStore {
       ...c,
       okHeartbeatSeconds: c.okHeartbeatSeconds ?? 300,
       hostCheckSeconds: c.hostCheckSeconds ?? 60,
+      orphanSweepMinutes: c.orphanSweepMinutes ?? 30,
     };
     const e = this.envSecrets;
     if (!e.restToken && !e.nscaPassword && !e.clapiPassword) return norm;
@@ -168,6 +174,7 @@ export class NscaStore {
     if (patch.restToken !== undefined) c.restToken = patch.restToken;
     if (patch.okHeartbeatSeconds !== undefined) c.okHeartbeatSeconds = patch.okHeartbeatSeconds;
     if (patch.hostCheckSeconds !== undefined) c.hostCheckSeconds = patch.hostCheckSeconds;
+    if (patch.orphanSweepMinutes !== undefined) c.orphanSweepMinutes = patch.orphanSweepMinutes;
     if (patch.nsca) {
       if (patch.nsca.server !== undefined) c.nsca.server = patch.nsca.server;
       if (patch.nsca.port !== undefined) c.nsca.port = patch.nsca.port;
@@ -228,6 +235,38 @@ export class NscaStore {
   setMappings(mappings: VmMapping[]): void {
     this.data.mappings = mappings.map((m) => ({ ...m }));
     this.persist();
+  }
+
+  // ---------- Hôtes gérés (orphelins — auto-créés par Prox4u) ----------
+
+  /** Hôtes Centreon auto-créés par Prox4u (éligibles à la suppression orpheline). */
+  listManagedHosts(): ManagedHost[] {
+    return this.data.managedHosts.map((h) => ({ ...h }));
+  }
+
+  /** L'hôte a-t-il été auto-créé par Prox4u (donc éligible à la suppression) ? */
+  isManagedHost(host: string): boolean {
+    return this.data.managedHosts.some((h) => h.host === host);
+  }
+
+  /**
+   * Enregistre un hôte comme auto-créé par Prox4u (appelé uniquement quand le
+   * provisioning REST CRÉE l'hôte). Idempotent : un hôte déjà tracké n'est pas
+   * dupliqué (le poller d'origine est conservé).
+   */
+  addManagedHost(host: string, pollerId: string): void {
+    const trimmed = host.trim();
+    if (!trimmed) return;
+    if (this.data.managedHosts.some((h) => h.host === trimmed)) return;
+    this.data.managedHosts.push({ host: trimmed, pollerId });
+    this.persist();
+  }
+
+  /** Retire un hôte du tracking (après suppression). N'écrit que si modifié. */
+  removeManagedHost(host: string): void {
+    const before = this.data.managedHosts.length;
+    this.data.managedHosts = this.data.managedHosts.filter((h) => h.host !== host);
+    if (this.data.managedHosts.length !== before) this.persist();
   }
 
   // ---------- Règles ----------

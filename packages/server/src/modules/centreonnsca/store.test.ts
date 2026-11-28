@@ -227,4 +227,59 @@ describe('NscaStore', () => {
     expect(s.getConfig().restToken).toBe('json-token');
     expect(s.envSecretFlags()).toEqual({ restToken: false, nscaPassword: false, clapiPassword: false });
   });
+
+  // ---------- Hôtes gérés (orphelins — GitHub #21) ----------
+
+  it('seed : managedHosts vide par défaut', () => {
+    const s = fresh();
+    expect(s.listManagedHosts()).toEqual([]);
+    expect(s.isManagedHost('vm-100')).toBe(false);
+  });
+
+  it('addManagedHost enregistre (idempotent, pas de doublon) + persistance', () => {
+    const s = fresh();
+    s.addManagedHost('vm-100', 'linux');
+    s.addManagedHost('vm-100', 'windows'); // doublon → ignoré (poller d'origine conservé)
+    expect(s.listManagedHosts()).toEqual([{ host: 'vm-100', pollerId: 'linux' }]);
+    expect(s.isManagedHost('vm-100')).toBe(true);
+    // rechargé depuis le disque
+    const s2 = fresh();
+    expect(s2.listManagedHosts()).toEqual([{ host: 'vm-100', pollerId: 'linux' }]);
+  });
+
+  it('removeManagedHost retire l\'hôte (et ne réécrit pas si absent)', () => {
+    const s = fresh();
+    s.addManagedHost('vm-100', 'linux');
+    s.addManagedHost('vm-200', 'linux');
+    s.removeManagedHost('vm-100');
+    expect(s.isManagedHost('vm-100')).toBe(false);
+    expect(s.isManagedHost('vm-200')).toBe(true);
+    expect(s.listManagedHosts()).toEqual([{ host: 'vm-200', pollerId: 'linux' }]);
+  });
+
+  it('migration orphelin : un fichier sans managedHosts reçoit [] (GitHub #21)', () => {
+    const s1 = fresh();
+    s1.createRule(rule());
+    // Simule un fichier écrit avant la gestion des orphelins (champ absent).
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    delete raw.managedHosts;
+    writeFileSync(file, JSON.stringify(raw, null, 2));
+    const s2 = new NscaStore(file, logger);
+    s2.init();
+    expect(s2.listManagedHosts()).toEqual([]);
+    // le champ est ré-écrit (persisté) après migration
+    const raw2 = JSON.parse(readFileSync(file, 'utf8'));
+    expect(raw2.managedHosts).toEqual([]);
+  });
+
+  it('setConfig : orphanSweepMinutes persisté + défaut 30 si absent', () => {
+    const s = fresh();
+    expect(s.getConfig().orphanSweepMinutes).toBe(30); // défaut
+    s.setConfig({ orphanSweepMinutes: 15 });
+    expect(s.getConfig().orphanSweepMinutes).toBe(15);
+    const s2 = fresh();
+    expect(s2.getConfig().orphanSweepMinutes).toBe(15); // persisté
+    s2.setConfig({ orphanSweepMinutes: 0 }); // 0 = off
+    expect(s2.getConfig().orphanSweepMinutes).toBe(0);
+  });
 });

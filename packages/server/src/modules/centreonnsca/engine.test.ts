@@ -12,11 +12,13 @@ vi.mock('./nsca.js', () => ({
   sendNsca: vi.fn(async () => ({ ok: true, code: null, message: 'trame acceptée (mock)' })),
 }));
 import { sendNsca } from './nsca.js';
-// Mock de la suppression Centreon (GitHub #20) — contrôlée par test.
+// Mock de la suppression Centreon (GitHub #20/#21) — contrôlée par test.
 vi.mock('./provision.js', () => ({
   deleteCenteronService: vi.fn(async () => ({ status: 'deleted', message: 'service supprimé (mock)' })),
+  countHostServices: vi.fn(async () => 0),
+  deleteCenteronHost: vi.fn(async () => ({ status: 'deleted', message: 'hôte supprimé (mock)' })),
 }));
-import { deleteCenteronService } from './provision.js';
+import { countHostServices, deleteCenteronHost, deleteCenteronService } from './provision.js';
 
 const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
@@ -396,6 +398,10 @@ describe('AlarmEngine — suppressions en attente (GitHub #20)', () => {
     store.setConfig({ enabled: true, okHeartbeatSeconds: 0, hostCheckSeconds: 0 });
     const poller = { getMulti: () => null } as unknown as Poller;
     engine = new AlarmEngine(store, poller, dir, logger, 3_600_000);
+    // État de base connu (clearAllMocks ne réinitialise PAS les implémentations
+    // posées par un mockResolvedValue d'un test précédent).
+    vi.mocked(countHostServices).mockResolvedValue(0);
+    vi.mocked(deleteCenteronHost).mockResolvedValue({ status: 'deleted', message: 'hôte supprimé (mock)' });
   });
 
   afterEach(() => {
@@ -501,5 +507,139 @@ describe('AlarmEngine — suppressions en attente (GitHub #20)', () => {
     });
     await engine.tick();
     expect(deleteCenteronService).not.toHaveBeenCalled();
+  });
+
+  // --- Réessai combiné service + hôte orphelin (GitHub #21) ---
+
+  it('réessai : service supprimé + hôte orphelin → hôte supprimé + règle retirée', async () => {
+    vi.mocked(deleteCenteronService).mockResolvedValue({ status: 'deleted', message: 'ok' });
+    vi.mocked(countHostServices).mockResolvedValue(0);
+    createPendingRule(Date.now() - 120_000);
+    store.addManagedHost('vm-100', 'linux');
+    await engine.tick();
+    expect(deleteCenteronService).toHaveBeenCalledTimes(1);
+    expect(deleteCenteronHost).toHaveBeenCalledTimes(1);
+    expect(deleteCenteronHost).toHaveBeenCalledWith(expect.anything(), 'vm-100', expect.anything());
+    expect(store.listRules()).toHaveLength(0); // règle supprimée
+    expect(store.isManagedHost('vm-100')).toBe(false); // hôte retiré du tracking
+  });
+
+  it('réessai : hôte orphelin mais suppression hôte en échec → règle reste en attente', async () => {
+    vi.mocked(deleteCenteronService).mockResolvedValue({ status: 'deleted', message: 'ok' });
+    vi.mocked(countHostServices).mockResolvedValue(0);
+    vi.mocked(deleteCenteronHost).mockResolvedValue({ status: 'error', message: 'ECONNREFUSED' });
+    const r = createPendingRule(Date.now() - 120_000);
+    store.addManagedHost('vm-100', 'linux');
+    await engine.tick();
+    expect(deleteCenteronService).toHaveBeenCalledTimes(1);
+    expect(deleteCenteronHost).toHaveBeenCalledTimes(1);
+    expect(store.listRules()).toHaveLength(1); // la règle reste (réessai)
+    const updated = store.ruleById(r.id)!;
+    expect(updated.pendingDeletion).toBe(true);
+    expect(updated.pendingDeletionError).toBe('ECONNREFUSED');
+    expect(store.isManagedHost('vm-100')).toBe(true); // toujours tracké
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Balayage des hôtes orphelins (GitHub #21) — suppression périodique des hôtes
+// auto-créés par Prox4u, plus ciblés par aucune règle et sans service.
+// ---------------------------------------------------------------------------
+
+describe('AlarmEngine — balayage orphelin (GitHub #21)', () => {
+  let dir: string;
+  let store: NscaStore;
+  let engine: AlarmEngine;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-27T12:00:00Z'));
+    dir = mkdtempSync(path.join(tmpdir(), 'nsca-engine-sweep-'));
+    store = new NscaStore(path.join(dir, 'centreon-nsca.json'), logger);
+    store.init();
+    store.setConfig({ enabled: true, okHeartbeatSeconds: 0, hostCheckSeconds: 0 });
+    const poller = { getMulti: () => null } as unknown as Poller;
+    engine = new AlarmEngine(store, poller, dir, logger, 3_600_000);
+    // État de base connu (clearAllMocks ne réinitialise PAS les implémentations
+    // posées par un mockResolvedValue d'un test précédent).
+    vi.mocked(countHostServices).mockResolvedValue(0);
+    vi.mocked(deleteCenteronHost).mockResolvedValue({ status: 'deleted', message: 'hôte supprimé (mock)' });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it('hôte orphelin (managed + aucune règle + 0 service) → supprimé au balayage', async () => {
+    store.addManagedHost('vm-100', 'linux');
+    await engine.tick();
+    expect(deleteCenteronHost).toHaveBeenCalledTimes(1);
+    expect(deleteCenteronHost).toHaveBeenCalledWith(expect.anything(), 'vm-100', expect.anything());
+    expect(store.isManagedHost('vm-100')).toBe(false); // retiré du tracking
+  });
+
+  it('hôte encore ciblé par une règle → conservé (pas d\'appel API)', async () => {
+    store.addManagedHost('vm-100', 'linux');
+    store.createRule({
+      name: 'CPU', target: { kind: 'vm', endpointId: 'e1', vmid: 100, label: 'vm-100' },
+      metric: 'cpu_pct', operator: '>', threshold: 90, confirmSeconds: 0, severity: 'crit',
+      pollerId: 'linux', centreonHost: 'vm-100', centreonService: 'Prox4u-Alarm-CPU',
+      messageTemplate: '', active: true, recoveryThreshold: null, suppressSeconds: 0,
+      acknowledgedAt: null, acknowledgedBy: null, provisionStatus: 'ok', provisionMessage: '',
+      lastSendState: null, lastSendMessage: '', lastAlarmAt: null, lastOkSendAt: null,
+      lastOutput: '', currentState: 'ok',
+    });
+    await engine.tick();
+    expect(deleteCenteronHost).not.toHaveBeenCalled();
+    expect(store.isManagedHost('vm-100')).toBe(true);
+  });
+
+  it('hôte avec service restant (sonde admin) → conservé', async () => {
+    store.addManagedHost('vm-100', 'linux');
+    vi.mocked(countHostServices).mockResolvedValue(1);
+    await engine.tick();
+    expect(deleteCenteronHost).not.toHaveBeenCalled();
+    expect(store.isManagedHost('vm-100')).toBe(true);
+  });
+
+  it('module désactivé → le balayage tourne quand même (nettoyage)', async () => {
+    store.setConfig({ enabled: false });
+    store.addManagedHost('vm-100', 'linux');
+    vi.mocked(countHostServices).mockResolvedValue(0);
+    await engine.tick();
+    expect(deleteCenteronHost).toHaveBeenCalledTimes(1);
+    expect(store.isManagedHost('vm-100')).toBe(false);
+  });
+
+  it('orphanSweepMinutes = 0 → balayage désactivé', async () => {
+    store.setConfig({ orphanSweepMinutes: 0 });
+    store.addManagedHost('vm-100', 'linux');
+    vi.mocked(countHostServices).mockResolvedValue(0);
+    await engine.tick();
+    expect(deleteCenteronHost).not.toHaveBeenCalled();
+    expect(countHostServices).not.toHaveBeenCalled();
+  });
+
+  it('throttle : un balayage par intervalle (pas à chaque tick)', async () => {
+    store.addManagedHost('vm-100', 'linux');
+    vi.mocked(countHostServices).mockResolvedValue(1); // hôte conservé (reste tracké)
+    await engine.tick(); // 1ʳᵉ balayage
+    expect(countHostServices).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(15_000); // 15 s < 30 min
+    await engine.tick(); // 2ᵉ tick → throttle
+    expect(countHostServices).toHaveBeenCalledTimes(1); // pas d'appel supplémentaire
+    vi.advanceTimersByTime(30 * 60_000); // intervalle écoulé
+    await engine.tick(); // re-balayage
+    expect(countHostServices).toHaveBeenCalledTimes(2);
+  });
+
+  it('central down (countHostServices null) → hôte conservé, pas d\'erreur', async () => {
+    store.addManagedHost('vm-100', 'linux');
+    vi.mocked(countHostServices).mockResolvedValue(null); // inconnu → conservatif
+    await engine.tick();
+    expect(deleteCenteronHost).not.toHaveBeenCalled();
+    expect(store.isManagedHost('vm-100')).toBe(true);
   });
 });

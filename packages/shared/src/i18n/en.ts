@@ -947,8 +947,9 @@ export const en: Record<string, string> = {
   'alarm.summary.testErr': 'Test frame failed: {{msg}}',
   'alarm.summary.reprovOk': 'Re-provisioning succeeded.',
   'alarm.summary.reprovErr': 'Re-provisioning failed: {{msg}}',
-  'alarm.confirm.delete': 'Delete rule “{{name}}”? The associated Centreon service will be deleted.',
+  'alarm.confirm.delete': 'Delete rule “{{name}}”? The associated Centreon service will be deleted (and the host if it becomes orphaned).',
   'alarm.delete.ok': 'Rule deleted — Centreon service deleted.',
+  'alarm.delete.okHost': 'Rule deleted — Centreon service and host deleted (orphan).',
   'alarm.delete.notFound': 'Rule deleted (Centreon service already absent).',
   'alarm.delete.pending': 'Deletion pending — Centreon unreachable ({{msg}}), automatic retry.',
   // --- Module configuration page (admin) ---

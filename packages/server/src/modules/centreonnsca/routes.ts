@@ -22,6 +22,7 @@ import type { Poller } from '../../core/poller.js';
 import type { AuthContext } from '../auth/runtime.js';
 import { CLUSTER_METRICS, NODE_METRICS, VM_METRICS } from './metrics.js';
 import { sendNsca } from './nsca.js';
+import { tryDeleteOrphanHost } from './orphan.js';
 import { deleteCenteronService, provisionService, type DeleteServiceResult } from './provision.js';
 import type { NscaStore } from './store.js';
 
@@ -248,6 +249,9 @@ export function registerAlarmRoutes(
     // hostAddress = IP de la cible (snapshot) → le REST peut créer l'hôte absent.
     const cfg = store.getConfig();
     const prov = await provisionService(cfg, rule.centreonHost, rule.centreonService, poller, hostAddressFor(rule, _poller));
+    // Orphelin (GitHub #21) : si Prox4u a CRÉÉ l'hôte → on le tracke (éligible
+    // à la suppression automatique). Hôte préexistant (admin) → pas tracké.
+    if (prov.ok && prov.hostCreated) store.addManagedHost(rule.centreonHost, pollerId);
     store.updateRule(rule.id, {
       provisionStatus: prov.ok ? 'ok' : 'error',
       provisionMessage: prov.message,
@@ -320,19 +324,34 @@ export function registerAlarmRoutes(
     if (!rule) return reply.code(404).send({ error: 'rule-not-found' });
     const poller = store.pollerById(rule.pollerId);
     if (!poller) return reply.code(400).send({ error: 'poller-inconnu', message: `poller « ${rule.pollerId} » inconnu` });
+    const cfg = store.getConfig();
     let del: DeleteServiceResult;
     if (rule.centreonService) {
-      del = await deleteCenteronService(store.getConfig(), rule.centreonHost, rule.centreonService, poller);
+      del = await deleteCenteronService(cfg, rule.centreonHost, rule.centreonService, poller);
     } else {
       del = { status: 'not-found', message: 'aucun service Centreon associé à la règle' };
     }
-    if (del.status === 'deleted' || del.status === 'not-found') {
-      store.deleteRule(id);
-      return { ok: true, centreon: del.status, message: del.message };
+    if (del.status === 'error') {
+      // Central injoignable → la règle reste (cohérence) + réessai automatique.
+      store.markPendingDeletion(id, del.message);
+      return { ok: false, pending: true, centreon: 'pending', message: del.message };
     }
-    // Central injoignable → la règle reste (cohérence) + réessai automatique.
-    store.markPendingDeletion(id, del.message);
-    return { ok: false, pending: true, centreon: 'pending', message: del.message };
+    // Service supprimé/absent → orphelin (GitHub #21) : l'hôte est-il
+    // supprimable ? (3 garde-fous : managedHosts + aucune règle + 0 service).
+    const orphan = await tryDeleteOrphanHost(store, cfg, poller, rule.centreonHost, id);
+    if (orphan.error !== null) {
+      // Suppression de l'hôte en échec → la règle reste en attente (réessai
+      // idempotent : service déjà absent + hôte à supprimer).
+      store.markPendingDeletion(id, orphan.error);
+      return { ok: false, pending: true, centreon: 'pending', message: orphan.message };
+    }
+    store.deleteRule(id);
+    return {
+      ok: true,
+      centreon: del.status,
+      hostDeleted: orphan.hostDeleted,
+      message: orphan.hostDeleted ? `${del.message} — ${orphan.message}` : del.message,
+    };
   });
 
   /** Trame NSCA de test immédiate (return code 0, message « Prox4u test »). */
@@ -363,6 +382,9 @@ export function registerAlarmRoutes(
     if (!poller) return reply.code(400).send({ error: 'poller-inconnu' });
     store.updateRule(id, { provisionStatus: 'pending', provisionMessage: 're-provisionnement en cours…' });
     const prov = await provisionService(store.getConfig(), rule.centreonHost, rule.centreonService, poller, hostAddressFor(rule, _poller));
+    // Orphelin (GitHub #21) : si Prox4u a CRÉÉ l'hôte au re-provisionnement →
+    // on le tracke (hôte préexistant → pas tracké).
+    if (prov.ok && prov.hostCreated) store.addManagedHost(rule.centreonHost, rule.pollerId);
     store.updateRule(id, {
       provisionStatus: prov.ok ? 'ok' : 'error',
       provisionMessage: prov.message,

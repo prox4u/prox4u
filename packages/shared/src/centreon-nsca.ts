@@ -167,6 +167,14 @@ export interface CentreonConfig {
    * UP / offline → DOWN). `0` = désactivé.
    */
   hostCheckSeconds: number;
+  /**
+   * Balayage des hôtes orphelins (minutes) : toutes les N minutes, l'engine
+   * supprime les hôtes Centreon créés par Prox4u (`managedHosts`) qui ne sont
+   * plus ciblés par aucune règle et n'ont plus aucun service. `0` = désactivé.
+   * Filet de sécurité : rattrape les orphelins laissés par un échec de
+   * suppression (central down) — mêmes garde-fous que la suppression de règle.
+   */
+  orphanSweepMinutes: number;
 }
 
 /** Mapping VM Proxmox → hôte Centreon (auto-suggestion + override manuel). */
@@ -176,6 +184,18 @@ export interface VmMapping {
   vmName: string;
   /** nom de l'hôte dans Centreon (override manuel). */
   centreonHost: string;
+}
+
+/**
+ * Hôte Centreon AUTO-CRÉÉ par Prox4u (provisioning REST, hôte absent + IP
+ * fournie). Seuls ces hôtes sont éligibles à la suppression automatique
+ * (orphelins) — un hôte créé à la main par l'admin Centreon n'y figure jamais
+ * et est donc préservé. `pollerId` = poller sur lequel l'hôte a été provisionné
+ * (nécessaire à la régénération/déploiement de la config à la suppression).
+ */
+export interface ManagedHost {
+  host: string;
+  pollerId: string;
 }
 
 export type ProvisionStatus = 'ok' | 'error' | 'pending';
@@ -256,6 +276,12 @@ export interface CentreonNscaFile {
   pollers: CentreonPoller[];
   mappings: VmMapping[];
   rules: AlarmRule[];
+  /**
+   * Hôtes Centreon auto-créés par Prox4u (éligibles à la suppression
+   * automatique d'orphelin). Absent sur les fichiers créés avant la gestion
+   * des orphelins → migration défaut `[]`.
+   */
+  managedHosts: ManagedHost[];
 }
 
 export interface AlarmStats {
@@ -695,6 +721,28 @@ export function clapiDeleteCommands(host: string, service: string, poller: strin
   ];
 }
 
+/**
+ * Commande CLAPI de SUPPRESSION d'un HÔTE (nettoyage orphelin) :
+ * `HOST -a del -v '<host>'`. Le nom d'hôte est échappé.
+ */
+export function clapiDeleteHostCommand(host: string): string {
+  return `HOST -a del -v ${shellQuote(escapeNscaField(host))}`;
+}
+
+/**
+ * Séquence CLAPI de SUPPRESSION d'un hôte orphelin : `HOST -a del` +
+ * régénération/déploiement de la config du poller (mêmes fin de séquence que
+ * `clapiDeleteCommands`). La suppression ne se fait que si l'hôte est dans
+ * `managedHosts` (créé par Prox4u) + aucune règle ne le cible + 0 service.
+ */
+export function clapiDeleteHostCommands(host: string, poller: string): string[] {
+  return [
+    clapiDeleteHostCommand(host),
+    `POLLERGENERATE -v ${shellQuote(poller)}`,
+    `CFGMOVE -v ${shellQuote(poller)}`,
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Configuration par défaut (seed du 1er démarrage)
 // ---------------------------------------------------------------------------
@@ -721,5 +769,6 @@ export function defaultCenteronConfig(): CentreonConfig {
     nsca: { server: '', port: 5668, encrypt: true, password: '' },
     okHeartbeatSeconds: 300,
     hostCheckSeconds: 60,
+    orphanSweepMinutes: 30,
   };
 }

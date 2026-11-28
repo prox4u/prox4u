@@ -6,12 +6,15 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { Poller } from '../../core/poller.js';
 import type { AuthContext } from '../auth/runtime.js';
 import { NscaStore } from './store.js';
-import { deleteCenteronService } from './provision.js';
+import { countHostServices, deleteCenteronHost, deleteCenteronService, provisionService } from './provision.js';
 
 // Mock du provisioning et de l'envoi NSCA (pas de vrai Centreon en test).
 vi.mock('./provision.js', () => ({
   provisionService: vi.fn(async () => ({ ok: true, message: 'provisionné (mock)' })),
   deleteCenteronService: vi.fn(async () => ({ status: 'deleted', message: 'service supprimé (mock)' })),
+  // Orphelin (GitHub #21) : comptage de services + suppression d'hôte.
+  countHostServices: vi.fn(async () => 0),
+  deleteCenteronHost: vi.fn(async () => ({ status: 'deleted', message: 'hôte supprimé (mock)' })),
 }));
 vi.mock('./nsca.js', () => ({
   sendNsca: vi.fn(async () => ({ ok: true, code: null, message: 'trame acceptée (mock)' })),
@@ -147,6 +150,75 @@ describe('registerAlarmRoutes', () => {
     const res = await app.inject({ method: 'DELETE', url: '/api/alarms/rules/nope' });
     expect(res.statusCode).toBe(404);
     expect(deleteCenteronService).not.toHaveBeenCalled();
+  });
+
+  // --- Orphelin (GitHub #21) : suppression de l'hôte auto-créé par Prox4u ---
+
+  it('POST → provisionService hostCreated=true → hôte tracké dans managedHosts', async () => {
+    vi.mocked(provisionService).mockResolvedValueOnce({ ok: true, hostCreated: true, message: 'créé (mock)' });
+    await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() });
+    expect(store.isManagedHost('vm-100')).toBe(true);
+    expect(store.listManagedHosts()).toEqual([{ host: 'vm-100', pollerId: 'linux' }]);
+  });
+
+  it('POST → provisionService hostCreated absent (hôte préexistant) → pas tracké', async () => {
+    await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() });
+    expect(store.isManagedHost('vm-100')).toBe(false);
+  });
+
+  it('DELETE → hôte orphelin (managed + aucune règle + 0 service) → hôte supprimé', async () => {
+    const created = (await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() })).json();
+    store.addManagedHost('vm-100', 'linux'); // simule hôte auto-créé par Prox4u
+    const res = await app.inject({ method: 'DELETE', url: `/api/alarms/rules/${created.rule.id}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, centreon: 'deleted', hostDeleted: true });
+    expect(store.listRules()).toHaveLength(0);
+    expect(deleteCenteronHost).toHaveBeenCalledWith(expect.anything(), 'vm-100', expect.anything());
+    expect(store.isManagedHost('vm-100')).toBe(false); // retiré du tracking
+  });
+
+  it('DELETE → hôte encore ciblé par une autre règle → hôte conservé', async () => {
+    const r1 = (await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() })).json();
+    // 2ᵉ règle ciblant le même hôte (r2) → l'hôte ne doit pas être supprimé.
+    await app.inject({
+      method: 'POST', url: '/api/alarms/rules',
+      payload: validRule({ name: 'CPU prod 2', centreonService: 'Prox4u-Alarm-CPU-2' }),
+    });
+    store.addManagedHost('vm-100', 'linux');
+    const res = await app.inject({ method: 'DELETE', url: `/api/alarms/rules/${r1.rule.id}` });
+    expect(res.json()).toMatchObject({ ok: true, hostDeleted: false });
+    expect(deleteCenteronHost).not.toHaveBeenCalled();
+    expect(store.isManagedHost('vm-100')).toBe(true); // toujours tracké
+    expect(store.listRules()).toHaveLength(1); // r2 reste
+  });
+
+  it('DELETE → hôte avec service restant (sonde admin) → hôte conservé', async () => {
+    const created = (await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() })).json();
+    store.addManagedHost('vm-100', 'linux');
+    vi.mocked(countHostServices).mockResolvedValueOnce(1); // 1 service restant
+    const res = await app.inject({ method: 'DELETE', url: `/api/alarms/rules/${created.rule.id}` });
+    expect(res.json()).toMatchObject({ ok: true, hostDeleted: false });
+    expect(deleteCenteronHost).not.toHaveBeenCalled();
+    expect(store.isManagedHost('vm-100')).toBe(true);
+  });
+
+  it('DELETE → hôte orphelin mais suppression hôte en échec → règle en attente', async () => {
+    const created = (await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() })).json();
+    store.addManagedHost('vm-100', 'linux');
+    vi.mocked(deleteCenteronHost).mockResolvedValueOnce({ status: 'error', message: 'ECONNREFUSED' });
+    const res = await app.inject({ method: 'DELETE', url: `/api/alarms/rules/${created.rule.id}` });
+    expect(res.json()).toMatchObject({ ok: false, pending: true, centreon: 'pending' });
+    expect(store.listRules()).toHaveLength(1); // la règle reste (réessai)
+    expect(store.ruleById(created.rule.id)!.pendingDeletion).toBe(true);
+    expect(store.isManagedHost('vm-100')).toBe(true); // toujours tracké
+  });
+
+  it('DELETE → hôte non géré (créé par l\'admin) → jamais supprimé', async () => {
+    const created = (await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() })).json();
+    // hôte PAS dans managedHosts (créé à la main par l'admin Centreon)
+    const res = await app.inject({ method: 'DELETE', url: `/api/alarms/rules/${created.rule.id}` });
+    expect(res.json()).toMatchObject({ ok: true, hostDeleted: false });
+    expect(deleteCenteronHost).not.toHaveBeenCalled();
   });
 
   it('POST /api/alarms/rules/:id/test → envoie une trame de test', async () => {

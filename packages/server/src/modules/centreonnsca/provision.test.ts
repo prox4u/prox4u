@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { defaultCenteronConfig, type CentreonConfig, type CentreonPoller } from '@prox4u/shared';
-import { deleteCenteronService, provisionService } from './provision.js';
+import { countHostServices, deleteCenteronHost, deleteCenteronService, provisionService } from './provision.js';
 
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 
@@ -62,7 +62,9 @@ interface World {
   servers: Array<{ id: number; name: string; address: string }>;
   hosts: Array<{ id: number; name: string; address: string }>;
   commands: Array<{ id: number; name: string }>;
-  services: Array<{ id: number; name: string; host_id: number }>;
+  // FIDÈLE à l'API réelle : un service référence son hôte via un tableau
+  // `hosts` (pas `host_id`, qui est null dans la réponse).
+  services: Array<{ id: number; name: string; hosts: Array<{ id: number; name: string }> }>;
   nextId: number;
 }
 
@@ -104,8 +106,10 @@ function installFetch(world: World) {
     if (m && method === 'GET') return json(null, 204);
 
     // --- hosts ---
+    // FIDÈLE à l'API réelle : seul `filter[name]` (match exact) filtre
+    // (`?name=` est ignoré).
     if (path === '/configuration/hosts' && method === 'GET') {
-      const name = q.get('name');
+      const name = q.get('filter[name]');
       const result = world.hosts.filter((h) => !name || h.name === name);
       return json({ result });
     }
@@ -113,6 +117,13 @@ function installFetch(world: World) {
       const id = world.nextId++;
       world.hosts.push({ id, name: body!.name, address: body!.address });
       return json({ id }, 201);
+    }
+    m = path.match(/^\/configuration\/hosts\/(\d+)$/);
+    if (m && method === 'DELETE') {
+      const idx = world.hosts.findIndex((h) => h.id === Number(m![1]));
+      if (idx === -1) return notFound(`DELETE ${path}`);
+      world.hosts.splice(idx, 1);
+      return json(null, 204);
     }
 
     // --- commands (tableau brut avec Accept: application/json — format réel) ---
@@ -129,14 +140,24 @@ function installFetch(world: World) {
     // FIDÈLE à l'API réelle : `name`/`host_id` sont IGNORÉS, seul `filter[name]`
     // (match exact) filtre côté serveur. (Sans ce filtre, la liste est renvoyée
     // entière — d'où l'importance du .find() côté client dans le code.)
+    // Pagination : limite 10/page imposée (page_size ignoré) + meta.total.
     if (path === '/configuration/services' && method === 'GET') {
       const name = q.get('filter[name]');
-      const result = world.services.filter((s) => !name || s.name === name);
-      return json({ result });
+      const all = world.services.filter((s) => !name || s.name === name);
+      const page = Number(q.get('page') ?? 1);
+      const LIMIT = 10;
+      const start = (page - 1) * LIMIT;
+      const result = all.slice(start, start + LIMIT);
+      return json({ result, meta: { page, limit: LIMIT, total: all.length } });
     }
     if (path === '/configuration/services' && method === 'POST') {
       const id = world.nextId++;
-      world.services.push({ id, name: body!.name, host_id: body!.host_id });
+      const host = world.hosts.find((h) => h.id === (body!.host_id as number));
+      world.services.push({
+        id,
+        name: body!.name as string,
+        hosts: host ? [{ id: host.id, name: host.name }] : [],
+      });
       return json({ id }, 201);
     }
     m = path.match(/^\/configuration\/services\/(\d+)$/);
@@ -180,7 +201,7 @@ describe('provisionService — REST /api/latest/', () => {
   it('hôte présent + service présent → idempotent (aucun POST)', async () => {
     const world = makeWorld({
       hosts: [{ id: 1, name: 'vm-100', address: '10.0.0.5' }],
-      services: [{ id: 5, name: 'Prox4u-Alarm-CPU', host_id: 1 }],
+      services: [{ id: 5, name: 'Prox4u-Alarm-CPU', hosts: [{ id: 1, name: 'vm-100' }] }],
     });
     const { calls } = installFetch(world);
     const r = await provisionService(restCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER, '10.0.0.5');
@@ -283,7 +304,7 @@ describe('deleteCenteronService — REST /api/latest/ (GitHub #20)', () => {
   it('service présent → DELETE + generate/reload du poller (status deleted)', async () => {
     const world = makeWorld({
       hosts: [{ id: 1, name: 'vm-100', address: '10.0.0.5' }],
-      services: [{ id: 5, name: 'Prox4u-Alarm-CPU', host_id: 1 }],
+      services: [{ id: 5, name: 'Prox4u-Alarm-CPU', hosts: [{ id: 1, name: 'vm-100' }] }],
     });
     const { calls } = installFetch(world);
     const r = await deleteCenteronService(restCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER);
@@ -312,8 +333,8 @@ describe('deleteCenteronService — REST /api/latest/ (GitHub #20)', () => {
     // le 1er service de la liste (ici id 3) au lieu de la cible (id 17).
     const world = makeWorld({
       services: [
-        { id: 3, name: 'Prox4u-Alarm-CPU-CPU_ia-u24', host_id: 2 },
-        { id: 17, name: 'Prox4u-Alarm-E2E20b', host_id: 1 },
+        { id: 3, name: 'Prox4u-Alarm-CPU-CPU_ia-u24', hosts: [{ id: 2, name: 'ia-u24-01' }] },
+        { id: 17, name: 'Prox4u-Alarm-E2E20b', hosts: [{ id: 1, name: 'proxmox' }] },
       ],
     });
     const { calls } = installFetch(world);
@@ -382,5 +403,160 @@ describe('deleteCenteronService — CLAPI (GitHub #20)', () => {
     expect(r.status).toBe('error');
     expect(r.message).toContain('non configurés');
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('provisionService — hostCreated (GitHub #21)', () => {
+  it('hôte absent → auto-créé → hostCreated true', async () => {
+    installFetch(makeWorld());
+    const r = await provisionService(restCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER, '10.0.0.5');
+    expect(r.ok).toBe(true);
+    expect(r.hostCreated).toBe(true);
+  });
+
+  it('hôte présent (préexistant) → hostCreated false', async () => {
+    installFetch(makeWorld({
+      hosts: [{ id: 1, name: 'vm-100', address: '10.0.0.5' }],
+      services: [{ id: 5, name: 'Prox4u-Alarm-CPU', hosts: [{ id: 1, name: 'vm-100' }] }],
+    }));
+    const r = await provisionService(restCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER, '10.0.0.5');
+    expect(r.ok).toBe(true);
+    expect(r.hostCreated).toBe(false);
+  });
+
+  it('CLAPI → hostCreated false (présume l\'hôte existant)', async () => {
+    mockClapiSequence([{ code: 0, out: 'ok' }, { code: 0, out: 'ok' }, { code: 0, out: 'ok' }, { code: 0, out: 'ok' }, { code: 0, out: 'ok' }, { code: 0, out: 'ok' }, { code: 0, out: 'ok' }, { code: 0, out: 'ok' }]);
+    const r = await provisionService(clapiCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER, '10.0.0.5');
+    expect(r.ok).toBe(true);
+    expect(r.hostCreated).toBe(false);
+  });
+});
+
+describe('deleteCenteronHost — REST /api/latest/ (GitHub #21)', () => {
+  it('hôte présent → DELETE + generate/reload du poller (status deleted)', async () => {
+    const world = makeWorld({
+      hosts: [{ id: 1, name: 'vm-100', address: '10.0.0.5' }],
+    });
+    const { calls } = installFetch(world);
+    const r = await deleteCenteronHost(restCfg(), 'vm-100', POLLER);
+    expect(r.status).toBe('deleted');
+    expect(world.hosts).toHaveLength(0);
+    const paths = calls.map((c) => `${c.method} ${c.path}`);
+    expect(paths).toContain('GET /configuration/hosts');
+    expect(paths).toContain('DELETE /configuration/hosts/1');
+    expect(paths).toContain('GET /configuration/monitoring-servers/1/generate');
+    expect(paths).toContain('GET /configuration/monitoring-servers/1/reload');
+  });
+
+  it('hôte absent → not-found (idempotent, PAS de generate/reload)', async () => {
+    const world = makeWorld();
+    const { calls } = installFetch(world);
+    const r = await deleteCenteronHost(restCfg(), 'vm-100', POLLER);
+    expect(r.status).toBe('not-found');
+    const paths = calls.map((c) => `${c.method} ${c.path}`);
+    expect(paths).toContain('GET /configuration/hosts');
+    expect(paths).not.toContain('DELETE /configuration/hosts/1');
+    expect(paths).not.toContain('GET /configuration/monitoring-servers/1/generate');
+  });
+
+  it('plusieurs hôtes → supprime le BON (filter[name] exact)', async () => {
+    const world = makeWorld({
+      hosts: [
+        { id: 2, name: 'ia-u24-01', address: '10.0.0.1' },
+        { id: 3, name: 'proxmox', address: '192.168.1.80' },
+      ],
+    });
+    installFetch(world);
+    const r = await deleteCenteronHost(restCfg(), 'proxmox', POLLER);
+    expect(r.status).toBe('deleted');
+    // seul « proxmox » (id 3) est supprimé, ia-u24-01 (id 2) reste
+    expect(world.hosts).toHaveLength(1);
+    expect(world.hosts[0].name).toBe('ia-u24-01');
+  });
+
+  it('erreur réseau (fetch throw) → error, jamais d\'exception', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('fetch failed: ECONNREFUSED'); }));
+    const r = await deleteCenteronHost(restCfg(), 'vm-100', POLLER);
+    expect(r.status).toBe('error');
+    expect(r.message).toContain('ECONNREFUSED');
+  });
+
+  it('token manquant → error avant tout appel HTTP', async () => {
+    const { fetchMock } = installFetch(makeWorld());
+    const r = await deleteCenteronHost(restCfg({ restToken: '' }), 'vm-100', POLLER);
+    expect(r.status).toBe('error');
+    expect(r.message).toContain('token');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteCenteronHost — CLAPI (GitHub #21)', () => {
+  it('séquence complète (HOST del + POLLERGENERATE + CFGMOVE) → deleted', async () => {
+    const spawnMock = mockClapiSequence([
+      { code: 0, out: 'ok' },
+      { code: 0, out: 'ok' },
+      { code: 0, out: 'ok' },
+    ]);
+    const r = await deleteCenteronHost(clapiCfg(), 'vm-100', POLLER);
+    expect(r.status).toBe('deleted');
+    expect(spawnMock).toHaveBeenCalledTimes(3);
+    const firstLine = String(spawnMock.mock.calls[0][1]?.[3] ?? spawnMock.mock.calls[0][1]?.[1]);
+    expect(firstLine).toContain('HOST -a del');
+  });
+
+  it('HOST -a del « not found » → not-found (idempotent, pas de generate/move)', async () => {
+    const spawnMock = mockClapiSequence([
+      { code: 1, err: 'ERROR: host not found' },
+    ]);
+    const r = await deleteCenteronHost(clapiCfg(), 'vm-100', POLLER);
+    expect(r.status).toBe('not-found');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('HOST -a del échec non « not found » → error', async () => {
+    mockClapiSequence([{ code: 1, err: 'connection refused' }]);
+    const r = await deleteCenteronHost(clapiCfg(), 'vm-100', POLLER);
+    expect(r.status).toBe('error');
+    expect(r.message).toContain('connection refused');
+  });
+});
+
+describe('countHostServices (GitHub #21)', () => {
+  it('REST : hôte avec 2 services → 2', async () => {
+    installFetch(makeWorld({
+      hosts: [{ id: 1, name: 'vm-100', address: '10.0.0.5' }],
+      services: [
+        { id: 5, name: 'Prox4u-Alarm-CPU', hosts: [{ id: 1, name: 'vm-100' }] },
+        { id: 6, name: 'Prox4u-Alarm-RAM', hosts: [{ id: 1, name: 'vm-100' }] },
+      ],
+    }));
+    expect(await countHostServices(restCfg(), 'vm-100')).toBe(2);
+  });
+
+  it('REST : hôte sans service (services sur autre hôte) → 0', async () => {
+    installFetch(makeWorld({
+      hosts: [
+        { id: 1, name: 'vm-100', address: '10.0.0.5' },
+        { id: 2, name: 'vm-200', address: '10.0.0.6' },
+      ],
+      services: [
+        { id: 5, name: 'Prox4u-Alarm-CPU', hosts: [{ id: 2, name: 'vm-200' }] },
+      ],
+    }));
+    expect(await countHostServices(restCfg(), 'vm-100')).toBe(0);
+  });
+
+  it('REST : hôte absent → 0', async () => {
+    installFetch(makeWorld());
+    expect(await countHostServices(restCfg(), 'vm-100')).toBe(0);
+  });
+
+  it('REST : central down (fetch throw) → null (inconnu, conservatif)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('fetch failed: ECONNREFUSED'); }));
+    expect(await countHostServices(restCfg(), 'vm-100')).toBeNull();
+  });
+
+  it('CLAPI → null (inconnu, conservatif)', async () => {
+    expect(await countHostServices(clapiCfg(), 'vm-100')).toBeNull();
   });
 });

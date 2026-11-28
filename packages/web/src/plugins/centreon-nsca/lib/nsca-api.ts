@@ -150,12 +150,15 @@ export interface ProvisionOutcome {
  * Résultat de la suppression d'une règle (GitHub #20 — cohérence Prox4u ↔
  * Centreon) : `ok` = règle retirée (`centreon` = deleted/not-found) ;
  * `pending` = central injoignable, la règle reste en « suppression en attente »
- * (réessai automatique).
+ * (réessai automatique). `hostDeleted` (GitHub #21) = l'hôte Centreon orphelin
+ * a aussi été supprimé (3 garde-fous passés).
  */
 export interface DeleteOutcome {
   ok: boolean;
   pending?: boolean;
   centreon?: 'deleted' | 'not-found' | 'pending';
+  /** hôte Centreon orphelin supprimé avec la règle (GitHub #21). */
+  hostDeleted?: boolean;
   message?: string;
 }
 

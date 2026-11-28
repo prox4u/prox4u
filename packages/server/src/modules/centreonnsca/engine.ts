@@ -19,6 +19,7 @@ import {
 import type { Poller } from '../../core/poller.js';
 import { clusterMetricValue, nodeMetricValue, vmMetricValue } from './metrics.js';
 import { sendNsca, type NscaSendResult } from './nsca.js';
+import { tryDeleteOrphanHost } from './orphan.js';
 import { deleteCenteronService, type DeleteServiceResult } from './provision.js';
 import type { NscaStore } from './store.js';
 
@@ -82,6 +83,8 @@ export class AlarmEngine {
   private hostLastCode = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
+  /** timestamp (ms) du dernier balayage d'orphelins (mémoire — GitHub #21). */
+  private lastOrphanSweep = 0;
 
   constructor(
     private store: NscaStore,
@@ -119,6 +122,9 @@ export class AlarmEngine {
       // Suppressions en attente (GitHub #20) — réessayées même module
       // désactivé (c'est du nettoyage, pas de l'envoi de trames).
       await this.retryPendingDeletions(cfg);
+      // Balayage des hôtes orphelins (GitHub #21) — même module désactivé
+      // (nettoyage, pas d'envoi de trames). Throttle config.orphanSweepMinutes.
+      await this.sweepOrphanHosts(cfg);
       if (!cfg.enabled) return; // module désactivé → aucun envoi
       const multi = this.poller.getMulti();
       const now = Date.now();
@@ -170,13 +176,55 @@ export class AlarmEngine {
       } catch (err) {
         del = { status: 'error' as const, message: (err as Error).message };
       }
-      if (del.status === 'deleted' || del.status === 'not-found') {
-        this.store.deleteRule(rule.id);
-        this.logger.info(`alarm : SUPPRESSION FINALISÉE « ${rule.name} » — ${rule.centreonHost}/${rule.centreonService} (${del.status})`);
-      } else {
+      if (del.status === 'error') {
         this.store.updateRule(rule.id, { pendingDeletionError: del.message, pendingDeletionAt: now });
         this.logger.warn(`alarm : suppression en attente « ${rule.name} » — réessai en échec : ${del.message}`);
+        continue;
       }
+      // Service supprimé/absent → orphelin (GitHub #21) : l'hôte est-il
+      // supprimable ? (3 garde-fous). Échec hôte → la règle reste en attente
+      // (réessai idempotent : service déjà absent + hôte à supprimer).
+      const orphan = await tryDeleteOrphanHost(this.store, cfg, poller, rule.centreonHost, rule.id);
+      if (orphan.error !== null) {
+        this.store.updateRule(rule.id, { pendingDeletionError: orphan.error, pendingDeletionAt: now });
+        this.logger.warn(`alarm : suppression en attente « ${rule.name} » — hôte en échec : ${orphan.error}`);
+        continue;
+      }
+      this.store.deleteRule(rule.id);
+      this.logger.info(`alarm : SUPPRESSION FINALISÉE « ${rule.name} » — ${rule.centreonHost}/${rule.centreonService} (${del.status})${orphan.hostDeleted ? ` + hôte « ${rule.centreonHost} » supprimé` : ''}`);
+    }
+  }
+
+  /**
+   * BALAYAGE DES HÔTES ORPHELINS (GitHub #21 — cohérence Prox4u ↔ Centreon) :
+   * toutes les `config.orphanSweepMinutes` minutes (0 = off), pour chaque hôte
+   * de `managedHosts` (auto-créé par Prox4u) : si aucune règle ne le cible ET
+   * qu'il n'a plus aucun service → suppression (mêmes 3 garde-fous que la
+   * suppression de règle). Filet de sécurité : rattrape les orphelins laissés
+   * par un échec de suppression (central down au moment de la suppression de
+   * règle). Central down → `countHostServices` null → hôte conservé (réessai
+   * au balayage suivant), aucun log de spam.
+   */
+  private async sweepOrphanHosts(cfg: CentreonConfig): Promise<void> {
+    const intervalMin = cfg.orphanSweepMinutes;
+    if (intervalMin <= 0) return; // désactivé
+    const now = Date.now();
+    if (now - this.lastOrphanSweep < intervalMin * 60_000) return; // throttle
+    this.lastOrphanSweep = now;
+    const managed = this.store.listManagedHosts();
+    if (managed.length === 0) return;
+    for (const mh of managed) {
+      // Garde-fou 2 (rapide, sans API) : une règle cible encore l'hôte → skip.
+      if (this.store.listRules().some((r) => r.centreonHost === mh.host)) continue;
+      const poller = this.store.pollerById(mh.pollerId);
+      if (!poller) continue; // poller supprimé → réessai au balayage suivant
+      const orphan = await tryDeleteOrphanHost(this.store, cfg, poller, mh.host);
+      if (orphan.hostDeleted) {
+        this.logger.info(`alarm : ORPHAN HOST SUPPRIMÉ « ${mh.host} » — ${orphan.message}`);
+      } else if (orphan.error !== null) {
+        this.logger.warn(`alarm : balayage orphelin « ${mh.host} » en échec (réessai au balayage suivant) : ${orphan.error}`);
+      }
+      // hostDeleted=false + error=null → hôte conservé (garde-fou) → pas de log.
     }
   }
 

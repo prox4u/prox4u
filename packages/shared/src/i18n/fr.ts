@@ -947,8 +947,9 @@ export const fr: Record<string, string> = {
   'alarm.summary.testErr': 'La trame de test a échoué : {{msg}}',
   'alarm.summary.reprovOk': 'Re-provisionnement réussi.',
   'alarm.summary.reprovErr': 'Re-provisionnement en échec : {{msg}}',
-  'alarm.confirm.delete': 'Supprimer la règle « {{name}} » ? Le service Centreon associé sera supprimé.',
+  'alarm.confirm.delete': 'Supprimer la règle « {{name}} » ? Le service Centreon associé sera supprimé (et l’hôte s’il devient orphelin).',
   'alarm.delete.ok': 'Règle supprimée — service Centreon supprimé.',
+  'alarm.delete.okHost': 'Règle supprimée — service et hôte Centreon supprimés (orphelin).',
   'alarm.delete.notFound': 'Règle supprimée (service Centreon déjà absent).',
   'alarm.delete.pending': 'Suppression en attente — Centreon injoignable ({{msg}}), réessai automatique.',
   // --- Page de configuration du module (admin) ---
