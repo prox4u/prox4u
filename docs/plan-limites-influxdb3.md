@@ -250,5 +250,6 @@ manuellement).
   fan-out (global + shards), consolidator/archiver per-client, santé `/api/influxdb`
   + param `?shard=`, admin UI (onglet « Shards InfluxDB ») + API `/api/admin/influx-shards`.
   Zéro changement de comportement sans shard configuré (`data/influx-shards.json` vide).
-  **Phase 1 (activation, à venir)** : déployer les instances par endpoint + reconfig
-  Telegraf par nœud + décision de migration de l'historique.
+  **Phase 1 (activation) : non engagée** — **décision 2026-11-28 : issue #18 clôturée,
+  Enterprise d'abord (#14)** ; le code dormant reste disponible (réactivation = Phase 1
+  seule : instances par endpoint + reconfig Telegraf par nœud + migration historique).
