@@ -291,6 +291,29 @@ describe('GET /api/influxdb/history', () => {
     await app.close();
   });
 
+  it('trou de data → buckets manquants comblés à 0 (pas de fausse pente)', async () => {
+    const rows = [
+      { t: '2026-11-23T10:00:00Z', queue_depth: 5, dropped_total: 0, query_ms: 10, enqueued_total: 100 },
+      { t: '2026-11-23T10:15:00Z', queue_depth: 7, dropped_total: 2, query_ms: 20, enqueued_total: 200 },
+    ];
+    const ctx = makeCtx({ historyRows: rows });
+    const app = await boot(ctx, admin);
+    const res = await app.inject({ method: 'GET', url: '/api/influxdb/history?range=24h' });
+    const body = res.json();
+    expect(body.source).toBe('influx');
+    expect(body.points).toHaveLength(4); // 10:00 · 10:05 · 10:10 · 10:15
+    expect(body.points[1]).toEqual({
+      t: Math.floor(Date.parse('2026-11-23T10:05:00Z') / 1000),
+      queueDepth: 0,
+      dropped: 0,
+      queryMs: 0,
+      enqueued: 0,
+    });
+    expect(body.points[2].queueDepth).toBe(0);
+    expect(body.points[3].queueDepth).toBe(7); // dernier point réel conservé
+    await app.close();
+  });
+
   it('range invalide → défaut 24h', async () => {
     const ctx = makeCtx({ historyRows: [] });
     const app = await boot(ctx, admin);

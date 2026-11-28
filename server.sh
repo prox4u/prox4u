@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Prox4u — démarrage / arrêt / statut du service
+# Prox4u — démarrage / arrêt / statut de l'instance DEV (tsx, source)
 # Usage: ./server.sh {start|stop|restart|status}
+#
+# NB (labo) : l'app tourne en service systemd USER (prox4u, build dist) —
+# voir deploiement/prox4u.user.service. Ce script gère l'instance DEV :
+#   systemctl --user stop prox4u   # libérer le port 8080 avant ./server.sh start
+# « status : non en cours » ne veut PAS dire que le service est arrêté
+# (ce script ne voit que le process tsx / index.ts).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

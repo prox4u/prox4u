@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { InfluxHistoryRange, InfluxHistoryResponse } from '@prox4u/shared';
+import type { InfluxHistoryPoint, InfluxHistoryRange, InfluxHistoryResponse } from '@prox4u/shared';
 import { computeInfluxSizing } from '@prox4u/shared';
 import type { AppContext, Poller } from '../../core/poller.js';
 import { influxTsToUnix, type InfluxQueryStats, type InfluxWriteStats } from '../../core/influx.js';
@@ -162,10 +162,10 @@ export interface InfluxShardHealth {
 }
 
 /** Buckets adaptatifs : 24 h → 5 min · 7 j → 15 min · 30 j → 1 h. */
-const HISTORY_TF: Record<InfluxHistoryRange, { bucket: string; window: string }> = {
-  '24h': { bucket: '5 minutes', window: '24 hours' },
-  '7d': { bucket: '15 minutes', window: '7 days' },
-  '30d': { bucket: '1 hour', window: '30 days' },
+const HISTORY_TF: Record<InfluxHistoryRange, { bucket: string; window: string; bucketSec: number }> = {
+  '24h': { bucket: '5 minutes', window: '24 hours', bucketSec: 300 },
+  '7d': { bucket: '15 minutes', window: '7 days', bucketSec: 900 },
+  '30d': { bucket: '1 hour', window: '30 days', bucketSec: 3600 },
 };
 const HISTORY_CACHE_TTL_MS = 5 * 60_000;
 
@@ -173,6 +173,26 @@ const HISTORY_CACHE_TTL_MS = 5 * 60_000;
 function num(v: string | number | null | undefined): number {
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Complète la série d'historique : 1 point par bucket entre le 1er et le dernier
+ * point réel. Un bucket sans data (serveur/InfluxDB arrêté) n'est pas renvoyé par
+ * la requête SQL — sans comblement, ECharts relie linéairement les points restants
+ * et dessine une fausse pente à travers le trou. Règle : pas de data → 0.
+ * Série déjà continue → retournée telle quelle (fast path, zéro copie).
+ */
+function fillHistoryGaps(points: InfluxHistoryPoint[], bucketSec: number): InfluxHistoryPoint[] {
+  if (points.length < 2) return points;
+  const first = points[0].t;
+  const last = points[points.length - 1].t;
+  if (last - first === (points.length - 1) * bucketSec) return points;
+  const byT = new Map(points.map((p) => [p.t, p]));
+  const out: InfluxHistoryPoint[] = [];
+  for (let t = first; t <= last; t += bucketSec) {
+    out.push(byT.get(t) ?? { t, queueDepth: 0, dropped: 0, queryMs: 0, enqueued: 0 });
+  }
+  return out;
 }
 
 export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext, poller?: Poller): void {
@@ -227,7 +247,7 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext, po
     let value: InfluxHistoryResponse;
     if (influxReady(ctx)) {
       try {
-        const { bucket, window } = HISTORY_TF[range];
+        const { bucket, window, bucketSec } = HISTORY_TF[range];
         const rows = await ctx.influx.querySql<Record<string, string | number | null>>(
           ctx.influx.rawDb,
           `SELECT date_bin(INTERVAL '${bucket}', time) AS t,
@@ -241,13 +261,16 @@ export function registerInfluxDbRoutes(app: FastifyInstance, ctx: AppContext, po
         );
         value = {
           range,
-          points: rows.map((r) => ({
-            t: influxTsToUnix(r.t),
-            queueDepth: num(r.queue_depth),
-            dropped: num(r.dropped_total),
-            queryMs: num(r.query_ms),
-            enqueued: num(r.enqueued_total),
-          })),
+          points: fillHistoryGaps(
+            rows.map((r) => ({
+              t: influxTsToUnix(r.t),
+              queueDepth: num(r.queue_depth),
+              dropped: num(r.dropped_total),
+              queryMs: num(r.query_ms),
+              enqueued: num(r.enqueued_total),
+            })),
+            bucketSec,
+          ),
           source: rows.length > 0 ? 'influx' : 'empty',
         };
       } catch (err) {

@@ -289,6 +289,24 @@ systemctl status prox4u
 
 InfluxDB and Explorer are Docker containers with `restart: unless-stopped` → they start with the Docker service at boot. The systemd unit restarts the app on crash (`Restart=always`) and at boot.
 
+### 8.1 Lab variant — systemd USER service (no sudo)
+
+For environments without sudo (lab): a **user** unit (`deploiement/prox4u.user.service`), same behaviour (`Restart=always`, auto-start), running the **build** from the repo (not `/opt/prox4u`).
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploiement/prox4u.user.service ~/.config/systemd/user/prox4u.service
+systemctl --user daemon-reload
+systemctl --user enable --now prox4u
+systemctl --user status prox4u
+```
+
+- **Remove the cron** `* * * * * server.sh start` / `@reboot server.sh start` before enabling (port 8080 conflict: the cron would restart the dev tsx over the service).
+- After any server change: `pnpm --filter @prox4u/server build && systemctl --user restart prox4u` (the service runs `dist`, not the source).
+- Development (hot-reload): `systemctl --user stop prox4u && npm run dev`.
+- Boot **without an open session** (once, sudo): `sudo loginctl enable-linger $USER`.
+- Logs: `journalctl --user -u prox4u -f` (and `logs/server.log`).
+
 ## 9. Day-2 operations
 
 | Operation | Commands |

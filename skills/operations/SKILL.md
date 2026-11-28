@@ -25,7 +25,8 @@ On déplace **tout le dossier** sur la cible et on déploie depuis lui :
 | `50-influxdb-init.sh <dir>` | serveur applicatif | Token admin InfluxDB (met à jour `.env`) — seulement si l'app gère son propre InfluxDB |
 | `60-telegraf-nodes.sh` | chaque nœud PVE (root) | Agent Telegraf : 16 tables (SMART, capteurs, ZFS, systemd, I/O, réseau, quorum, reboot, updates) — idempotent, `--dry-run`, self-test. Env : `TELEGRAF_INFLUX_TOKEN` (requis), `INFLUX_URL`/`INFLUX_BUCKET`/`INFLUX_ORG` (défauts labo). Détail : `deploiement/DEPLOY.md` §10 |
 | `70-centreon-setup.sh` | central Centreon (root) | Module « Alarmes & Centreon » : groupe `groupeprox4u` + compte `prox4u` (admin global, CLAPI `CONTACT`) + **token API** (SQL `security_token`) + mdp **NSCA** (`nsca.cfg`) + **user monitoring non-admin** (console : CLAPI `CONTACT` `admin=0` + ACL groupe `ALL` + topologie menu `Monitoring` lecture seule + `centAcl.php` — mdp saisi, vide = sauté) — idempotent, `--dry-run`/`--remove`/`--rotate-token`/`--rotate-nsca`, 100 % interactif (crédos admin saisies par l'admin), auto-vérif + récap Page 3. Env : `CENTRON_URL`, `NSCA_PORT`, `NSCA_CFG_PATH`, `MON_USER_LOGIN`/`MON_GROUP`/`MON_TOPO_NAME`. Détail : `deploiement/DEPLOY.md` §11 |
-| `prox4u.service` | systemd | Unit (`Restart=always`, user `proxmox`) |
+| `prox4u.service` | systemd | Unit système (`Restart=always`, user `proxmox`) — architecture cible |
+| `prox4u.user.service` | systemd user | Unit **user** (sans sudo, labo) — même comportement, scope utilisateur, exécute le build depuis le repo |
 
 Ordre : tokens PVE → tarball → install `/opt/prox4u` + `pnpm install --prod` → 30 → 40 → (50 si besoin) → `clusters.json` + `sites.json` + `overcommit.json` → `./up.sh` → **60 sur chaque nœud PVE** (indépendant, peut être fait après) → **70 sur le central Centreon** (seulement si le module Alarmes & Centreon est utilisé, indépendant).
 
@@ -55,14 +56,27 @@ tail -n 50 logs/server.log
 ```
 Attendu : `/api/health` 200 · log `InfluxDB prêt : bases raw (31 j) + consolidated (∞)` (ou « repli RRD ») · navigateur → badge **LIVE**, endpoints en sidebar, Health Score calculé · un tick par endpoint sans erreur d'auth PVE.
 
-## 5. Persistance au boot
+## 5. Persistance au boot (service systemd SYSTÈME)
 ```bash
-./server.sh stop                       # libérer le port 8080
-sudo cp deploiement/prox4u.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now prox4u
+pnpm --filter @prox4u/server build     # le service exécute dist, pas la source
+sudo ./deploiement/install-service.sh  # en root : libère le port 8080, copie l'unit, enable + start
 systemctl status prox4u
 ```
+- L'unit `deploiement/prox4u.service` : `User=opencode`, `WorkingDirectory=/home/opencode/projet/prox4u`, `ExecStart=/usr/local/bin/node packages/server/dist/index.js`, `Restart=always`, `WantedBy=multi-user.target` → **boot sans login** + redémarrage auto.
+- Le script `install-service.sh` (idempotent) arrête d'abord le service user `prox4u` (variante §5.1) + le dev tsx pour libérer le port 8080.
+- **Après tout changement serveur** : `pnpm --filter @prox4u/server build && sudo systemctl restart prox4u` · logs `journalctl -u prox4u -f`.
 Conteneurs Docker éventuels : `restart: unless-stopped`.
+
+### 5.1 Variante sans sudo — service systemd USER (alternative)
+Pour les environnements **sans sudo** : unit user `deploiement/prox4u.user.service` → `~/.config/systemd/user/prox4u.service` (exécute le build depuis le repo, `Restart=always`, `WantedBy=default.target`).
+- Installation : `mkdir -p ~/.config/systemd/user && cp deploiement/prox4u.user.service ~/.config/systemd/user/prox4u.service && systemctl --user daemon-reload && systemctl --user enable --now prox4u`.
+- Gestion : `systemctl --user {status|stop|restart} prox4u` · logs `journalctl --user -u prox4u -f`.
+- **Limite** : démarre au **login** de l'user, pas au boot froid — `sudo loginctl enable-linger $USER` (1×) pour le boot sans session.
+- Le script `install-service.sh` (service système, §5) **désactive et arrête** ce service user automatiquement (conflit port 8080).
+
+**Historique labo (2026-11-28)** : le labo tournait sous **cron** (`* * * * * server.sh start` + `@reboot`) qui relançait le dev tsx — retiré au profit du service (les deux mécanismes se battaient sur le port 8080). Le service user a été un passage intermédiaire avant le service système.
+
+**Piège `server.sh`** : `server.sh status` ne voit que l'instance **dev** (grep `index.ts` dans le cmdline) — « non en cours » ne veut pas dire que le service est arrêté. Dev (hot-reload) : `systemctl stop prox4u && npm run dev`, puis `systemctl start prox4u` pour revenir au service.
 
 ## 6. Opérations courantes (day-2)
 | Opération | Commandes |

@@ -34,13 +34,19 @@ function useInfluxHistory(range: InfluxHistoryRange): { data: InfluxHistoryRespo
   return { data, loading };
 }
 
-/** Débit d'écriture (lignes/s) : delta du compteur monotone enqueued entre buckets. */
+/**
+ * Débit d'écriture (lignes/s) : delta du compteur monotone enqueued entre buckets.
+ * `enqueued = 0` = trou de data (0-fill serveur) → débit non calculable = 0
+ * (sinon le delta à la sortie du trou vaudrait le total cumulé → pic artificiel).
+ */
 function writeRate(points: InfluxHistoryResponse['points']): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   for (let i = 1; i < points.length; i++) {
     const dt = points[i].t - points[i - 1].t;
     if (dt <= 0) continue;
-    const d = points[i].enqueued - points[i - 1].enqueued;
+    const prev = points[i - 1].enqueued;
+    const cur = points[i].enqueued;
+    const d = prev > 0 && cur > 0 ? cur - prev : 0;
     out.push([points[i].t * 1000, Math.max(0, d / dt)]);
   }
   return out;

@@ -272,22 +272,44 @@ Vérifications attendues :
 
 > Le port API InfluxDB 8181 est lié **localhost + `INFLUX_LAN_BIND`** (l'app se connecte en local via 127.0.0.1). `INFLUX_LAN_BIND` est auto-rempli par `30-env-setup.sh` avec l'IP du serveur : cela expose l'API au réseau interne **uniquement pour les agents Telegraf des nœuds Proxmox** (écriture des métriques locales : SMART, températures, ZFS…). Mettre `INFLUX_LAN_BIND=` à vide pour revenir à localhost-only. Explorer (8888) reste accessible.
 
-## 8. Persistance au boot
+## 8. Persistance au boot (service systemd SYSTÈME)
 
 ```bash
-cd /opt/prox4u
+# 1. build à jour (le service exécute dist, pas la source) :
+pnpm --filter @prox4u/server build
 
-# arrêter l'instance manuelle (le port 8080 sera pris par systemd) :
-./server.sh stop
+# 2. installer + activer le service (en root) :
+sudo ./deploiement/install-service.sh
 
-# l'unit est dans le kit (copie installée dans l'arborescence, durable après reboot) :
-sudo cp deploiement/prox4u.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now prox4u
 systemctl status prox4u
 ```
 
+Le script `install-service.sh` (idempotent) : vérifie le build → **libère le port 8080** (arrête le service user `prox4u` de la variante labo §8.1 + toute instance dev tsx) → copie l'unit dans `/etc/systemd/system/` → `daemon-reload` + `enable` + `start` → vérifie `/api/health`.
+
+L'unit (`deploiement/prox4u.service`) : `User=opencode`, `WorkingDirectory=/home/opencode/projet/prox4u`, `ExecStart=/usr/local/bin/node packages/server/dist/index.js`, `Restart=always` (RestartSec 5), `WantedBy=multi-user.target` → **démarrage au boot (sans login)** + redémarrage auto en cas de crash.
+
+> **Après tout changement serveur** : `pnpm --filter @prox4u/server build && sudo systemctl restart prox4u`.
+> Logs : `journalctl -u prox4u -f` (et `logs/server.log`).
+
 InfluxDB et Explorer sont des conteneurs Docker avec `restart: unless-stopped` → ils démarrent avec le service Docker au boot. L'unit systemd redémarre l'app en cas de crash (`Restart=always`) et au boot.
+
+### 8.1 Variante labo — service systemd USER (sans sudo)
+
+Pour les environnements sans sudo (labo) : unit **user** (`deploiement/prox4u.user.service`), même comportement (`Restart=always`, démarrage auto), qui exécute le **build** depuis le repo (pas `/opt/prox4u`).
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploiement/prox4u.user.service ~/.config/systemd/user/prox4u.service
+systemctl --user daemon-reload
+systemctl --user enable --now prox4u
+systemctl --user status prox4u
+```
+
+- **Retirer le cron** `* * * * * server.sh start` / `@reboot server.sh start` avant activation (conflit sur le port 8080 : le cron relancerait le dev tsx par-dessus le service).
+- Après tout changement serveur : `pnpm --filter @prox4u/server build && systemctl --user restart prox4u` (le service exécute `dist`, pas la source).
+- Développement (hot-reload) : `systemctl --user stop prox4u && npm run dev`.
+- Boot **sans session ouverte** (1×, sudo) : `sudo loginctl enable-linger $USER`.
+- Logs : `journalctl --user -u prox4u -f` (et `logs/server.log`).
 
 ## 9. Opérations courantes
 

@@ -1,0 +1,43 @@
+# Prox4u — service systemd USER (lab) — collecte de données 24/7 sans sudo
+#
+# Variante « user » de prox4u.service (service système, architecture cible) :
+# pour les environnements labo où sudo n'est pas disponible. Même comportement
+# (Restart=always, démarrage auto), mais dans le scope utilisateur.
+#
+# Installation :
+#   mkdir -p ~/.config/systemd/user
+#   cp deploiement/prox4u.user.service ~/.config/systemd/user/prox4u.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now prox4u
+#   systemctl --user status prox4u
+#
+# Persistance au boot même sans session ouverte (1×, sudo) :
+#   sudo loginctl enable-linger $USER
+#
+# Développement (hot-reload tsx) :
+#   systemctl --user stop prox4u && npm run dev   # le dev reprend le port 8080
+#
+# PRÉREQUIS : build à jour — le service exécute packages/server/dist/index.js,
+# PAS la source. Après tout changement serveur :
+#   pnpm --filter @prox4u/server build && systemctl --user restart prox4u
+#
+# Logs : journalctl --user -u prox4u -f  (et logs/server.log dans le repo)
+
+[Unit]
+Description=Prox4u - dashboard de supervision (lab, user service)
+# docker.service = unit système (InfluxDB en conteneur) : ordre uniquement,
+# l'app gère InfluxDB indispo (repli RRD) si Docker n'est pas encore prêt.
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/opencode/projet/prox4u
+# .env est lu par l'app depuis WorkingDirectory (racine du repo)
+ExecStart=/usr/local/bin/node packages/server/dist/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

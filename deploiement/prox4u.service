@@ -1,29 +1,33 @@
-# Prox4u — service systemd (persistance au boot + redémarrage auto)
+# Prox4u — service systemd SYSTÈME (persistance au boot + redémarrage auto)
 #
-# Installation (voir DEPLOY.md §8) :
-#   sudo cp deploy/prox4u.service /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now prox4u
+# Installation (voir DEPLOY.md §8) — en root :
+#   sudo ./deploiement/install-service.sh
+# (ou manuellement : sudo cp deploiement/prox4u.service /etc/systemd/system/
+#  && sudo systemctl daemon-reload && sudo systemctl enable --now prox4u)
 #
-# Prérequis : utilisateur système `proxmox` propriétaire de /opt/prox4u,
-# Node.js ≥ 20 en /usr/bin/node (paquet système recommandé).
+# Prérequis :
+#   - build à jour : pnpm --filter @prox4u/server build  (le service exécute dist, pas la source)
+#   - utilisateur système `opencode` propriétaire de /home/opencode/projet/prox4u
+#   - Node.js en /usr/local/bin/node
 # InfluxDB tourne en conteneur Docker (restart: unless-stopped) → démarre avec Docker.
+# L'app gère InfluxDB indisponible au boot (repli RRD) si Docker n'est pas prêt.
 
 [Unit]
 Description=Prox4u - dashboard de supervision (supervision dashboard)
-Documentation=file:/opt/prox4u/DEPLOY.md
+Documentation=file:/home/opencode/projet/prox4u/deploiement/DEPLOY.md
 After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=proxmox
-Group=proxmox
-WorkingDirectory=/opt/prox4u
-# .env est lu par l'application depuis WorkingDirectory
-ExecStart=/usr/bin/env node packages/server/dist/index.js
+User=opencode
+Group=opencode
+WorkingDirectory=/home/opencode/projet/prox4u
+# .env est lu par l'application depuis WorkingDirectory (racine du repo)
+ExecStart=/usr/local/bin/node packages/server/dist/index.js
 Restart=always
 RestartSec=5
+Environment=NODE_ENV=production
 # Hardening minimal (l'app lit data/ et écrit logs/ + data/consolidation-state.json)
 NoNewPrivileges=true
 PrivateTmp=true
