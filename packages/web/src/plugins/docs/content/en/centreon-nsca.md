@@ -45,7 +45,9 @@ In **Alarms & Centreon**, the table lists all rules with :
 **Deleting a rule** also removes the **associated Centreon service** (Prox4u ↔ Centreon consistency) :
 - if the central is reachable, the service is deleted then the rule removed (flash « Rule deleted — Centreon service deleted ») ;
 - if the service is already gone from Centreon, the rule is removed (flash « Centreon service already absent ») ;
-- if the **central is unreachable**, the rule stays in **« Deletion pending »** state (orange badge in the table, tooltip = last error) and is **retried automatically** as soon as the central responds again (or by clicking Delete again). The Centreon host is **not** deleted (shared by other rules).
+- if the **central is unreachable**, the rule stays in **« Deletion pending »** state (orange badge in the table, tooltip = last error) and is **retried automatically** as soon as the central responds again (or by clicking Delete again).
+
+**Orphan host** : if the Centreon host was **created by Prox4u** (automatic provisioning) and the deleted rule was the **last one** targeting it, the host is **also deleted** — provided **no other service** remains on it (probes added manually by the Centreon admin are preserved) — flash « Rule deleted — Centreon service and host deleted (orphan) ». A host **created directly in Centreon** by the administrator is **never** deleted by Prox4u. A **periodic sweep** (every 30 minutes by default) also cleans up orphan hosts left behind after a deletion failure (unreachable central).
 
 ![Active monitoring rules — rules table](/screenshots/alarms.png)
 

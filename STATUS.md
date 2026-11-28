@@ -2810,6 +2810,58 @@ Le seuil de `sensor_temp_c` est le **seuil effectif** (perso ≤ firmware, ongle
 
 ---
 
+## ✅ Fait — Gestion des orphelins d'hôtes Centreon (clôturé 2026-11-28)
+
+> **2026-11-28** — GitHub issue **#21** (label `enhancement`) : après #20 (le service partait), un
+> hôte Centreon **auto-créé par Prox4u** (provisioning REST, hôte absent + IP fournie) restait
+> **orphelin** quand la dernière règle qui le ciblait était supprimée (ex. `proxmox`, `ProxSite1`).
+> Fix : **cohérence Prox4u ↔ Centreon sur l'hôte** — Prox4u ne supprime un hôte que s'il l'a **créé
+> lui-même** (`managedHosts`) **ET** qu'aucune règle ne le cible **ET** qu'il n'a plus **0 service**
+> (contrainte user : « uniquement orphelin sur prox4u, car l'administrateur centreon a pu mettre une
+> sonde sur centreon sans passer par prox4u »).
+
+- **`managedHosts`** (store, `data/centreon-nsca.json`) : `{ host, pollerId }[]` — hôtes **auto-créés
+  par Prox4u** (rempli quand `provisionService` renvoie `hostCreated:true`, REST uniquement — CLAPI
+  présume l'hôte existant). `addManagedHost` (idempotent, poller d'origine conservé) /
+  `removeManagedHost` / `isManagedHost` / `listManagedHosts`. Migration `init()` : absent → `[]`.
+  ⚠ Un hôte créé **à la main** par l'admin n'y figure jamais → **jamais supprimé**.
+- **`deleteCenteronHost`** (`provision.ts`) → `deleted`/`not-found`/`error` : REST
+  (`GET /configuration/hosts?filter[name]=` → `DELETE /configuration/hosts/{id}` + generate/reload) ;
+  CLAPI (`HOST -a del` + `POLLERGENERATE` + `CFGMOVE`, heuristic not-found).
+- **`countHostServices`** (`provision.ts`) : l'API ne filtre PAS par hôte (`filter[host_id]` → 500)
+  → liste les services (pagination, limite 10/page, `meta.total`) + compte côté client ceux dont
+  `hosts[]` contient l'hôte. Hôte absent → 0 ; CLAPI/central down → `null` (conservatif).
+- **`tryDeleteOrphanHost`** (`orphan.ts`, nouveau) : les **3 garde-fous cumulés** + suppression —
+  partagé par la route DELETE, le réessai engine et le balayage.
+- **Flux combiné** : après service supprimé → garde-fous → suppression hôte ; échec hôte → même
+  `pendingDeletion` existant (réessai idempotent). Réponse `{ ok, centreon, hostDeleted }`.
+- **Balayage périodique** : `engine.ts` → `sweepOrphanHosts` dans `tick()` **avant**
+  `if (!cfg.enabled) return;` (tourne module désactivé) ; config `orphanSweepMinutes` (défaut **30**,
+  **0 = off**, settable via `PUT /api/alarms/config`, pas exposé UI) ; throttle mémoire
+  (`lastOrphanSweep`, court au 1ᵉʳ tick post-startup) ; rattrape les orphelins laissés par un échec.
+- **UI/i18n** : `DeleteOutcome.hostDeleted` + flash `alarm.delete.okHost` (« Règle supprimée —
+  service et hôte Centreon supprimés (orphelin). ») ; `alarm.confirm.delete` mentionne l'hôte.
+- **Découvertes API (pièges)** : `filter[host_id]`/`filter[hosts]`/`filter[host]` → **500** « paramètre
+  non autorisé » ; services portent `hosts[]` (`host_id` = null) ; `meta.total` + limite 10/page fixe
+  (`page_size` ignoré) ; pas de sous-ressource `/hosts/{id}/services` (404) ; `?name=` ignoré aussi
+  pour les hosts (seul `filter[name]` filtre) → `findHostId` corrigé.
+- **Tests** : shared +4 (`clapiDeleteHostCommand(s)` + `defaultCenteronConfig`) · provision +16
+  (`hostCreated` + `deleteCenteronHost` REST/CLAPI + `countHostServices`) · store +5 (`managedHosts`
+  + migration #21 + `orphanSweepMinutes`) · routes +7 (POST `hostCreated`→tracké, DELETE orphelin/
+  partagé/sonde admin/pending/non-géré) · engine +9 (réessai combiné + balayage : orphelin/ciblé/
+  service restant/désactivé/off/throttle/central down). **Total 954 tests verts** (481 shared + 473
+  server) + typecheck (seules erreurs préexistantes `nodesensors/data.test.ts`, hors périmètre).
+- **Migration one-shot** : orphelins existants (`proxmox`, `ProxSite1`) ajoutés à `managedHosts` →
+  supprimés par le balayage au 1ᵉʳ tick post-restart (2 logs `ORPHAN HOST SUPPRIMÉ`) → `managedHosts=[]`.
+- **Validation E2E central réel (192.168.1.130)** : **25/25 checks** — (a) dernière règle → hôte
+  supprimé · (b) hôte partagé 1ʳᵉ conserve/2ᵉ supprime · (c) hôte admin non-managed conservé ·
+  (d) central down → pending → réessai (~70 s) · (e) balayage `orphanSweepMinutes=1` → orphelin
+  supprimé (~45 s) → restauré 30. **Passe UI Playwright 6/6** (confirm mentionne l'orphelin + flash
+  « service et hôte supprimés » + hôte absent de Centreon). Nettoyage : 0 hôte `e2e-*`, `ia-u24-01`
+  + 3 services intacts, `managedHosts=[]`, config restaurée.
+
+---
+
 ## ⏳ Suivi des tâches (GitHub)
 
 Le **backlog et le suivi des tâches** sont désormais dans les **issues GitHub**
@@ -2818,7 +2870,7 @@ Les sections « ✅ Fait » ci-dessus conservent l'historique des livraisons ; l
 de référence (ProxMenux, Telegraf) est dans les skills (`monitoring-proxmenux`, `audit`,
 `node-sensors`, `centreon-nsca`).
 
-> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — **#1 Alarmes & Centreon (validation) (clôturée 2026-11-27 — E2E central réel : passe UI Playwright 13/13 + check sécurité, sans CLAPI)** · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · **#4 P0 règles d'alarme capteurs (clôturée 2026-11-27 — SMART / température / systemd / ZFS, seuil effectif perso ≤ firmware)** · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)** · **#20 centreon-nsca suppression service Centreon à la suppression d'une règle (clôturée 2026-11-28 — cohérence Prox4u↔Centreon : service supprimé AVANT la règle, état « suppression en attente » + réessai auto, filtre `filter[name]`, E2E 3 cas + UI 5/5)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
+> **Tracker GitHub** (repo public `prox4u/prox4u`, créé 2026-11-19) : les tâches ci-dessous sont tracées en issues — **#1 Alarmes & Centreon (validation) (clôturée 2026-11-27 — E2E central réel : passe UI Playwright 13/13 + check sécurité, sans CLAPI)** · **#2 Gestion des utilisateurs (clôturée 2026-11-20 — validation + journal d'audit + import/export)** · #3 P1 quorum (clôturée) · **#4 P0 règles d'alarme capteurs (clôturée 2026-11-27 — SMART / température / systemd / ZFS, seuil effectif perso ≤ firmware)** · **#5 P2 moteur d'alarmes v2 (clôturée 2026-11-27 — hystérésis / suppression / ack)** · #6 P3 audit best-practices (Phase 1 livrée) · #7 P5 certificats + NTP · #8 Phase 1B (Ceph + PBS + événements) · #9 Phase 3 (opérations VM) · #10 décisions utilisateur · **#11 PRA multi-sites (clôturée 2026-11-22 — code livré + `sites.json` documentée via `sites.example.json` + guide `DEPLOY.md` §6)** · **#14 InfluxDB Enterprise (stratégique)** · **#15 InfluxDB export Parquet (clôturée 2026-11-27)** · **#16 InfluxDB affichage Version + Rétention (clôturée 2026-11-27)** · **#17 InfluxDB vérifs/tests restants (clôturée 2026-11-27 — P2 vue 1 an validé partiellement + influxAlerts)** · **#18 InfluxDB sharding multi-endpoints (stratégique)** · **#19 InfluxDB P3 calculateur de dimensionnement (clôturée 2026-11-27)** · **#20 centreon-nsca suppression service Centreon à la suppression d'une règle (clôturée 2026-11-28 — cohérence Prox4u↔Centreon : service supprimé AVANT la règle, état « suppression en attente » + réessai auto, filtre `filter[name]`, E2E 3 cas + UI 5/5)** · **#21 centreon-nsca gestion des orphelins d'hôtes Centreon (clôturée 2026-11-28 — `managedHosts` + 3 garde-fous + suppression hôte orpheline + balayage périodique `orphanSweepMinutes`, E2E 25/25 + UI 6/6)**. Labels : `validation` / `feature` / `decision` / `enhancement`.
 
 ---
 

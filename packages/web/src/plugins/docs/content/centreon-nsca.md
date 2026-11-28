@@ -45,7 +45,9 @@ Dans **Alarmes & Centreon**, le tableau liste toutes les règles avec :
 **Supprimer une règle** retire aussi le **service Centreon associé** (cohérence Prox4u ↔ Centreon) :
 - si le central est joignable, le service est supprimé puis la règle retirée (flash « Règle supprimée — service Centreon supprimé ») ;
 - si le service a déjà disparu de Centreon, la règle est retirée (flash « service Centreon déjà absent ») ;
-- si le **central est injoignable**, la règle reste en **« Suppression en attente »** (badge orange dans le tableau, tooltip = dernière erreur) et est **réessayée automatiquement** dès que le central répond (ou en re-cliquant Supprimer). L'hôte Centreon n'est **pas** supprimé (partagé par d'autres règles).
+- si le **central est injoignable**, la règle reste en **« Suppression en attente »** (badge orange dans le tableau, tooltip = dernière erreur) et est **réessayée automatiquement** dès que le central répond (ou en re-cliquant Supprimer).
+
+**Hôte orphelin** : si l'hôte Centreon a été **créé par Prox4u** (provisionnement automatique) et que la règle supprimée était la **dernière** à le cibler, l'hôte est **aussi supprimé** — à condition qu'**aucun autre service** n'y reste (les sondes ajoutées à la main par l'admin Centreon sont préservées) — flash « Règle supprimée — service et hôte Centreon supprimés (orphelin) ». Un hôte **créé directement dans Centreon** par l'administrateur n'est **jamais** supprimé par Prox4u. Un **balayage périodique** (toutes les 30 min par défaut) nettoie au passage les hôtes orphelins laissés par un échec de suppression (central injoignable).
 
 ![Règles de surveillance actives — tableau des règles](/screenshots/alarms.png)
 
