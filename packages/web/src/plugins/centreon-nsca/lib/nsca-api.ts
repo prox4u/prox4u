@@ -146,6 +146,19 @@ export interface ProvisionOutcome {
   message: string;
 }
 
+/**
+ * Résultat de la suppression d'une règle (GitHub #20 — cohérence Prox4u ↔
+ * Centreon) : `ok` = règle retirée (`centreon` = deleted/not-found) ;
+ * `pending` = central injoignable, la règle reste en « suppression en attente »
+ * (réessai automatique).
+ */
+export interface DeleteOutcome {
+  ok: boolean;
+  pending?: boolean;
+  centreon?: 'deleted' | 'not-found' | 'pending';
+  message?: string;
+}
+
 export const alarmsApi = {
   list: () => request<AlarmList>('/api/alarms'),
   targets: () => request<AlarmTargets>('/api/alarms/targets'),
@@ -154,7 +167,7 @@ export const alarmsApi = {
     request<{ rule: AlarmRule; provision: ProvisionOutcome }>('/api/alarms/rules', { method: 'POST', body: JSON.stringify(rule) }),
   update: (id: string, patch: Partial<AlarmRule>) =>
     request<{ rule: AlarmRule }>(`/api/alarms/rules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
-  remove: (id: string) => request<{ ok: boolean }>(`/api/alarms/rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  remove: (id: string) => request<DeleteOutcome>(`/api/alarms/rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   test: (id: string) => request<{ ok: boolean; code: number; message: string }>(`/api/alarms/rules/${encodeURIComponent(id)}/test`, { method: 'POST' }),
   provision: (id: string) => request<ProvisionOutcome>(`/api/alarms/rules/${encodeURIComponent(id)}/provision`, { method: 'POST' }),
   /** Acknowledgment (moteur v2 — marqueur, ne coupe pas les trames). */

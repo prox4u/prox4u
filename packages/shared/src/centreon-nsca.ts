@@ -234,6 +234,17 @@ export interface AlarmRule {
   lastOutput: string;
   /** état courant de la machine à états (ok = nomimal). */
   currentState: 'ok' | AlarmSeverity;
+  // --- Suppression en attente (GitHub #20) — cohérence Prox4u ↔ Centreon ---
+  /**
+   * Suppression demandée mais le service Centreon n'a pas pu être supprimé
+   * (central injoignable) → la règle reste en place et est réessayée
+   * automatiquement (engine) jusqu'à succès. `false`/absent = pas en attente.
+   */
+  pendingDeletion?: boolean;
+  /** dernière erreur de tentative de suppression du service Centreon (null = aucune). */
+  pendingDeletionError?: string | null;
+  /** timestamp (ms) de la dernière tentative de suppression (throttle du réessai). */
+  pendingDeletionAt?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -668,6 +679,20 @@ export function clapiProvisionCommands(host: string, service: string, poller: st
  */
 export function clapiDeleteCommand(host: string, service: string): string {
   return `SERVICE -a del -v ${shellQuote(`${escapeNscaField(host)};${escapeNscaField(service)}`)}`;
+}
+
+/**
+ * Séquence CLAPI de SUPPRESSION d'un service (GitHub #20) : `SERVICE -a del`
+ * + régénération/déploiement de la config du poller (mêmes fin de séquence que
+ * `clapiProvisionCommands`). La règle Prox4u n'est retirée qu'après succès
+ * (cohérence Prox4u ↔ Centreon).
+ */
+export function clapiDeleteCommands(host: string, service: string, poller: string): string[] {
+  return [
+    clapiDeleteCommand(host, service),
+    `POLLERGENERATE -v ${shellQuote(poller)}`,
+    `CFGMOVE -v ${shellQuote(poller)}`,
+  ];
 }
 
 // ---------------------------------------------------------------------------

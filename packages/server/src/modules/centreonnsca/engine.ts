@@ -19,6 +19,7 @@ import {
 import type { Poller } from '../../core/poller.js';
 import { clusterMetricValue, nodeMetricValue, vmMetricValue } from './metrics.js';
 import { sendNsca, type NscaSendResult } from './nsca.js';
+import { deleteCenteronService, type DeleteServiceResult } from './provision.js';
 import type { NscaStore } from './store.js';
 
 /**
@@ -66,6 +67,13 @@ import type { NscaStore } from './store.js';
 
 const SAMPLE_HORIZON_MS = 4 * 3_600_000; // garde 4 h d'échantillons max
 
+/**
+ * Throttle du réessai des suppressions en attente (GitHub #20) : on ne retente
+ * la suppression d'un service Centreon qu'une fois par minute par règle (le
+ * tick fait 15 s — sans throttle, un central down serait interrogé 4×/min).
+ */
+const PENDING_RETRY_MS = 60_000;
+
 export class AlarmEngine {
   private buffers = new Map<string, MetricSample[]>();
   /** timestamp (ms) du dernier check hôte envoyé par hôte Centreon (mémoire). */
@@ -108,6 +116,9 @@ export class AlarmEngine {
     this.ticking = true;
     try {
       const cfg = this.store.getConfig();
+      // Suppressions en attente (GitHub #20) — réessayées même module
+      // désactivé (c'est du nettoyage, pas de l'envoi de trames).
+      await this.retryPendingDeletions(cfg);
       if (!cfg.enabled) return; // module désactivé → aucun envoi
       const multi = this.poller.getMulti();
       const now = Date.now();
@@ -134,6 +145,38 @@ export class AlarmEngine {
       this.logger.error(`alarm-engine : tick en échec : ${(err as Error).message}`);
     } finally {
       this.ticking = false;
+    }
+  }
+
+  /**
+   * RÉESSAI DES SUPPRESSIONS EN ATTENTE (GitHub #20 — cohérence Prox4u ↔
+   * Centreon) : pour chaque règle marquée `pendingDeletion` (suppression du
+   * service Centreon échouée, central injoignable), on retente la suppression
+   * (throttle 60 s/règle). Succès (`deleted`/`not-found`) → la règle est
+   * retirée de Prox4u ; échec → l'erreur + le timestamp sont mis à jour
+   * (réessai au tick suivant, après le throttle).
+   */
+  private async retryPendingDeletions(cfg: CentreonConfig): Promise<void> {
+    const pending = this.store.listPendingDeletions();
+    if (pending.length === 0) return;
+    const now = Date.now();
+    for (const rule of pending) {
+      if (now - (rule.pendingDeletionAt ?? 0) < PENDING_RETRY_MS) continue; // throttle
+      const poller = this.store.pollerById(rule.pollerId);
+      if (!poller) continue; // poller supprimé entre-temps → la règle reste (visible en UI)
+      let del: DeleteServiceResult;
+      try {
+        del = await deleteCenteronService(cfg, rule.centreonHost, rule.centreonService, poller);
+      } catch (err) {
+        del = { status: 'error' as const, message: (err as Error).message };
+      }
+      if (del.status === 'deleted' || del.status === 'not-found') {
+        this.store.deleteRule(rule.id);
+        this.logger.info(`alarm : SUPPRESSION FINALISÉE « ${rule.name} » — ${rule.centreonHost}/${rule.centreonService} (${del.status})`);
+      } else {
+        this.store.updateRule(rule.id, { pendingDeletionError: del.message, pendingDeletionAt: now });
+        this.logger.warn(`alarm : suppression en attente « ${rule.name} » — réessai en échec : ${del.message}`);
+      }
     }
   }
 

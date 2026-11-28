@@ -22,7 +22,7 @@ import type { Poller } from '../../core/poller.js';
 import type { AuthContext } from '../auth/runtime.js';
 import { CLUSTER_METRICS, NODE_METRICS, VM_METRICS } from './metrics.js';
 import { sendNsca } from './nsca.js';
-import { provisionService } from './provision.js';
+import { deleteCenteronService, provisionService, type DeleteServiceResult } from './provision.js';
 import type { NscaStore } from './store.js';
 
 /**
@@ -307,14 +307,32 @@ export function registerAlarmRoutes(
     return { rule };
   });
 
+  /**
+   * Suppression d'une règle — COHÉRENCE Prox4u ↔ Centreon (GitHub #20) : le
+   * service Centreon est supprimé AVANT la règle Prox4u.
+   *  - `deleted`/`not-found` → la règle est retirée (réponse ok + centreon) ;
+   *  - `error` (central injoignable) → la règle reste, marquée « suppression en
+   *    attente » (réessai automatique par l'engine + re-cliquer Supprimer).
+   */
   app.delete('/api/alarms/rules/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    try {
-      store.deleteRule(id);
-      return { ok: true };
-    } catch (err) {
-      return reply.code(404).send({ error: (err as Error).message });
+    const rule = store.ruleById(id);
+    if (!rule) return reply.code(404).send({ error: 'rule-not-found' });
+    const poller = store.pollerById(rule.pollerId);
+    if (!poller) return reply.code(400).send({ error: 'poller-inconnu', message: `poller « ${rule.pollerId} » inconnu` });
+    let del: DeleteServiceResult;
+    if (rule.centreonService) {
+      del = await deleteCenteronService(store.getConfig(), rule.centreonHost, rule.centreonService, poller);
+    } else {
+      del = { status: 'not-found', message: 'aucun service Centreon associé à la règle' };
     }
+    if (del.status === 'deleted' || del.status === 'not-found') {
+      store.deleteRule(id);
+      return { ok: true, centreon: del.status, message: del.message };
+    }
+    // Central injoignable → la règle reste (cohérence) + réessai automatique.
+    store.markPendingDeletion(id, del.message);
+    return { ok: false, pending: true, centreon: 'pending', message: del.message };
   });
 
   /** Trame NSCA de test immédiate (return code 0, message « Prox4u test »). */

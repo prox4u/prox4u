@@ -125,7 +125,11 @@ export function RulesPage() {
   }
   async function doDelete(r: AlarmRule) {
     if (!confirm(t('alarm.confirm.delete', { name: r.name }))) return;
-    await alarmsApi.remove(r.id);
+    const res = await alarmsApi.remove(r.id);
+    // Cohérence Prox4u ↔ Centreon (GitHub #20) : feedback selon le résultat.
+    if (res.pending) setFlash(t('alarm.delete.pending', { msg: res.message ?? '—' }));
+    else if (res.centreon === 'not-found') setFlash(t('alarm.delete.notFound'));
+    else setFlash(t('alarm.delete.ok'));
     void load();
   }
   function doEdit(r: AlarmRule) { navigate(`/alarms/edit/${r.id}`); }
@@ -264,6 +268,14 @@ export function RulesPage() {
                         title={t('alarm.acked.hint', { by: r.acknowledgedBy ?? '—', at: new Date(r.acknowledgedAt).toLocaleString() })}
                       >
                         ✓ {r.acknowledgedBy ?? '—'}
+                      </span>
+                    )}
+                    {r.pendingDeletion === true && (
+                      <span
+                        className="ml-1 rounded-full bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn"
+                        title={t('alarm.pendingDeletion.hint', { msg: r.pendingDeletionError ?? '—' })}
+                      >
+                        {t('alarm.state.pendingDeletion')}
                       </span>
                     )}
                   </TableCell>

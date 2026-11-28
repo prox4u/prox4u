@@ -6,10 +6,12 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { Poller } from '../../core/poller.js';
 import type { AuthContext } from '../auth/runtime.js';
 import { NscaStore } from './store.js';
+import { deleteCenteronService } from './provision.js';
 
 // Mock du provisioning et de l'envoi NSCA (pas de vrai Centreon en test).
 vi.mock('./provision.js', () => ({
   provisionService: vi.fn(async () => ({ ok: true, message: 'provisionné (mock)' })),
+  deleteCenteronService: vi.fn(async () => ({ status: 'deleted', message: 'service supprimé (mock)' })),
 }));
 vi.mock('./nsca.js', () => ({
   sendNsca: vi.fn(async () => ({ ok: true, code: null, message: 'trame acceptée (mock)' })),
@@ -106,11 +108,45 @@ describe('registerAlarmRoutes', () => {
     expect(res.json().rule.active).toBe(false);
   });
 
-  it('DELETE /api/alarms/rules/:id → supprime', async () => {
+  it('DELETE /api/alarms/rules/:id → supprime le service Centreon PUIS la règle (GitHub #20)', async () => {
     const created = (await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() })).json();
     const res = await app.inject({ method: 'DELETE', url: `/api/alarms/rules/${created.rule.id}` });
     expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, centreon: 'deleted' });
     expect(store.listRules()).toHaveLength(0);
+    // le service Centreon a été supprimé avec les bons args
+    expect(deleteCenteronService).toHaveBeenCalledWith(
+      expect.anything(), 'vm-100', 'Prox4u-Alarm-CPU', expect.anything(),
+    );
+  });
+
+  it('DELETE → service absent de Centreon (not-found) → règle supprimée (idempotent)', async () => {
+    vi.mocked(deleteCenteronService).mockResolvedValueOnce({ status: 'not-found', message: 'absent' });
+    const created = (await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() })).json();
+    const res = await app.inject({ method: 'DELETE', url: `/api/alarms/rules/${created.rule.id}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, centreon: 'not-found' });
+    expect(store.listRules()).toHaveLength(0);
+  });
+
+  it('DELETE → Centreon injoignable (error) → règle conservée en « suppression en attente »', async () => {
+    vi.mocked(deleteCenteronService).mockResolvedValueOnce({ status: 'error', message: 'ECONNREFUSED' });
+    const created = (await app.inject({ method: 'POST', url: '/api/alarms/rules', payload: validRule() })).json();
+    const res = await app.inject({ method: 'DELETE', url: `/api/alarms/rules/${created.rule.id}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: false, pending: true, centreon: 'pending' });
+    // la règle reste, marquée en attente
+    expect(store.listRules()).toHaveLength(1);
+    const r = store.ruleById(created.rule.id)!;
+    expect(r.pendingDeletion).toBe(true);
+    expect(r.pendingDeletionError).toBe('ECONNREFUSED');
+    expect(store.listPendingDeletions()).toHaveLength(1);
+  });
+
+  it('DELETE → 404 si règle absente', async () => {
+    const res = await app.inject({ method: 'DELETE', url: '/api/alarms/rules/nope' });
+    expect(res.statusCode).toBe(404);
+    expect(deleteCenteronService).not.toHaveBeenCalled();
   });
 
   it('POST /api/alarms/rules/:id/test → envoie une trame de test', async () => {

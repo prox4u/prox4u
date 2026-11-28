@@ -3,6 +3,7 @@ import {
   buildNscaFrame,
   buildNscaHostFrame,
   clapiDeleteCommand,
+  clapiDeleteCommands,
   clapiProvisionCommands,
   conditionMet,
   defaultServiceName,
@@ -314,6 +315,21 @@ describe('clapiDeleteCommand', () => {
     expect(clapiDeleteCommand('vm-1', 'Prox4u-Alarm-CPU')).toBe(
       "SERVICE -a del -v 'vm-1;Prox4u-Alarm-CPU'",
     );
+  });
+});
+
+describe('clapiDeleteCommands (GitHub #20)', () => {
+  it('produit la séquence del + génération + déploiement (même fin que provision)', () => {
+    const cmds = clapiDeleteCommands('vm-web-01', 'Prox4u-Alarm-CPU', 'Linux');
+    expect(cmds).toEqual([
+      "SERVICE -a del -v 'vm-web-01;Prox4u-Alarm-CPU'",
+      "POLLERGENERATE -v 'Linux'",
+      "CFGMOVE -v 'Linux'",
+    ]);
+  });
+  it('échappe les `;` dans les noms (convention Centreon \\;)', () => {
+    const cmds = clapiDeleteCommands('h;ost', 'svc', 'Linux');
+    expect(cmds[0]).toBe("SERVICE -a del -v 'h\\;ost;svc'");
   });
 });
 

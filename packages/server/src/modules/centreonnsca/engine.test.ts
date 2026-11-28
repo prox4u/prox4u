@@ -12,6 +12,11 @@ vi.mock('./nsca.js', () => ({
   sendNsca: vi.fn(async () => ({ ok: true, code: null, message: 'trame acceptée (mock)' })),
 }));
 import { sendNsca } from './nsca.js';
+// Mock de la suppression Centreon (GitHub #20) — contrôlée par test.
+vi.mock('./provision.js', () => ({
+  deleteCenteronService: vi.fn(async () => ({ status: 'deleted', message: 'service supprimé (mock)' })),
+}));
+import { deleteCenteronService } from './provision.js';
 
 const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
@@ -369,5 +374,132 @@ describe('AlarmEngine — règles capteurs (GitHub #4)', () => {
     vi.advanceTimersByTime(15_000);
     await engine.tick();
     expect(sensorFetchCount).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suppressions en attente (GitHub #20) — réessai automatique de la suppression
+// du service Centreon (cohérence Prox4u ↔ Centreon).
+// ---------------------------------------------------------------------------
+
+describe('AlarmEngine — suppressions en attente (GitHub #20)', () => {
+  let dir: string;
+  let store: NscaStore;
+  let engine: AlarmEngine;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-27T12:00:00Z'));
+    dir = mkdtempSync(path.join(tmpdir(), 'nsca-engine-del-'));
+    store = new NscaStore(path.join(dir, 'centreon-nsca.json'), logger);
+    store.init();
+    store.setConfig({ enabled: true, okHeartbeatSeconds: 0, hostCheckSeconds: 0 });
+    const poller = { getMulti: () => null } as unknown as Poller;
+    engine = new AlarmEngine(store, poller, dir, logger, 3_600_000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  function createPendingRule(pendingDeletionAt: number | null) {
+    const r = store.createRule({
+      name: 'À supprimer',
+      target: { kind: 'vm', endpointId: 'e1', vmid: 100, label: 'vm-100' },
+      metric: 'cpu_pct',
+      operator: '>',
+      threshold: 90,
+      confirmSeconds: 0,
+      severity: 'crit',
+      pollerId: 'linux',
+      centreonHost: 'vm-100',
+      centreonService: 'Prox4u-Alarm-CPU',
+      messageTemplate: '{{vm}} CPU {{value}}%',
+      active: true,
+      recoveryThreshold: null,
+      suppressSeconds: 0,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      provisionStatus: 'ok',
+      provisionMessage: '',
+      lastSendState: null,
+      lastSendMessage: '',
+      lastAlarmAt: null,
+      lastOkSendAt: null,
+      lastOutput: '',
+      currentState: 'ok',
+    });
+    if (pendingDeletionAt !== null) store.markPendingDeletion(r.id, 'ECONNREFUSED (init)');
+    if (pendingDeletionAt !== null) store.updateRule(r.id, { pendingDeletionAt });
+    return r;
+  }
+
+  it('Centreon « revient » (deleted) → la règle est retirée de Prox4u', async () => {
+    vi.mocked(deleteCenteronService).mockResolvedValue({ status: 'deleted', message: 'ok' });
+    createPendingRule(Date.now() - 120_000); // dernière tentative il y a 2 min
+    await engine.tick();
+    expect(deleteCenteronService).toHaveBeenCalledTimes(1);
+    expect(store.listRules()).toHaveLength(0); // règle supprimée
+  });
+
+  it('service absent (not-found) → la règle est retirée (idempotent)', async () => {
+    vi.mocked(deleteCenteronService).mockResolvedValue({ status: 'not-found', message: 'absent' });
+    createPendingRule(Date.now() - 120_000);
+    await engine.tick();
+    expect(store.listRules()).toHaveLength(0);
+  });
+
+  it('throttle : dernière tentative < 60 s → pas de réessai', async () => {
+    vi.mocked(deleteCenteronService).mockResolvedValue({ status: 'error', message: 'down' });
+    createPendingRule(Date.now() - 10_000); // il y a 10 s
+    await engine.tick();
+    expect(deleteCenteronService).not.toHaveBeenCalled(); // throttle
+    expect(store.listRules()).toHaveLength(1); // la règle reste
+  });
+
+  it('Centreon toujours down (error) → la règle reste, erreur + timestamp mis à jour', async () => {
+    vi.mocked(deleteCenteronService).mockResolvedValue({ status: 'error', message: 'ECONNREFUSED' });
+    const r = createPendingRule(Date.now() - 120_000);
+    const before = Date.now();
+    await engine.tick();
+    expect(deleteCenteronService).toHaveBeenCalledTimes(1);
+    expect(store.listRules()).toHaveLength(1); // la règle reste
+    const updated = store.ruleById(r.id)!;
+    expect(updated.pendingDeletion).toBe(true);
+    expect(updated.pendingDeletionError).toBe('ECONNREFUSED');
+    expect(updated.pendingDeletionAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it('pas de règle en attente → aucun appel deleteCenteronService', async () => {
+    store.createRule({
+      name: 'saine',
+      target: { kind: 'vm', endpointId: 'e1', vmid: 100, label: 'vm-100' },
+      metric: 'cpu_pct',
+      operator: '>',
+      threshold: 90,
+      confirmSeconds: 0,
+      severity: 'crit',
+      pollerId: 'linux',
+      centreonHost: 'vm-100',
+      centreonService: 'Prox4u-Alarm-CPU',
+      messageTemplate: '',
+      active: true,
+      recoveryThreshold: null,
+      suppressSeconds: 0,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      provisionStatus: 'ok',
+      provisionMessage: '',
+      lastSendState: null,
+      lastSendMessage: '',
+      lastAlarmAt: null,
+      lastOkSendAt: null,
+      lastOutput: '',
+      currentState: 'ok',
+    });
+    await engine.tick();
+    expect(deleteCenteronService).not.toHaveBeenCalled();
   });
 });

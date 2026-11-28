@@ -1,6 +1,43 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { spawn } from 'node:child_process';
 import { defaultCenteronConfig, type CentreonConfig, type CentreonPoller } from '@prox4u/shared';
-import { provisionService } from './provision.js';
+import { deleteCenteronService, provisionService } from './provision.js';
+
+vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
+
+/**
+ * Mocke `spawn` pour la séquence CLAPI : chaque ligne exécutée renvoie le
+ * résultat du `results` (dans l'ordre). `code 0` = ok, sinon échec avec `err`.
+ */
+function mockClapiSequence(results: Array<{ code: number; out?: string; err?: string }>) {
+  const spawnMock = vi.mocked(spawn);
+  let i = 0;
+  spawnMock.mockImplementation(() => {
+    const r = results[Math.min(i, results.length - 1)];
+    i += 1;
+    const child = {
+      stdout: { on: (ev: string, cb: (d: string) => void) => { if (ev === 'data' && r.out) cb(r.out); } },
+      stderr: { on: (ev: string, cb: (d: string) => void) => { if (ev === 'data' && r.err) cb(r.err); } },
+      on: (ev: string, cb: (code: number) => void) => { if (ev === 'close') cb(r.code); },
+      kill: () => undefined,
+      stdin: { write: () => undefined, end: () => undefined },
+    };
+    return child as unknown as ReturnType<typeof spawn>;
+  });
+  return spawnMock;
+}
+
+function clapiCfg(over: Partial<CentreonConfig> = {}): CentreonConfig {
+  return {
+    ...defaultCenteronConfig(),
+    transport: 'clapi',
+    clapiMode: 'local',
+    clapiHost: '192.168.1.130',
+    clapiUser: 'clapi',
+    clapiPassword: 'pw',
+    ...over,
+  };
+}
 
 /**
  * Tests du provisioning REST — nouvelle API `/api/latest/` + X-AUTH-TOKEN.
@@ -42,14 +79,14 @@ function makeWorld(over: Partial<World> = {}): World {
 
 /** Installe un fetch stubbé qui simule l'API /api/latest/ sur `world`. */
 function installFetch(world: World) {
-  const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+  const calls: Array<{ method: string; path: string; query: string; body?: unknown }> = [];
   const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
     const method = (init?.method ?? 'GET').toUpperCase();
     const u = new URL(String(input));
     const path = u.pathname.replace(/^.*\/api\/latest/, '');
     const q = new URLSearchParams(u.search);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    calls.push({ method, path, body });
+    calls.push({ method, path, query: u.search, body });
 
     const json = (data: unknown, status = 200) =>
       // un 204 n'a pas de body (null obligatoire, pas '')
@@ -89,12 +126,12 @@ function installFetch(world: World) {
     }
 
     // --- services ---
+    // FIDÈLE à l'API réelle : `name`/`host_id` sont IGNORÉS, seul `filter[name]`
+    // (match exact) filtre côté serveur. (Sans ce filtre, la liste est renvoyée
+    // entière — d'où l'importance du .find() côté client dans le code.)
     if (path === '/configuration/services' && method === 'GET') {
-      const hostId = q.get('host_id');
-      const name = q.get('name');
-      const result = world.services.filter(
-        (s) => (!hostId || String(s.host_id) === hostId) && (!name || s.name === name),
-      );
+      const name = q.get('filter[name]');
+      const result = world.services.filter((s) => !name || s.name === name);
       return json({ result });
     }
     if (path === '/configuration/services' && method === 'POST') {
@@ -104,6 +141,12 @@ function installFetch(world: World) {
     }
     m = path.match(/^\/configuration\/services\/(\d+)$/);
     if (m && method === 'PATCH') return json(null, 204);
+    if (m && method === 'DELETE') {
+      const idx = world.services.findIndex((s) => s.id === Number(m![1]));
+      if (idx === -1) return notFound(`DELETE ${path}`);
+      world.services.splice(idx, 1);
+      return json(null, 204);
+    }
 
     return notFound(`${method} ${path}`);
   });
@@ -113,6 +156,7 @@ function installFetch(world: World) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.clearAllMocks();
 });
 
 describe('provisionService — REST /api/latest/', () => {
@@ -232,5 +276,111 @@ describe('provisionService — REST /api/latest/', () => {
     const headers = fetchMock.mock.calls[0][1]?.headers as Record<string, string>;
     expect(headers['X-AUTH-TOKEN']).toBe('tok-123');
     expect(headers['Authorization']).toBeUndefined();
+  });
+});
+
+describe('deleteCenteronService — REST /api/latest/ (GitHub #20)', () => {
+  it('service présent → DELETE + generate/reload du poller (status deleted)', async () => {
+    const world = makeWorld({
+      hosts: [{ id: 1, name: 'vm-100', address: '10.0.0.5' }],
+      services: [{ id: 5, name: 'Prox4u-Alarm-CPU', host_id: 1 }],
+    });
+    const { calls } = installFetch(world);
+    const r = await deleteCenteronService(restCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER);
+    expect(r.status).toBe('deleted');
+    expect(world.services).toHaveLength(0);
+    const paths = calls.map((c) => `${c.method} ${c.path}`);
+    expect(paths).toContain('GET /configuration/services');
+    expect(paths).toContain('DELETE /configuration/services/5');
+    expect(paths).toContain('GET /configuration/monitoring-servers/1/generate');
+    expect(paths).toContain('GET /configuration/monitoring-servers/1/reload');
+  });
+
+  it('service absent → not-found (idempotent, PAS de generate/reload)', async () => {
+    const world = makeWorld();
+    const { calls } = installFetch(world);
+    const r = await deleteCenteronService(restCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER);
+    expect(r.status).toBe('not-found');
+    const paths = calls.map((c) => `${c.method} ${c.path}`);
+    expect(paths).toContain('GET /configuration/services');
+    expect(paths).not.toContain('DELETE /configuration/services/5');
+    expect(paths).not.toContain('GET /configuration/monitoring-servers/1/generate');
+  });
+
+  it('plusieurs services → supprime le BON (filter[name] exact, pas le 1er de la liste)', async () => {
+    // Régression E2E : l'API ignore `name` → sans `filter[name]`, on supprimait
+    // le 1er service de la liste (ici id 3) au lieu de la cible (id 17).
+    const world = makeWorld({
+      services: [
+        { id: 3, name: 'Prox4u-Alarm-CPU-CPU_ia-u24', host_id: 2 },
+        { id: 17, name: 'Prox4u-Alarm-E2E20b', host_id: 1 },
+      ],
+    });
+    const { calls } = installFetch(world);
+    const r = await deleteCenteronService(restCfg(), 'proxmox', 'Prox4u-Alarm-E2E20b', POLLER);
+    expect(r.status).toBe('deleted');
+    // seul E2E20b (id 17) est supprimé, le service réel (id 3) reste
+    expect(world.services).toHaveLength(1);
+    expect(world.services[0].name).toBe('Prox4u-Alarm-CPU-CPU_ia-u24');
+    // la requête utilise bien le SEUL filtre fonctionnel de l'API : filter[name]
+    // (et PAS `name=` qui est ignoré par Centreon)
+    const getCall = calls.find((c) => c.method === 'GET' && c.path === '/configuration/services');
+    expect(getCall).toBeDefined();
+    expect(getCall!.query).toBe('?filter[name]=Prox4u-Alarm-E2E20b');
+  });
+
+  it('erreur réseau (fetch throw) → error, jamais d\'exception', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('fetch failed: ECONNREFUSED'); }));
+    const r = await deleteCenteronService(restCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER);
+    expect(r.status).toBe('error');
+    expect(r.message).toContain('ECONNREFUSED');
+  });
+
+  it('token manquant → error avant tout appel HTTP', async () => {
+    const { fetchMock } = installFetch(makeWorld());
+    const r = await deleteCenteronService(restCfg({ restToken: '' }), 'vm-100', 'Prox4u-Alarm-CPU', POLLER);
+    expect(r.status).toBe('error');
+    expect(r.message).toContain('token');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteCenteronService — CLAPI (GitHub #20)', () => {
+  it('séquence complète (del + POLLERGENERATE + CFGMOVE) → deleted', async () => {
+    const spawnMock = mockClapiSequence([
+      { code: 0, out: 'ok' },
+      { code: 0, out: 'ok' },
+      { code: 0, out: 'ok' },
+    ]);
+    const r = await deleteCenteronService(clapiCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER);
+    expect(r.status).toBe('deleted');
+    expect(spawnMock).toHaveBeenCalledTimes(3);
+    // 1ʳᵉ ligne = SERVICE -a del (clapiDeleteCommand)
+    const firstLine = String(spawnMock.mock.calls[0][1]?.[3] ?? spawnMock.mock.calls[0][1]?.[1]);
+    expect(firstLine).toContain('SERVICE -a del');
+  });
+
+  it('SERVICE -a del « not found » → not-found (idempotent, pas de generate/move)', async () => {
+    const spawnMock = mockClapiSequence([
+      { code: 1, err: 'ERROR: service not found' },
+    ]);
+    const r = await deleteCenteronService(clapiCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER);
+    expect(r.status).toBe('not-found');
+    expect(spawnMock).toHaveBeenCalledTimes(1); // s'arrête après le del
+  });
+
+  it('SERVICE -a del échec non « not found » → error', async () => {
+    mockClapiSequence([{ code: 1, err: 'connection refused' }]);
+    const r = await deleteCenteronService(clapiCfg(), 'vm-100', 'Prox4u-Alarm-CPU', POLLER);
+    expect(r.status).toBe('error');
+    expect(r.message).toContain('connection refused');
+  });
+
+  it('hôte CLAPI non configuré → error avant tout spawn', async () => {
+    const spawnMock = mockClapiSequence([{ code: 0, out: 'ok' }]);
+    const r = await deleteCenteronService(clapiCfg({ clapiHost: '' }), 'vm-100', 'Prox4u-Alarm-CPU', POLLER);
+    expect(r.status).toBe('error');
+    expect(r.message).toContain('non configurés');
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

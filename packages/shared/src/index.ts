@@ -123,6 +123,7 @@ export {
   shellQuote,
   clapiProvisionCommands,
   clapiDeleteCommand,
+  clapiDeleteCommands,
   DEFAULT_POLLERS,
   defaultCenteronConfig,
   SENSOR_METRICS,

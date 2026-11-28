@@ -90,6 +90,39 @@ describe('NscaStore', () => {
     expect(migrated.acknowledgedBy).toBeNull();
   });
 
+  it('migration #20 : une règle sans champs « suppression en attente » reçoit les défauts', () => {
+    const s1 = fresh();
+    const r = s1.createRule(rule());
+    // Simule un fichier écrit avant le #20 (champs absents).
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    delete raw.rules[0].pendingDeletion;
+    delete raw.rules[0].pendingDeletionError;
+    delete raw.rules[0].pendingDeletionAt;
+    writeFileSync(file, JSON.stringify(raw, null, 2));
+    const s2 = new NscaStore(file, logger);
+    s2.init();
+    const migrated = s2.ruleById(r.id)!;
+    expect(migrated.pendingDeletion).toBe(false);
+    expect(migrated.pendingDeletionError).toBeNull();
+    expect(migrated.pendingDeletionAt).toBeNull();
+  });
+
+  it('markPendingDeletion pose l’état (error + timestamp) et listPendingDeletions le renvoie', () => {
+    const s = fresh();
+    const r = s.createRule(rule());
+    const other = s.createRule(rule({ name: 'r2' }));
+    expect(s.listPendingDeletions()).toHaveLength(0);
+    s.markPendingDeletion(r.id, 'ECONNREFUSED');
+    const pending = s.listPendingDeletions();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].id).toBe(r.id);
+    expect(pending[0].pendingDeletion).toBe(true);
+    expect(pending[0].pendingDeletionError).toBe('ECONNREFUSED');
+    expect(pending[0].pendingDeletionAt).toBeTypeOf('number');
+    // la règle non marquée n'est pas dans la liste
+    expect(pending.some((p) => p.id === other.id)).toBe(false);
+  });
+
   it('createRule génère un id + horodatage', () => {
     const s = fresh();
     const r = s.createRule(rule());

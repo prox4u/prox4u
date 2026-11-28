@@ -78,12 +78,17 @@ export class NscaStore {
       }
       // Migration moteur v2 (GitHub #5) : les champs hystérésis/suppression/ack
       // n'existent pas sur les règles créées avant la v2 → défauts.
+      // Migration suppression en attente (GitHub #20) : champs cohérence
+      // Prox4u ↔ Centreon → défauts.
       let migrated = false;
       for (const r of f.rules) {
         if (r.recoveryThreshold === undefined) { r.recoveryThreshold = null; migrated = true; }
         if (r.suppressSeconds === undefined) { r.suppressSeconds = 0; migrated = true; }
         if (r.acknowledgedAt === undefined) { r.acknowledgedAt = null; migrated = true; }
         if (r.acknowledgedBy === undefined) { r.acknowledgedBy = null; migrated = true; }
+        if (r.pendingDeletion === undefined) { r.pendingDeletion = false; migrated = true; }
+        if (r.pendingDeletionError === undefined) { r.pendingDeletionError = null; migrated = true; }
+        if (r.pendingDeletionAt === undefined) { r.pendingDeletionAt = null; migrated = true; }
       }
       this.file = f;
       if (migrated) this.persist();
@@ -261,6 +266,20 @@ export class NscaStore {
     this.data.rules = this.data.rules.filter((r) => r.id !== id);
     if (this.data.rules.length === before) throw new Error('rule-not-found');
     this.persist();
+  }
+
+  /**
+   * Marque la règle en « suppression en attente » (GitHub #20) : la suppression
+   * du service Centreon a échoué (central injoignable) → la règle reste en
+   * place, l'engine réessaie automatiquement.
+   */
+  markPendingDeletion(id: string, error: string): AlarmRule {
+    return this.updateRule(id, { pendingDeletion: true, pendingDeletionError: error, pendingDeletionAt: Date.now() });
+  }
+
+  /** Règles en « suppression en attente » (pour le réessai automatique). */
+  listPendingDeletions(): AlarmRule[] {
+    return this.data.rules.filter((r) => r.pendingDeletion === true).map((r) => ({ ...r }));
   }
 
   /** Statistiques d'indicateurs (Page 2). */

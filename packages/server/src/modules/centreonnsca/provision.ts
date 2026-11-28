@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import {
+  clapiDeleteCommands,
   clapiProvisionCommands,
   shellQuote,
   type CentreonConfig,
@@ -27,6 +28,18 @@ import {
 
 export interface ProvisionResult {
   ok: boolean;
+  message: string;
+}
+
+/**
+ * Résultat de la SUPPRESSION d'un service Centreon (GitHub #20) :
+ *  - `deleted`   : service supprimé + config poller régénérée/déployée ;
+ *  - `not-found` : service absent de Centreon (rien à supprimer — idempotent) ;
+ *  - `error`     : échec (central injoignable, HTTP, CLAPI) → la règle Prox4u
+ *                  reste en « suppression en attente » (réessai automatique).
+ */
+export interface DeleteServiceResult {
+  status: 'deleted' | 'not-found' | 'error';
   message: string;
 }
 
@@ -106,6 +119,30 @@ async function provisionClapi(cfg: CentreonConfig, host: string, service: string
     if (!r.ok) return { ok: false, message: `CLAPI « ${line.split(' -v ')[0]} » : ${r.message}` };
   }
   return { ok: true, message: `service créé, config générée et déployée sur le poller « ${poller.name} » (CLAPI ${cfg.clapiMode})` };
+}
+
+/** Indicateurs d'« inconnu/absent » dans les messages d'erreur CLAPI (heuristic). */
+const CLAPI_NOT_FOUND_RE = /not\s+(found|exist)|doesn'?t\s+exist|no\s+such|unknown|introuvable|absent|inexistant/i;
+
+/**
+ * Supprime le service via CLAPI : `SERVICE -a del` + POLLERGENERATE + CFGMOVE
+ * (clapiDeleteCommands). Si la ligne `del` échoue avec un message d'« absent »
+ * → `not-found` (idempotent) ; sinon `error` (réessai).
+ */
+async function deleteClapi(cfg: CentreonConfig, host: string, service: string, poller: CentreonPoller): Promise<DeleteServiceResult> {
+  if (!cfg.clapiHost || !cfg.clapiUser) return { status: 'error', message: 'CLAPI : hôte et utilisateur non configurés' };
+  const commands = clapiDeleteCommands(host, service, poller.name);
+  for (const line of commands) {
+    const r = await runClapiLine(cfg, line);
+    if (!r.ok) {
+      // `SERVICE -a del` sur un service absent renvoie une erreur → idempotent.
+      if (line.startsWith('SERVICE -a del') && CLAPI_NOT_FOUND_RE.test(r.message)) {
+        return { status: 'not-found', message: `service « ${service} » absent de Centreon (CLAPI — suppression idempotente)` };
+      }
+      return { status: 'error', message: `CLAPI « ${line.split(' -v ')[0]} » : ${r.message}` };
+    }
+  }
+  return { status: 'deleted', message: `service « ${service} » supprimé, config régénérée et déployée sur le poller « ${poller.name} » (CLAPI ${cfg.clapiMode})` };
 }
 
 // ---------------------------------------------------------------------------
@@ -208,8 +245,10 @@ async function provisionRest(cfg: CentreonConfig, host: string, service: string,
   const commandId = await findCommandId(cfg, 'check_dummy');
   // Service : idempotent — existant (même nom sur l'hôte) → on le met à jour ;
   // absent → création. (POST en double renvoie 409.)
+  // NB : `filter[name]` (match exact) est le SEUL paramètre de filtre fonctionnel
+  // de l'API (`name`/`host_id` sont ignorés) → évite la troncature de page.
   let serviceId: number | undefined;
-  const existing = (await rest(cfg, 'GET', `/configuration/services?host_id=${hostId}&name=${encodeURIComponent(service)}`)) as {
+  const existing = (await rest(cfg, 'GET', `/configuration/services?filter[name]=${encodeURIComponent(service)}`)) as {
     result?: Array<{ id: number; name: string }>;
   };
   const foundSvc = (existing.result ?? []).find((s) => s.name === service);
@@ -235,6 +274,30 @@ async function provisionRest(cfg: CentreonConfig, host: string, service: string,
   return { ok: true, message: `service passif en place sur « ${host} », config générée et déployée sur le poller « ${poller.name} » (REST /api/latest)` };
 }
 
+/**
+ * Supprime le service via l'API `/api/latest/` : recherche par nom (les noms
+ * auto-générés `Prox4u-Alarm-…` sont uniques) → absent = `not-found`
+ * (idempotent, pas de generate/reload) ; présent → DELETE + régénération/
+ * redéploiement de la config du poller. Toute exception (réseau/HTTP) = `error`.
+ */
+async function deleteRest(cfg: CentreonConfig, host: string, service: string, poller: CentreonPoller): Promise<DeleteServiceResult> {
+  if (!cfg.restUrl) return { status: 'error', message: 'REST : URL de l\'API non configurée' };
+  if (!cfg.restToken) return { status: 'error', message: 'REST : token d\'API non configuré (CENTREON_REST_TOKEN ou Page 3)' };
+  // NB : le paramètre `name` est IGNORÉ par l'API Centreon — seul `filter[name]`
+  // (match exact) filtre côté serveur. Sans filtre, la liste peut être tronquée
+  // (page par défaut) et le service introuvable → faux « not-found ».
+  const data = (await rest(cfg, 'GET', `/configuration/services?filter[name]=${encodeURIComponent(service)}`)) as {
+    result?: Array<{ id: number; name: string }>;
+  };
+  const found = (data.result ?? []).find((s) => s.name === service);
+  if (!found) return { status: 'not-found', message: `service « ${service} » absent de Centreon (rien à supprimer sur l'hôte « ${host} »)` };
+  await rest(cfg, 'DELETE', `/configuration/services/${found.id}`);
+  const pollerId = await findPollerId(cfg, poller);
+  await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/generate`);
+  await rest(cfg, 'GET', `/configuration/monitoring-servers/${pollerId}/reload`);
+  return { status: 'deleted', message: `service « ${service} » supprimé de Centreon, config régénérée et déployée sur le poller « ${poller.name} » (REST /api/latest)` };
+}
+
 // ---------------------------------------------------------------------------
 // Point d'entrée
 // ---------------------------------------------------------------------------
@@ -257,5 +320,26 @@ export async function provisionService(
     return await provisionRest(cfg, host, service, poller, hostAddress);
   } catch (err) {
     return { ok: false, message: (err as Error).message };
+  }
+}
+
+/**
+ * Supprime le service Centreon de la règle selon le transport configuré
+ * (GitHub #20 — cohérence Prox4u ↔ Centreon). `deleted`/`not-found` = la règle
+ * Prox4u peut être retirée ; `error` = central injoignable/échec → la règle
+ * reste en « suppression en attente » (réessai automatique par l'engine).
+ * Toute exception est capturée (jamais de throw).
+ */
+export async function deleteCenteronService(
+  cfg: CentreonConfig,
+  host: string,
+  service: string,
+  poller: CentreonPoller,
+): Promise<DeleteServiceResult> {
+  try {
+    if (cfg.transport === 'clapi') return await deleteClapi(cfg, host, service, poller);
+    return await deleteRest(cfg, host, service, poller);
+  } catch (err) {
+    return { status: 'error', message: (err as Error).message };
   }
 }
